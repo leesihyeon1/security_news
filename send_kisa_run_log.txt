@@ -1,0 +1,463 @@
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+Traceback (most recent call last):
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 246, in <module>
+    main()
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 231, in main
+    items = fetch_kisa_items()
+            ^^^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 124, in fetch_kisa_items
+    items.extend(fetch_feed(feed))
+                 ^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 100, in fetch_feed
+    root = request_xml(feed["url"])
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 64, in request_xml
+    with urllib.request.urlopen(request, timeout=30) as response:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 519, in open
+    response = self._open(req, data)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 536, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1391, in https_open
+    return self.do_open(http.client.HTTPSConnection, req,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1352, in do_open
+    r = h.getresponse()
+        ^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1395, in getresponse
+    response.begin()
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 325, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 286, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 706, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\ssl.py", line 1314, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\ssl.py", line 1166, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: The read operation timed out
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+슬랙으로 알림이 전송되었습니다.
+Email sent: KISA/KrCERT items 3
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+Traceback (most recent call last):
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 246, in <module>
+    main()
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 231, in main
+    items = fetch_kisa_items()
+            ^^^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 124, in fetch_kisa_items
+    items.extend(fetch_feed(feed))
+                 ^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 100, in fetch_feed
+    root = request_xml(feed["url"])
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 64, in request_xml
+    with urllib.request.urlopen(request, timeout=30) as response:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 519, in open
+    response = self._open(req, data)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 536, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1391, in https_open
+    return self.do_open(http.client.HTTPSConnection, req,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1352, in do_open
+    r = h.getresponse()
+        ^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1395, in getresponse
+    response.begin()
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 325, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 286, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 706, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\ssl.py", line 1314, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\ssl.py", line 1166, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: The read operation timed out
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+Traceback (most recent call last):
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 246, in <module>
+    main()
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 231, in main
+    items = fetch_kisa_items()
+            ^^^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 124, in fetch_kisa_items
+    items.extend(fetch_feed(feed))
+                 ^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 100, in fetch_feed
+    root = request_xml(feed["url"])
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\dev\boannews_mail\send_kisa_daily.py", line 64, in request_xml
+    with urllib.request.urlopen(request, timeout=30) as response:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 519, in open
+    response = self._open(req, data)
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 536, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 496, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1391, in https_open
+    return self.do_open(http.client.HTTPSConnection, req,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\urllib\request.py", line 1352, in do_open
+    r = h.getresponse()
+        ^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 1395, in getresponse
+    response.begin()
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 325, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\http\client.py", line 286, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\socket.py", line 706, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\ssl.py", line 1314, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lsh\AppData\Local\Programs\Python\Python311\Lib\ssl.py", line 1166, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: The read operation timed out
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+슬랙으로 알림이 전송되었습니다.
+Email sent: KISA/KrCERT items 2
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+본문 수집중: 웹서버 HTTP/2 관련 제품 보안 업데이트 권고
+슬랙으로 알림이 전송되었습니다.
+Email sent: KISA/KrCERT items 1
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+본문 수집중: 웹서버 HTTP/2 관련 제품 보안 업데이트 권고
+STATUS: 200
+HTML 저장 완료
+슬랙으로 알림이 전송되었습니다.
+Email sent: KISA/KrCERT items 1
+No new KISA/KrCERT items. Email skipped.
+본문 수집중: 웹서버 HTTP/2 관련 제품 보안 업데이트 권고
+본문 추출 성공 (1045 bytes)
+AI 분석중: 웹서버 HTTP/2 관련 제품 보안 업데이트 권고
+슬랙으로 알림이 전송되었습니다.
+Email sent: KISA/KrCERT items 1
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
+No new KISA/KrCERT items. Email skipped.
