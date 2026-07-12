@@ -1,0 +1,35 @@
+[
+  {
+    "name": "thehackernews",
+    "label": "The Hacker News",
+    "rss_url": "https://feeds.feedburner.com/TheHackersNews",
+    "fetch_body": true,
+    "body_selector": "#articlebody",
+    "enrich": true,
+    "max_items_per_run": 5,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "bleepingcomputer",
+    "label": "BleepingComputer",
+    "note": "Cloudflare가 비브라우저 요청을 403 차단(2026-07 확인). 정책 변경 시 enabled로 전환.",
+    "rss_url": "https://www.bleepingcomputer.com/feed/",
+    "fetch_body": true,
+    "body_selector": "div.articleBody",
+    "enrich": true,
+    "max_items_per_run": 5,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
+  },
+  {
+    "name": "sans_isc",
+    "label": "SANS ISC",
+    "rss_url": "https://isc.sans.edu/rssfeed_full.xml",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  }
+]

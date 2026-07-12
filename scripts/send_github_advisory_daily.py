@@ -158,6 +158,35 @@ def fetch_github_advisories():
     return items
 
 
+def affected_product_names(item):
+    """[{ecosystem, package, ...}] → ["npm/lodash", ...]"""
+    names = []
+    for entry in item.get("affected") or []:
+        package = entry.get("package")
+        if not package:
+            continue
+        ecosystem = entry.get("ecosystem")
+        names.append("{}/{}".format(ecosystem, package) if ecosystem else package)
+    return names
+
+
+def has_patched_version(item):
+    """패치 버전이 하나라도 명시되어 있으면 True, 전부 없으면 False, 패키지 정보 자체가 없으면 None"""
+    affected = item.get("affected") or []
+    if not affected:
+        return None
+    return any(entry.get("patched_versions") for entry in affected)
+
+
+def build_remediation(item):
+    """패키지별 패치 버전을 조치 지침 텍스트로 변환"""
+    lines = []
+    for entry in item.get("affected") or []:
+        if entry.get("package") and entry.get("patched_versions"):
+            lines.append("{} {} 이상으로 업데이트".format(entry["package"], entry["patched_versions"]))
+    return "; ".join(lines)
+
+
 def filter_new_items(items, sent_ids):
     new_items = []
     for item in items:
@@ -239,7 +268,10 @@ def build_email_body(items):
 
 
 def build_subject(items):
+    has_p1 = any((item.get("triage") or {}).get("level") == "P1" for item in items)
     has_critical = any(item["severity"] == "CRITICAL" for item in items)
+    if has_p1:
+        return "[P1] GitHub advisory - {} item(s)".format(len(items))
     if has_critical:
         return "[URGENT] GitHub advisory - {} item(s)".format(len(items))
     return "GitHub advisory - {} item(s)".format(len(items))
@@ -248,12 +280,12 @@ def build_subject(items):
 def send_email(items):
     subject = build_subject(items)
     text_body, html_body = build_email_body(items)
-    common_utils.send_email_message(subject, text_body, html_body)
+    return common_utils.send_email_message(subject, text_body, html_body)
 
 def send_to_slack(items):
     """메일과 동일한 데이터(items)를 받아 동일한 내용을 슬랙으로 전송"""
     if not items:
-        return
+        return False
 
     checked_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     
@@ -265,17 +297,22 @@ def send_to_slack(items):
     ]
 
     for item in items:
+        triage = item.get("triage")
+        marker = common_utils.triage_marker(triage) or "• "
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"• *{item.get('title', '제목 없음')}*\n> Severity: `{item.get('severity', 'N/A')}`\n> Link: <{item.get('link', '#')}|GitHub advisory>"
+                "text": f"{marker}*{item.get('title', '제목 없음')}*\n> Severity: `{item.get('severity', 'N/A')}`\n> Link: <{item.get('link', '#')}|GitHub advisory>{common_utils.triage_note(triage)}"
             }
         })
 
     payload = {"text": f"GitHub Advisory {len(items)}건이 발견되었습니다.", "blocks": blocks}
-    webhook_url, _ = common_utils.select_slack_webhook(os.environ.get("SLACK_WEBHOOK_GITHUB"), items)
-    common_utils.send_slack_webhook(payload, webhook_url)
+    webhook_url = common_utils.pick_webhook(
+        os.environ.get("SLACK_WEBHOOK_GITHUB"),
+        [item.get("triage") for item in items],
+    )
+    return common_utils.send_slack_webhook(payload, webhook_url)
 
 def main():
     state = load_state()
@@ -287,11 +324,53 @@ def main():
         print("No new GitHub high/critical advisories. Email skipped.")
         return
 
-    # [변경] 기존 이메일 대신 슬랙 발송 함수를 호출합니다.
-    send_to_slack(new_items)
-    send_email(new_items)
+    # 긴급도 분류 (P1/P2/P3)
+    epss_scores = common_utils.fetch_epss_scores([item["cve_id"] for item in new_items if item["cve_id"]])
+    for item in new_items:
+        item["triage"] = common_utils.classify_urgency(
+            [item["title"], item["description"]] + item["identifiers"],
+            cvss_score=item["cvss_score"],
+            epss=epss_scores.get(item["cve_id"]),
+        )
+
+    slack_sent = send_to_slack(new_items)
+    email_sent = send_email(new_items)
+
+    # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
+    if not slack_sent and not email_sent:
+        print("Slack/email delivery failed. State not saved; will retry on next run.")
+        return
+
     save_state(state["sent_ids"] + [item["id"] for item in new_items])
-    print("Email sent: GitHub advisories {}".format(len(new_items)))
+
+    # 일간/주간 리포트용 통합 이벤트 로그 적재
+    events = []
+    for item in new_items:
+        try:
+            score = float(item["cvss_score"]) if item["cvss_score"] else None
+        except ValueError:
+            score = None
+        events.append(
+            common_utils.make_event(
+                "github_advisory",
+                item["id"],
+                item["title"],
+                url=item["link"],
+                summary=item["description"],
+                severity=item["severity"],
+                score=score,
+                cves=[item["cve_id"]],
+                affected_products=affected_product_names(item),
+                fix_available=has_patched_version(item),
+                remediation=build_remediation(item),
+                published_at=item["published"],
+                email_sent=email_sent,
+                slack_sent=slack_sent,
+                triage=item.get("triage"),
+            )
+        )
+    common_utils.append_events(events)
+    print("Sent: GitHub advisories {}".format(len(new_items)))
 
 
 if __name__ == "__main__":

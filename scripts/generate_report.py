@@ -1,0 +1,793 @@
+"""수집된 보안 이벤트(data/events.jsonl)를 집계하고 AI 해석을 붙여
+일간/주간 리포트를 메일·슬랙으로 발송하는 스크립트.
+
+사용법:
+    python generate_report.py --period daily
+    python generate_report.py --period weekly
+    python generate_report.py --period weekly --dry-run   # 발송 없이 콘솔 출력만
+
+설계 원칙: 건수/통계는 코드로 정확하게 집계하고, LLM은 해석(총평·핵심 위협·권고)만 담당한다.
+LLM 호출이 실패해도 통계 리포트는 발송된다.
+"""
+
+import argparse
+import html
+import json
+import os
+import re
+from collections import Counter
+from datetime import datetime, timedelta
+
+import requests
+
+import common_utils
+
+LEGACY_BOANNEWS_EVENTS_FILE = common_utils.DATA_DIR / "boannews_events.jsonl"
+
+SOURCE_LABELS = {
+    "nvd": "NVD CVE",
+    "cisa_kev": "CISA KEV",
+    "kisa": "KISA/KrCERT",
+    "asec": "안랩 ASEC",
+    "msrc": "Microsoft 패치",
+    "github_advisory": "GitHub Advisory",
+    "boannews": "보안뉴스",
+    "thehackernews": "The Hacker News",
+    "bleepingcomputer": "BleepingComputer",
+    "sans_isc": "SANS ISC",
+}
+
+MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15
+MAX_TOP_ITEMS_IN_REPORT = 10
+MAX_CVE_CARDS = 5
+THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def source_label(source):
+    return SOURCE_LABELS.get(source, source or "unknown")
+
+
+def parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def event_score(event):
+    score = event.get("score")
+    if isinstance(score, (int, float)):
+        return float(score)
+    return 0.0
+
+
+def event_level(event):
+    return ((event.get("triage") or {}).get("level")) or ""
+
+
+def normalize_legacy_boannews(raw):
+    """구 스키마(data/boannews_events.jsonl)를 통합 스키마로 변환"""
+    analysis = raw.get("analysis") or {}
+    return {
+        "id": raw.get("id", ""),
+        "source": "boannews",
+        "title": raw.get("title", ""),
+        "url": raw.get("url", ""),
+        "summary": raw.get("summary", ""),
+        "severity": analysis.get("severity") or "",
+        "score": None,
+        "cves": analysis.get("cves") or [],
+        "matched_assets": [],
+        "category": analysis.get("category") or "",
+        "affected_products": analysis.get("affected_products") or [],
+        "epss": None,
+        "exploitation_status": "none",
+        "kev": False,
+        "ransomware_use": None,
+        "threat_actor": analysis.get("threat_actor") or "",
+        "malware_family": analysis.get("malware_family") or "",
+        "attack_techniques": analysis.get("attack_techniques") or [],
+        "iocs": analysis.get("iocs") or [],
+        "relevance": analysis.get("relevance") or "",
+        "references": [],
+        "fix_available": None,
+        "remediation": "",
+        "due_date": "",
+        "confidence": analysis.get("confidence") or "",
+        "published_at": raw.get("published_at") or "",
+        "fetched_at": raw.get("fetched_at") or "",
+        "ai_summary": analysis.get("llm_summary"),
+        "triage": None,
+        "delivery": raw.get("delivery") or {},
+    }
+
+
+def load_events(since):
+    """통합 이벤트 로그와 구 보안뉴스 로그를 함께 읽고 (source, url) 기준으로 중복 제거"""
+    events = {}
+
+    for path, legacy in ((common_utils.EVENTS_FILE, False), (LEGACY_BOANNEWS_EVENTS_FILE, True)):
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event = normalize_legacy_boannews(raw) if legacy else raw
+                fetched = parse_iso(event.get("fetched_at"))
+                if fetched is None or fetched < since:
+                    continue
+
+                key = "{}|{}".format(event.get("source"), event.get("url") or event.get("id"))
+                events.setdefault(key, event)
+
+    return list(events.values())
+
+
+def build_stats(events):
+    by_source = Counter(event.get("source") or "unknown" for event in events)
+    critical = [event for event in events if event_score(event) >= 9.0]
+    kev = [event for event in events if event.get("source") == "cisa_kev"]
+    asset_hits = [event for event in events if event.get("matched_assets")]
+
+    cve_counter = Counter()
+    for event in events:
+        for cve in event.get("cves") or []:
+            if cve:
+                cve_counter[cve] += 1
+
+    asset_counter = Counter()
+    for event in asset_hits:
+        for term in event["matched_assets"]:
+            asset_counter[term] += 1
+
+    by_category = Counter(
+        event.get("category") or "미분류" for event in events
+    )
+
+    actor_counter = Counter()
+    malware_counter = Counter()
+    technique_counter = Counter()
+    ioc_seen = set()
+    iocs = []
+    for event in events:
+        if event.get("threat_actor"):
+            actor_counter[event["threat_actor"]] += 1
+        if event.get("malware_family"):
+            malware_counter[event["malware_family"]] += 1
+        for technique in event.get("attack_techniques") or []:
+            technique_counter[technique] += 1
+        for ioc in event.get("iocs") or []:
+            # 신규 형식은 {"type", "value"} — 구형 문자열도 방어적으로 수용
+            if not isinstance(ioc, dict):
+                ioc = {"type": "unknown", "value": str(ioc)}
+            key = str(ioc.get("value", "")).lower()
+            if key and key not in ioc_seen:
+                ioc_seen.add(key)
+                iocs.append(ioc)
+
+    return {
+        "total": len(events),
+        "by_source": by_source,
+        "by_category": by_category,
+        "critical": critical,
+        "kev": kev,
+        "ransomware": [event for event in events if event.get("ransomware_use")],
+        "asset_hits": asset_hits,
+        "p1": [event for event in events if event_level(event) == "P1"],
+        "p2": [event for event in events if event_level(event) == "P2"],
+        "top_cves": cve_counter.most_common(10),
+        "top_assets": asset_counter.most_common(10),
+        "top_actors": actor_counter.most_common(10),
+        "top_malware": malware_counter.most_common(10),
+        "top_techniques": technique_counter.most_common(10),
+        "iocs": iocs,
+    }
+
+
+def top_items(events, limit=MAX_TOP_ITEMS_IN_REPORT):
+    """P1 > P2 > 자산 매칭 > KEV > CVSS 점수 순으로 우선순위 정렬"""
+    def sort_key(event):
+        level_rank = {"P1": 0, "P2": 1}.get(event_level(event), 2)
+        return (
+            level_rank,
+            0 if event.get("matched_assets") else 1,
+            0 if event.get("source") == "cisa_kev" else 1,
+            -event_score(event),
+        )
+
+    return sorted(events, key=sort_key)[:limit]
+
+
+def _union(group, field):
+    """그룹 내 이벤트들의 리스트 필드를 순서 보존하며 합집합"""
+    seen = set()
+    merged = []
+    for event in group:
+        for value in event.get(field) or []:
+            key = str(value).lower()
+            if key not in seen:
+                seen.add(key)
+                merged.append(value)
+    return merged
+
+
+def build_cve_card(cve, group, sources):
+    """같은 CVE를 다루는 여러 소스의 이벤트를 카드 하나로 병합.
+
+    소스마다 가진 정보가 달라(NVD=점수·참조, KEV=악용·기한, 뉴스·ASEC=국내 맥락)
+    합치면 취약점 하나의 완성된 그림이 된다.
+    """
+    level_rank = {"P1": 0, "P2": 1}
+    exploitation_rank = {"active": 0, "poc": 1, "none": 2}
+
+    levels = [event_level(event) for event in group if event_level(event) in level_rank]
+    epss_values = [event["epss"] for event in group if isinstance(event.get("epss"), (int, float))]
+
+    # 조치 지침은 권위 순: KEV(당국 지침) > 그 외 첫 번째 비어있지 않은 값
+    remediation = ""
+    for event in sorted(group, key=lambda e: 0 if e.get("source") == "cisa_kev" else 1):
+        if event.get("remediation"):
+            remediation = event["remediation"]
+            break
+
+    # 요약은 한국어 맥락(뉴스·ASEC의 LLM 요약) 우선
+    summary = ""
+    for event in sorted(group, key=lambda e: 0 if e.get("source") in ("boannews", "asec", "kisa") else 1):
+        summary = (event.get("ai_summary") or event.get("summary") or "").strip()
+        if summary:
+            break
+
+    return {
+        "cve": cve,
+        "sources": sources,
+        "level": min(levels, key=lambda l: level_rank[l]) if levels else "",
+        "score": max((event_score(event) for event in group), default=0.0),
+        "epss": max(epss_values) if epss_values else None,
+        "exploitation": min(
+            (event.get("exploitation_status") or "none" for event in group),
+            key=lambda s: exploitation_rank.get(s, 2),
+        ),
+        "kev": any(event.get("kev") for event in group),
+        "ransomware": any(event.get("ransomware_use") for event in group),
+        "fix_available": any(event.get("fix_available") for event in group) or None,
+        "due_date": next((event["due_date"] for event in group if event.get("due_date")), ""),
+        "remediation": remediation,
+        "summary": summary[:300],
+        "products": _union(group, "affected_products"),
+        "assets": _union(group, "matched_assets"),
+        "actors": [event["threat_actor"] for event in group if event.get("threat_actor")],
+        "items": [
+            (event.get("source"), event.get("title") or "", event.get("url") or "")
+            for event in group
+        ],
+        "event_ids": {event.get("id") for event in group},
+    }
+
+
+def correlate_by_cve(events):
+    """이벤트를 CVE 기준으로 묶어, 복수 소스(≥2)에 동시 등장한 CVE 카드 목록을 반환.
+
+    복수 소스 동시 등장 자체가 가장 강한 중요도 신호다:
+    NVD 단독 = 배경 소음, +KEV = 실제 악용, +국내 뉴스·ASEC = 국내에서 문제되는 위협.
+    """
+    groups = {}
+    for event in events:
+        for cve in event.get("cves") or []:
+            groups.setdefault(cve, []).append(event)
+
+    cards = []
+    for cve, group in groups.items():
+        sources = sorted({event.get("source") or "unknown" for event in group})
+        if len(sources) < 2:
+            continue
+        cards.append(build_cve_card(cve, group, sources))
+
+    level_rank = {"P1": 0, "P2": 1, "": 2}
+    cards.sort(
+        key=lambda card: (
+            level_rank.get(card["level"], 2),
+            -len(card["sources"]),
+            0 if card["kev"] else 1,
+            0 if card["ransomware"] else 1,
+            0 if card["assets"] else 1,
+            -(card["epss"] or 0.0),
+            -card["score"],
+        )
+    )
+    return cards
+
+
+def card_severity_bits(card):
+    """카드의 심각도 요약 문자열 조각들"""
+    bits = []
+    if card["level"]:
+        bits.append(card["level"])
+    if card["score"] > 0:
+        bits.append("CVSS {}".format(card["score"]))
+    if card["epss"] is not None:
+        bits.append("EPSS {:.0%}".format(card["epss"]))
+    if card["kev"]:
+        bits.append("실제 악용 확인(KEV)")
+    elif card["exploitation"] == "active":
+        bits.append("악용 정황")
+    elif card["exploitation"] == "poc":
+        bits.append("PoC 공개")
+    if card["ransomware"]:
+        bits.append("랜섬웨어 연계")
+    if card["assets"]:
+        bits.append("자산매칭: {}".format(", ".join(card["assets"])))
+    return bits
+
+
+def event_line(event):
+    bits = []
+    if event_level(event) in ("P1", "P2"):
+        bits.append(event_level(event))
+    if event.get("severity"):
+        bits.append(str(event["severity"]))
+    if event_score(event) > 0:
+        bits.append("CVSS {}".format(event["score"]))
+    if isinstance(event.get("epss"), (int, float)):
+        bits.append("EPSS {:.0%}".format(event["epss"]))
+    if event.get("category"):
+        bits.append(str(event["category"]))
+    if event.get("threat_actor"):
+        bits.append("공격그룹: {}".format(event["threat_actor"]))
+    if event.get("malware_family"):
+        bits.append("악성코드: {}".format(event["malware_family"]))
+    if event.get("ransomware_use"):
+        bits.append("랜섬웨어 연계")
+    if event.get("due_date"):
+        bits.append("조치기한 {}".format(event["due_date"]))
+    if event.get("fix_available"):
+        bits.append("패치 있음")
+    if event.get("matched_assets"):
+        bits.append("자산매칭: {}".format(", ".join(event["matched_assets"])))
+    suffix = " ({})".format("; ".join(bits)) if bits else ""
+
+    # 수집 시점 LLM 요약(ai_summary)이 있으면 원문 요약보다 우선 사용
+    summary = (event.get("ai_summary") or event.get("summary") or "").strip()
+    if len(summary) > 300:
+        summary = summary[:300] + "…"
+
+    line = "- {}{}".format(event.get("title") or event.get("url") or "(제목 없음)", suffix)
+    if summary:
+        line += " | {}".format(summary)
+    if event.get("remediation"):
+        line += " | 조치: {}".format(event["remediation"][:100])
+    return line
+
+
+def build_digest(period_label, stats, events, cards):
+    """LLM에 전달할 구조화된 요약 텍스트"""
+    lines = [
+        "기간: {}".format(period_label),
+        "총 이벤트: {}건".format(stats["total"]),
+        "",
+        "[소스별 건수]",
+    ]
+    for source, count in stats["by_source"].most_common():
+        lines.append("- {}: {}건".format(source_label(source), count))
+
+    if len(stats["by_category"]) > 1 or "미분류" not in stats["by_category"]:
+        lines.append("")
+        lines.append("[카테고리별 건수]")
+        for category, count in stats["by_category"].most_common():
+            lines.append("- {}: {}건".format(category, count))
+
+    if stats["top_actors"] or stats["top_malware"]:
+        lines.append("")
+        lines.append("[언급된 공격 그룹·악성코드]")
+        for actor, count in stats["top_actors"]:
+            lines.append("- 공격그룹 {}: {}건".format(actor, count))
+        for malware, count in stats["top_malware"]:
+            lines.append("- 악성코드 {}: {}건".format(malware, count))
+
+    if stats["top_techniques"]:
+        lines.append("")
+        lines.append("[MITRE ATT&CK 기법]")
+        for technique, count in stats["top_techniques"]:
+            lines.append("- {}: {}건".format(technique, count))
+
+    lines.append("")
+    lines.append("[요약 통계]")
+    lines.append("- P1 긴급(악용 중 + 자사 자산): {}건".format(len(stats["p1"])))
+    lines.append("- P2 주의: {}건".format(len(stats["p2"])))
+    lines.append("- CVSS 9.0 이상(Critical): {}건".format(len(stats["critical"])))
+    lines.append("- CISA KEV(실제 악용 확인): {}건".format(len(stats["kev"])))
+    lines.append("- 랜섬웨어 캠페인 연계: {}건".format(len(stats["ransomware"])))
+    lines.append("- 자사 자산 매칭: {}건".format(len(stats["asset_hits"])))
+
+    if stats["top_assets"]:
+        lines.append("")
+        lines.append("[자사 자산 매칭 상세]")
+        for term, count in stats["top_assets"]:
+            lines.append("- {}: {}건".format(term, count))
+
+    if cards:
+        lines.append("")
+        lines.append("[크로스소스 상관관계 — 복수 소스에 동시 등장한 CVE (신뢰도 높은 핵심 위협)]")
+        for card in cards[:MAX_CVE_CARDS]:
+            parts = [
+                "{} (소스 {}개: {})".format(
+                    card["cve"], len(card["sources"]),
+                    ", ".join(source_label(s) for s in card["sources"]),
+                )
+            ]
+            parts.extend(card_severity_bits(card))
+            if card["products"]:
+                parts.append("영향: {}".format(", ".join(card["products"][:5])))
+            if card["remediation"]:
+                parts.append("조치: {}".format(card["remediation"][:100]))
+            if card["due_date"]:
+                parts.append("조치기한 {}".format(card["due_date"]))
+            lines.append("- " + " | ".join(parts))
+            if card["summary"]:
+                lines.append("  요약: {}".format(card["summary"][:200]))
+
+    grouped = {}
+    for event in events:
+        grouped.setdefault(event.get("source") or "unknown", []).append(event)
+
+    for source, group in grouped.items():
+        group = sorted(group, key=event_score, reverse=True)
+        lines.append("")
+        lines.append("[{}]".format(source_label(source)))
+        for event in group[:MAX_ITEMS_PER_SOURCE_IN_PROMPT]:
+            lines.append(event_line(event))
+        if len(group) > MAX_ITEMS_PER_SOURCE_IN_PROMPT:
+            lines.append("- ...외 {}건".format(len(group) - MAX_ITEMS_PER_SOURCE_IN_PROMPT))
+
+    return "\n".join(lines)
+
+
+def ai_narrative(period_label, digest):
+    prompt = """당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.
+아래는 {period} 동안 수집된 보안 이벤트 요약이다. 이를 바탕으로 보안담당자용 리포트 본문을 한국어로 작성하라.
+
+출력 형식:
+[총평]
+- 2~3문장
+
+[핵심 위협 TOP 3]
+- 각 항목마다 무엇이 왜 중요한지 1~2문장
+
+[자사 자산 관련]
+- 매칭된 항목이 있으면 조치 우선순위를 제시하고, 없으면 "해당 없음"이라고만 작성
+
+[권고 조치]
+- 3개 이내
+
+주의: 제공된 데이터에 없는 사실을 만들어내지 마라. 건수와 수치는 데이터에 있는 그대로 사용하라.
+
+데이터:
+{digest}
+""".format(period=period_label, digest=digest)
+
+    try:
+        response = requests.post(
+            common_utils.OLLAMA_URL,
+            json={
+                "model": common_utils.OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=300,
+        )
+        if response.status_code == 200:
+            text = (response.json() or {}).get("response", "")
+            text = THINK_TAG_RE.sub("", text).strip()
+            if text:
+                return text
+        print("[-] AI 해석 생성 실패: HTTP {}".format(response.status_code))
+    except Exception as error:
+        print("[-] AI 해석 생성 실패: {}".format(error))
+    return ""
+
+
+def build_text_report(title, period_label, stats, narrative, highlights, cards):
+    lines = [
+        title,
+        "기간: {}".format(period_label),
+        "생성 시각: {}".format(datetime.now().strftime("%Y-%m-%d %H:%M")),
+        "",
+        "[수집 현황]",
+        "- 총 {}건 (P1 {} / P2 {} / Critical {} / KEV {} / 랜섬웨어 {} / 자산매칭 {})".format(
+            stats["total"], len(stats["p1"]), len(stats["p2"]),
+            len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
+            len(stats["asset_hits"])
+        ),
+    ]
+    for source, count in stats["by_source"].most_common():
+        lines.append("- {}: {}건".format(source_label(source), count))
+
+    categorized = [(c, n) for c, n in stats["by_category"].most_common() if c != "미분류"]
+    if categorized:
+        lines.append("- 카테고리: {}".format(
+            ", ".join("{} {}건".format(category, count) for category, count in categorized)
+        ))
+
+    if narrative:
+        lines.append("")
+        lines.append("[AI 분석]")
+        lines.append(narrative)
+
+    if cards:
+        lines.append("")
+        lines.append("[핵심 취약점 TOP {} — 복수 소스 교차 확인]".format(min(len(cards), MAX_CVE_CARDS)))
+        for idx, card in enumerate(cards[:MAX_CVE_CARDS], start=1):
+            lines.append("{}. {} (소스 {}개: {})".format(
+                idx, card["cve"], len(card["sources"]),
+                ", ".join(source_label(s) for s in card["sources"]),
+            ))
+            bits = card_severity_bits(card)
+            if bits:
+                lines.append("   심각도: {}".format(" / ".join(bits)))
+            if card["products"]:
+                lines.append("   영향: {}".format(", ".join(card["products"][:5])))
+            if card["remediation"]:
+                due = " (기한 {})".format(card["due_date"]) if card["due_date"] else ""
+                lines.append("   조치: {}{}".format(card["remediation"][:150], due))
+            if card["summary"]:
+                lines.append("   요약: {}".format(card["summary"][:200]))
+            for source, item_title, item_url in card["items"]:
+                lines.append("   - [{}] {} {}".format(source_label(source), item_title, item_url))
+
+    lines.append("")
+    lines.append("[주요 항목 TOP {}]".format(len(highlights)))
+    for idx, event in enumerate(highlights, start=1):
+        level_prefix = "[{}] ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
+        lines.append("{}. {}[{}] {}".format(idx, level_prefix, source_label(event.get("source")), event.get("title")))
+        lines.append("   {}".format(event.get("url") or ""))
+
+    if stats["iocs"]:
+        lines.append("")
+        lines.append("[부록: 수집된 IOC {}건]".format(len(stats["iocs"])))
+        for ioc in stats["iocs"][:30]:
+            lines.append("- [{}] {}".format(ioc.get("type", "unknown"), ioc.get("value", "")))
+        if len(stats["iocs"]) > 30:
+            lines.append("- ...외 {}건".format(len(stats["iocs"]) - 30))
+
+    return "\n".join(lines)
+
+
+def build_html_report(title, period_label, stats, narrative, highlights, cards):
+    parts = [
+        "<html><body>",
+        "<h2>{}</h2>".format(html.escape(title)),
+        "<p>기간: {} | 생성 시각: {}</p>".format(
+            html.escape(period_label), datetime.now().strftime("%Y-%m-%d %H:%M")
+        ),
+        "<h3>수집 현황</h3>",
+        "<p>총 <b>{}</b>건 — <b>P1 {}</b> / P2 {} / Critical {} / KEV {} / 랜섬웨어 {} / 자산매칭 {}</p>".format(
+            stats["total"], len(stats["p1"]), len(stats["p2"]),
+            len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
+            len(stats["asset_hits"])
+        ),
+        "<ul>",
+    ]
+    for source, count in stats["by_source"].most_common():
+        parts.append("<li>{}: {}건</li>".format(html.escape(source_label(source)), count))
+    categorized = [(c, n) for c, n in stats["by_category"].most_common() if c != "미분류"]
+    if categorized:
+        parts.append("<li>카테고리: {}</li>".format(html.escape(
+            ", ".join("{} {}건".format(category, count) for category, count in categorized)
+        )))
+    parts.append("</ul>")
+
+    if narrative:
+        parts.append("<h3>AI 분석</h3>")
+        parts.append("<p>{}</p>".format(html.escape(narrative).replace("\n", "<br>")))
+
+    if cards:
+        parts.append("<h3>핵심 취약점 TOP {} — 복수 소스 교차 확인</h3>".format(min(len(cards), MAX_CVE_CARDS)))
+        parts.append("<ol>")
+        for card in cards[:MAX_CVE_CARDS]:
+            card_parts = [
+                "<b>{}</b> (소스 {}개: {})".format(
+                    html.escape(card["cve"]), len(card["sources"]),
+                    html.escape(", ".join(source_label(s) for s in card["sources"])),
+                )
+            ]
+            bits = card_severity_bits(card)
+            if bits:
+                card_parts.append("심각도: {}".format(html.escape(" / ".join(bits))))
+            if card["products"]:
+                card_parts.append("영향: {}".format(html.escape(", ".join(card["products"][:5]))))
+            if card["remediation"]:
+                due = " (기한 {})".format(card["due_date"]) if card["due_date"] else ""
+                card_parts.append("조치: {}{}".format(html.escape(card["remediation"][:150]), html.escape(due)))
+            if card["summary"]:
+                card_parts.append(html.escape(card["summary"][:200]))
+            card_parts.append(
+                " · ".join(
+                    '<a href="{}">{}</a>'.format(html.escape(item_url or "#"), html.escape(source_label(source)))
+                    for source, _, item_url in card["items"]
+                )
+            )
+            parts.append("<li>{}</li>".format("<br>".join(card_parts)))
+        parts.append("</ol>")
+
+    parts.append("<h3>주요 항목 TOP {}</h3>".format(len(highlights)))
+    parts.append("<ol>")
+    for event in highlights:
+        extra = []
+        if event_level(event) in ("P1", "P2"):
+            extra.append("<b>{}</b>".format(event_level(event)))
+        if event.get("severity"):
+            extra.append(html.escape(str(event["severity"])))
+        if event_score(event) > 0:
+            extra.append("CVSS {}".format(event["score"]))
+        if event.get("matched_assets"):
+            extra.append("자산매칭: {}".format(html.escape(", ".join(event["matched_assets"]))))
+        suffix = " ({})".format(" / ".join(extra)) if extra else ""
+
+        parts.append(
+            '<li>[{}] <a href="{}">{}</a>{}</li>'.format(
+                html.escape(source_label(event.get("source"))),
+                html.escape(event.get("url") or "#"),
+                html.escape(event.get("title") or "(제목 없음)"),
+                suffix,
+            )
+        )
+    parts.append("</ol>")
+
+    if stats["iocs"]:
+        parts.append("<h3>부록: 수집된 IOC {}건</h3>".format(len(stats["iocs"])))
+        parts.append("<ul>")
+        for ioc in stats["iocs"][:30]:
+            parts.append("<li>[{}] <code>{}</code></li>".format(
+                html.escape(ioc.get("type", "unknown")), html.escape(ioc.get("value", ""))
+            ))
+        if len(stats["iocs"]) > 30:
+            parts.append("<li>...외 {}건</li>".format(len(stats["iocs"]) - 30))
+        parts.append("</ul>")
+
+    parts.append("</body></html>")
+    return "".join(parts)
+
+
+def build_slack_blocks(title, period_label, stats, narrative, highlights, cards):
+    stat_text = (
+        "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`\n".format(
+            stats["total"], len(stats["p1"]), len(stats["p2"]),
+            len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
+            len(stats["asset_hits"])
+        )
+        + "\n".join(
+            "> {}: {}건".format(source_label(source), count)
+            for source, count in stats["by_source"].most_common()
+        )
+    )
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": "📊 " + title, "emoji": True}},
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": "🕒 {} | {}".format(period_label, datetime.now().strftime("%Y-%m-%d %H:%M"))}],
+        },
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": stat_text}},
+    ]
+
+    if narrative:
+        blocks.append({"type": "divider"})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🤖 *AI 분석*\n" + narrative}})
+
+    if cards:
+        card_lines = []
+        for idx, card in enumerate(cards[:MAX_CVE_CARDS], start=1):
+            marker = "🚨" if card["level"] == "P1" else ("⚠️" if card["level"] == "P2" else "🎯")
+            bits = card_severity_bits(card)
+            line = "{} {}. *{}* — 소스 {}개 ({})".format(
+                marker, idx, card["cve"], len(card["sources"]),
+                ", ".join(source_label(s) for s in card["sources"]),
+            )
+            if bits:
+                line += "\n> {}".format(" / ".join(bits))
+            if card["remediation"]:
+                due = " (기한 {})".format(card["due_date"]) if card["due_date"] else ""
+                line += "\n> 조치: {}{}".format(card["remediation"][:120], due)
+            card_lines.append(line)
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "*핵심 취약점 — 복수 소스 교차 확인*\n" + "\n".join(card_lines)},
+        })
+
+    if highlights:
+        blocks.append({"type": "divider"})
+        highlight_lines = []
+        for idx, event in enumerate(highlights, start=1):
+            level = event_level(event)
+            if level == "P1":
+                marker = "🚨"
+            elif level == "P2":
+                marker = "⚠️"
+            elif event.get("source") == "cisa_kev":
+                marker = "🔥"
+            else:
+                marker = "•"
+            highlight_lines.append(
+                "{} {}. [{}] <{}|{}>".format(
+                    marker,
+                    idx,
+                    source_label(event.get("source")),
+                    event.get("url") or "#",
+                    (event.get("title") or "(제목 없음)")[:120],
+                )
+            )
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*주요 항목 TOP {}*\n".format(len(highlights)) + "\n".join(highlight_lines)}})
+
+    return blocks
+
+
+def main():
+    parser = argparse.ArgumentParser(description="일간/주간 보안 인텔리전스 리포트 생성")
+    parser.add_argument("--period", choices=["daily", "weekly"], default="daily")
+    parser.add_argument("--days", type=int, default=None, help="집계 기간 직접 지정(테스트용)")
+    parser.add_argument("--dry-run", action="store_true", help="발송하지 않고 콘솔에 출력")
+    args = parser.parse_args()
+
+    if args.period == "daily":
+        days = args.days or 1
+        title = "일간 보안 인텔리전스 리포트"
+    else:
+        days = args.days or 7
+        title = "주간 보안 인텔리전스 리포트"
+
+    now = datetime.utcnow()
+    since = now - timedelta(days=days)
+    period_label = "{} ~ {} (UTC)".format(since.strftime("%Y-%m-%d %H:%M"), now.strftime("%Y-%m-%d %H:%M"))
+
+    events = load_events(since)
+    if not events:
+        print("기간 내 수집된 이벤트가 없어 리포트를 생성하지 않습니다.")
+        return
+
+    stats = build_stats(events)
+
+    # CVE 크로스소스 상관관계: 복수 소스 등장 CVE는 카드로 병합하고,
+    # 카드에 포함된 이벤트는 개별 TOP 목록에서 제외해 중복 표시를 막는다
+    cards = correlate_by_cve(events)
+    shown_card_event_ids = set()
+    for card in cards[:MAX_CVE_CARDS]:
+        shown_card_event_ids.update(card["event_ids"])
+    highlights = top_items([event for event in events if event.get("id") not in shown_card_event_ids])
+
+    print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건). AI 해석 생성 중...".format(stats["total"], len(cards)))
+    digest = build_digest(period_label, stats, events, cards)
+    narrative = ai_narrative(period_label, digest)
+    if not narrative:
+        narrative = "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"
+
+    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards)
+    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards)
+    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards)
+
+    if args.dry_run:
+        print("===== DRY RUN: 발송 생략 =====")
+        print(text_body)
+        return
+
+    subject = "[{}] {} - {}건".format("일간" if args.period == "daily" else "주간", title, stats["total"])
+    email_sent = common_utils.send_email_message(subject, text_body, html_body)
+
+    payload = {"text": subject, "blocks": blocks}
+    webhook_url = os.environ.get("SLACK_WEBHOOK_REPORT") or common_utils.SLACK_WEBHOOK_URL
+    slack_sent = common_utils.send_slack_webhook(payload, webhook_url)
+
+    print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
+
+
+if __name__ == "__main__":
+    main()

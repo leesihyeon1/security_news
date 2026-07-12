@@ -26,6 +26,7 @@ CISA_KEV_URLS = [
 STATE_FILE = common_utils.STATE_DIR / "cve_sent_state.json"
 
 LOOKBACK_HOURS = int(os.environ.get("CVE_LOOKBACK_HOURS", "48"))
+KEV_LOOKBACK_DAYS = int(os.environ.get("KEV_LOOKBACK_DAYS", "7"))
 MAX_NVD_ITEMS_PER_EMAIL = int(os.environ.get("MAX_NVD_ITEMS_PER_EMAIL", "10"))
 MAX_KEV_ITEMS_PER_EMAIL = int(os.environ.get("MAX_KEV_ITEMS_PER_EMAIL", "10"))
 MIN_NVD_CVSS_SCORE = float(os.environ.get("MIN_NVD_CVSS_SCORE", "7.0"))
@@ -217,24 +218,26 @@ def fetch_new_nvd_cves():
         modified = []
 
     all_raw_cves = parse_nvd_vulnerabilities(published + modified)
-    
-    # 두 리스트를 합친 뒤
-    all_raw_cves = parse_nvd_vulnerabilities(published + modified)
-    
-    # [핵심] 여기서 날짜 필터링을 한 번 더 수행합니다.
+
+    # NVD가 조회 구간 밖의 데이터를 섞어 주는 경우가 있어 날짜 필터링을 한 번 더 수행합니다.
+    # 최근 수정된 과거 CVE도 유지되도록 published/last_modified 중 최신 시각으로 비교합니다.
     now = datetime.utcnow()
     limit_time = now - timedelta(hours=LOOKBACK_HOURS)
-    
+
     filtered_cves = []
     for item in all_raw_cves:
-        # published 혹은 last_modified 값을 파싱하여 비교
-        try:
-            pub_date = datetime.fromisoformat(item["published"].replace("Z", "+00:00")).replace(tzinfo=None)
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if pub_date >= limit_time:
+        item_time = None
+        for field in ("published", "last_modified"):
+            try:
+                parsed = datetime.fromisoformat(item[field].replace("Z", "+00:00")).replace(tzinfo=None)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if item_time is None or parsed > item_time:
+                item_time = parsed
+        if item_time is not None and item_time >= limit_time:
             filtered_cves.append(item)
-            
+
+
     filtered_cves.sort(key=lambda item: item["published"], reverse=True)
     return filtered_cves
 
@@ -276,8 +279,23 @@ def fetch_cisa_kev():
             }
         )
 
-    kev_items.sort(key=lambda item: item["date_added"], reverse=True)
-    return kev_items
+    # 전체 카탈로그(1,600건+)가 상태 상한(MAX_STORED_SENT_IDS)보다 커서 오래된 항목이
+    # 이력에서 밀려나 재발송되는 루프를 막기 위해, 최근 등재분만 발송 후보로 삼는다.
+    cutoff = (datetime.utcnow() - timedelta(days=KEV_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    recent_items = [item for item in kev_items if item["date_added"] >= cutoff]
+
+    recent_items.sort(key=lambda item: item["date_added"], reverse=True)
+    return recent_items
+
+
+def kev_ransomware_flag(value):
+    """KEV knownRansomwareCampaignUse("Known"/"Unknown") → True/False/None"""
+    normalized = (value or "").strip().lower()
+    if normalized == "known":
+        return True
+    if normalized == "unknown":
+        return False
+    return None
 
 
 def filter_new_items(items, sent_ids, limit):
@@ -402,8 +420,11 @@ def build_email_body(nvd_items, kev_items):
 
 def build_subject(nvd_items, kev_items):
     total_count = len(nvd_items) + len(kev_items)
+    has_p1 = any((item.get("triage") or {}).get("level") == "P1" for item in nvd_items + kev_items)
     has_critical = any(is_critical_nvd(item) for item in nvd_items)
 
+    if has_p1:
+        return "[P1] CVE alert - {} item(s)".format(total_count)
     if kev_items or has_critical:
         return "[URGENT] CVE alert - {} item(s)".format(total_count)
 
@@ -413,7 +434,7 @@ def build_subject(nvd_items, kev_items):
 def send_email(nvd_items, kev_items):
     subject = build_subject(nvd_items, kev_items)
     text_body, html_body = build_email_body(nvd_items, kev_items)
-    common_utils.send_email_message(subject, text_body, html_body)
+    return common_utils.send_email_message(subject, text_body, html_body)
 
 
 def send_to_slack(nvd_items, kev_items):
@@ -455,11 +476,13 @@ def send_to_slack(nvd_items, kev_items):
             action = item.get("action", "설명 없음")
             link = item.get("link", "https://www.cisa.gov")
             
+            triage = item.get("triage")
+            marker = common_utils.triage_marker(triage) or "• "
             blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"• *{cve_id}* ({date_added})\n> *대상 자산:* {vendor} {product} ({name})\n> *조치* ({action})\n> *요약:* {desc}"
+                    "text": f"{marker}*{cve_id}* ({date_added})\n> *대상 자산:* {vendor} {product} ({name})\n> *조치* ({action})\n> *요약:* {desc}{common_utils.triage_note(triage)}"
                 },
                 "accessory": {
                     "type": "button",
@@ -487,11 +510,13 @@ def send_to_slack(nvd_items, kev_items):
             if len(desc) > 150: 
                 desc = desc[:150] + "..."
 
+            triage = item.get("triage")
+            marker = common_utils.triage_marker(triage) or "• "
             blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"• *{cve_id}* | 점수: `{score}` [{severity}]\n> {desc}"
+                    "text": f"{marker}*{cve_id}* | 점수: `{score}` [{severity}]\n> {desc}{common_utils.triage_note(triage)}"
                 },
                 "accessory": {
                     "type": "button",
@@ -503,8 +528,11 @@ def send_to_slack(nvd_items, kev_items):
 
     # HTTP POST 데이터 빌드
     payload = {"blocks": blocks}
-    webhook_url, _ = common_utils.select_slack_webhook(os.environ.get("SLACK_WEBHOOK_CVE"), nvd_items + kev_items)
-    common_utils.send_slack_webhook(payload, webhook_url)
+    webhook_url = common_utils.pick_webhook(
+        os.environ.get("SLACK_WEBHOOK_CVE"),
+        [item.get("triage") for item in nvd_items + kev_items],
+    )
+    return common_utils.send_slack_webhook(payload, webhook_url)
 
 
 def main():
@@ -522,15 +550,73 @@ def main():
         print("No new high/critical NVD CVEs or new CISA KEV entries. Slack/Email skipped.")
         return
 
-    # [변경] 기존 이메일 대신 슬랙 발송 함수를 호출합니다.
-    send_to_slack(new_nvd_items, new_kev_items)
-    
-    # 만약 메일로도 동시에 복사본을 받고 싶다면 아래 줄의 주석(#)을 해제하세요.
-    send_email(new_nvd_items, new_kev_items)
+    # 긴급도 분류 (P1/P2/P3): KEV는 악용 확인, NVD는 EPSS 확률 조회 후 판정
+    epss_scores = common_utils.fetch_epss_scores([item["id"] for item in new_nvd_items])
+    for item in new_nvd_items:
+        item["triage"] = common_utils.classify_urgency(
+            [item["id"], item["description"]],
+            cvss_score=item["score"],
+            epss=epss_scores.get(item["id"]),
+        )
+    for item in new_kev_items:
+        item["triage"] = common_utils.classify_urgency(
+            [item["cve_id"], item["vendor"], item["product"], item["name"], item["description"]],
+            kev=True,
+        )
+
+    slack_sent = send_to_slack(new_nvd_items, new_kev_items)
+    email_sent = send_email(new_nvd_items, new_kev_items)
+
+    # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
+    if not slack_sent and not email_sent:
+        print("Slack/email delivery failed. State not saved; will retry on next run.")
+        return
 
     updated_nvd_ids = state["sent_nvd_ids"] + [item["id"] for item in new_nvd_items]
     updated_kev_ids = state["sent_kev_ids"] + [item["id"] for item in new_kev_items]
     save_state(updated_nvd_ids, updated_kev_ids)
+
+    # 일간/주간 리포트용 통합 이벤트 로그 적재
+    common_utils.append_events(
+        [
+            common_utils.make_event(
+                "nvd",
+                item["id"],
+                item["id"],
+                url=item["link"],
+                summary=item["description"],
+                severity=item["severity"],
+                score=cvss_score_value(item),
+                cves=[item["id"]],
+                references=item.get("references"),
+                published_at=item["published"],
+                email_sent=email_sent,
+                slack_sent=slack_sent,
+                triage=item.get("triage"),
+            )
+            for item in new_nvd_items
+        ]
+        + [
+            common_utils.make_event(
+                "cisa_kev",
+                item["id"],
+                "{} - {}".format(item["cve_id"], item["name"]),
+                url=item["link"],
+                summary=item["description"],
+                severity="KEV",
+                cves=[item["cve_id"]],
+                affected_products=["{} {}".format(item["vendor"], item["product"]).strip()],
+                remediation=item["action"],
+                due_date=item["due_date"],
+                ransomware_use=kev_ransomware_flag(item["ransomware"]),
+                published_at=item["date_added"],
+                email_sent=email_sent,
+                slack_sent=slack_sent,
+                triage=item.get("triage"),
+            )
+            for item in new_kev_items
+        ]
+    )
 
     print(
         "Process finished: NVD high/critical CVEs {}, CISA KEV entries {}".format(

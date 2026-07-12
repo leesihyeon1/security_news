@@ -61,6 +61,22 @@ send_kisa.bat
 microsoft_patch.bat
 ```
 
+## Reports
+
+All collector scripts append normalized events to `data/events.jsonl`.
+`scripts/generate_report.py` aggregates them (counts, CVSS distribution, KEV,
+asset matches) and asks the local Ollama model for a narrative analysis, then
+sends the report via email and Slack (`SLACK_WEBHOOK_REPORT`, falling back to
+`SLACK_WEBHOOK_URL`).
+
+```bat
+daily_report.bat
+weekly_report.bat
+python scripts\generate_report.py --period weekly --dry-run
+```
+
+If Ollama is unavailable, the report is still sent with statistics only.
+
 ## Runtime Files
 
 Runtime outputs are intentionally ignored by Git:

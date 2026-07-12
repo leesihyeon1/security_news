@@ -273,12 +273,12 @@ def build_email_body(items):
 def send_email(items):
     subject = "KISA/KrCERT alert - {} item(s)".format(len(items))
     text_body, html_body = build_email_body(items)
-    common_utils.send_email_message(subject, text_body, html_body)
+    return common_utils.send_email_message(subject, text_body, html_body)
 
 def send_to_slack(items):
     """메일과 동일한 데이터를 받아 슬랙으로 전송"""
     if not items:
-        return
+        return False
 
     checked_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     
@@ -298,6 +298,10 @@ def send_to_slack(items):
         )
 
         if content:
+            # 본문에서 발견된 CVE를 병합 (이벤트 로그에 반영됨)
+            item["extracted_cves"] = sorted(
+                set(item.get("extracted_cves") or []) | set(common_utils.extract_cves(content))
+            )
 
             print(f"AI 분석중: {item['title']}")
 
@@ -309,13 +313,14 @@ def send_to_slack(items):
         else:
              ai_result = "본문을 가져오지 못했습니다."
 
+        triage = item.get("triage")
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
                 "text":
-                    f"📌 *{item['title']}*\n"
-                    f"> 출처: {item['source']}\n\n"
+                    f"{common_utils.triage_marker(triage)}📌 *{item['title']}*\n"
+                    f"> 출처: {item['source']}{common_utils.triage_note(triage)}\n\n"
                     f"🤖 *AI 분석 결과*\n"
                     f"{ai_result[:2500]}\n\n"
                     f"🔗 <{item['link']}|기사 바로가기>"
@@ -327,9 +332,9 @@ def send_to_slack(items):
     })
 
     payload = {"text": f"KISA 신규 알림 {len(items)}건이 발견되었습니다.", "blocks": blocks}
-    default_webhook_url = os.environ.get("SLACK_WEBHOOK_BOANNEWS") or os.environ.get("SLACK_WEBHOOK_KISA")
-    webhook_url, _ = common_utils.select_slack_webhook(default_webhook_url, items)
-    common_utils.send_slack_webhook(payload, webhook_url)
+    default_webhook_url = os.environ.get("SLACK_WEBHOOK_KISA") or os.environ.get("SLACK_WEBHOOK_BOANNEWS")
+    webhook_url = common_utils.pick_webhook(default_webhook_url, [item.get("triage") for item in items])
+    return common_utils.send_slack_webhook(payload, webhook_url)
 
 
 def main():
@@ -342,11 +347,49 @@ def main():
         print("No new KISA/KrCERT items. Email skipped.")
         return
 
-    # [변경] 기존 이메일 대신 슬랙 발송 함수를 호출합니다.
-    send_to_slack(new_items)
-    send_email(new_items)
+    # 제목·요약에서 CVE 번호 추출 후 EPSS(악용 확률)와 연계하여 긴급도 분류 (P1/P2/P3)
+    # 본문 크롤링 시점(send_to_slack)에 본문 내 CVE가 추가로 병합됩니다.
+    for item in new_items:
+        item["extracted_cves"] = common_utils.extract_cves(item["title"], item["summary"])
+    epss_scores = common_utils.fetch_epss_scores(
+        [cve for item in new_items for cve in item["extracted_cves"]]
+    )
+    for item in new_items:
+        epss_values = [epss_scores[cve] for cve in item["extracted_cves"] if cve in epss_scores]
+        item["triage"] = common_utils.classify_urgency(
+            [item["title"], item["summary"]],
+            epss=max(epss_values) if epss_values else None,
+        )
+
+    slack_sent = send_to_slack(new_items)
+    email_sent = send_email(new_items)
+
+    # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
+    if not slack_sent and not email_sent:
+        print("Slack/email delivery failed. State not saved; will retry on next run.")
+        return
+
     save_state(state["sent_ids"] + [item["id"] for item in new_items])
-    print("Email sent: KISA/KrCERT items {}".format(len(new_items)))
+
+    # 일간/주간 리포트용 통합 이벤트 로그 적재
+    common_utils.append_events(
+        [
+            common_utils.make_event(
+                "kisa",
+                item["id"],
+                item["title"],
+                url=item["link"],
+                summary=item["summary"],
+                cves=item.get("extracted_cves"),
+                published_at=item["published"],
+                email_sent=email_sent,
+                slack_sent=slack_sent,
+                triage=item.get("triage"),
+            )
+            for item in new_items
+        ]
+    )
+    print("Sent: KISA/KrCERT items {}".format(len(new_items)))
 
 
 if __name__ == "__main__":

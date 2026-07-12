@@ -141,7 +141,10 @@ def parse_document(document_id, data):
         if score < MIN_CVSS_SCORE:
             continue
 
-        title = get_note(vulnerability, "Title") or clean_text(vulnerability.get("Title")) or cve_id
+        title_raw = vulnerability.get("Title")
+        if isinstance(title_raw, dict):
+            title_raw = title_raw.get("Value")
+        title = get_note(vulnerability, "Title") or clean_text(title_raw) or cve_id
         description = get_note(vulnerability, "Description")
         severity = get_threat(vulnerability, "Severity")
         exploited = get_threat(vulnerability, "Exploit Status")
@@ -249,7 +252,10 @@ def build_email_body(items):
 
 
 def build_subject(items):
+    has_p1 = any((item.get("triage") or {}).get("level") == "P1" for item in items)
     has_critical = any(item["score"] >= CRITICAL_CVSS_SCORE for item in items)
+    if has_p1:
+        return "[P1] Microsoft security update - {} item(s)".format(len(items))
     if has_critical:
         return "[URGENT] Microsoft security update - {} item(s)".format(len(items))
     return "Microsoft security update - {} item(s)".format(len(items))
@@ -258,12 +264,12 @@ def build_subject(items):
 def send_email(items):
     subject = build_subject(items)
     text_body, html_body = build_email_body(items)
-    common_utils.send_email_message(subject, text_body, html_body)
+    return common_utils.send_email_message(subject, text_body, html_body)
 
 def send_to_slack(items):
     """메일과 동일한 데이터를 받아 슬랙으로 전송"""
     if not items:
-        return
+        return False
 
     checked_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     
@@ -276,17 +282,22 @@ def send_to_slack(items):
 
     for item in items:
         # Microsoft 패치 데이터 구조에 맞춘 출력
+        triage = item.get("triage")
+        marker = common_utils.triage_marker(triage) or "• "
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"• *{item.get('title', '제목 없음')}*\n> CVSS Score: `{item.get('score', 'N/A')}`\n> <{item.get('link', '#')}|패치 상세 보기>"
+                "text": f"{marker}*{item.get('title', '제목 없음')}*\n> CVSS Score: `{item.get('score', 'N/A')}`\n> <{item.get('link', '#')}|패치 상세 보기>{common_utils.triage_note(triage)}"
             }
         })
 
     payload = {"text": f"Microsoft 보안 패치 {len(items)}건이 발견되었습니다.", "blocks": blocks}
-    webhook_url, _ = common_utils.select_slack_webhook(os.environ.get("SLACK_WEBHOOK_MS"), items)
-    common_utils.send_slack_webhook(payload, webhook_url)
+    webhook_url = common_utils.pick_webhook(
+        os.environ.get("SLACK_WEBHOOK_MS"),
+        [item.get("triage") for item in items],
+    )
+    return common_utils.send_slack_webhook(payload, webhook_url)
 
 
 def main():
@@ -299,12 +310,49 @@ def main():
         print("No new Microsoft high/critical security update items. Email skipped.")
         return
 
-    # [변경] 기존 이메일 대신 슬랙 발송 함수를 호출합니다.
-    send_to_slack(new_items)
-    send_email(new_items)
+    # 긴급도 분류 (P1/P2/P3): MSRC Exploit Status(악용 탐지/공개/가능성) + EPSS 반영
+    epss_scores = common_utils.fetch_epss_scores([item["cve_id"] for item in new_items])
+    for item in new_items:
+        status = (item["exploited"] or "").lower()
+        item["triage"] = common_utils.classify_urgency(
+            [item["cve_id"], item["title"], item["description"], item["impact"]],
+            cvss_score=item["score"],
+            exploited="exploited:yes" in status,
+            poc_public="publicly disclosed:yes" in status or "exploitation more likely" in status,
+            epss=epss_scores.get(item["cve_id"]),
+        )
+
+    slack_sent = send_to_slack(new_items)
+    email_sent = send_email(new_items)
+
+    # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
+    if not slack_sent and not email_sent:
+        print("Slack/email delivery failed. State not saved; will retry on next run.")
+        return
 
     save_state(state["sent_ids"] + [item["id"] for item in new_items])
-    print("Email sent: Microsoft items {}".format(len(new_items)))
+
+    # 일간/주간 리포트용 통합 이벤트 로그 적재
+    common_utils.append_events(
+        [
+            common_utils.make_event(
+                "msrc",
+                item["id"],
+                item["title"],
+                url=item["link"],
+                summary=item["description"],
+                severity=item["severity"],
+                score=item["score"],
+                cves=[item["cve_id"]],
+                published_at=item["document_id"],
+                email_sent=email_sent,
+                slack_sent=slack_sent,
+                triage=item.get("triage"),
+            )
+            for item in new_items
+        ]
+    )
+    print("Sent: Microsoft items {}".format(len(new_items)))
 
 
 if __name__ == "__main__":

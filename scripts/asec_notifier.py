@@ -1,8 +1,8 @@
 import os
 import json
-import traceback
 import requests
 from bs4 import BeautifulSoup
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 import common_utils
 
@@ -10,7 +10,9 @@ import common_utils
 ASEC_RSS_URL = "https://asec.ahnlab.com/ko/feed/"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name.lower() == "scripts" else SCRIPT_DIR
-DB_FILE = common_utils.STATE_DIR / "last_url.txt"
+STATE_FILE = common_utils.STATE_DIR / "asec_sent_state.json"
+LEGACY_DB_FILE = common_utils.STATE_DIR / "last_url.txt"
+MAX_STORED_SENT_IDS = 200
 TARGET_EMAIL = common_utils.DEFAULT_TO_EMAIL
 # =================================================
 
@@ -33,57 +35,114 @@ def get_all_asec_posts():
 
 def send_email(subject, body):
     """지정된 수신자에게 메일을 발송합니다."""
-    common_utils.send_email_message(subject, body, to_email=TARGET_EMAIL)
+    return common_utils.send_email_message(subject, body, to_email=TARGET_EMAIL)
 
-def ai_summarize(title, description):
 
-    prompt = f"""
-당신은 보안관제 전문가이다.
+def load_state():
+    return common_utils.load_json_state(STATE_FILE, lambda: {"sent_ids": []})
 
-다음 보안 리포트를 분석하라.
 
-[핵심요약]
-- 3줄 이내
+def save_state(sent_ids):
+    common_utils.save_json_state(STATE_FILE, {"sent_ids": sent_ids}, max_items=MAX_STORED_SENT_IDS, keys_to_trim=["sent_ids"])
 
-[예상영향]
-- 영향받을 수 있는 시스템
 
-[관제포인트]
-- 보안관제 시 확인할 사항
+def item_link(item):
+    link_tag = item.find("link")
+    if link_tag is None or not link_tag.text:
+        return ""
+    return link_tag.text.strip()
 
-제목:
-{title}
 
-내용:
-{description}
-"""
+def migrate_legacy_state(items, sent_ids):
+    """구버전 last_url.txt 상태를 sent_ids 목록으로 이관합니다."""
+    if sent_ids or not LEGACY_DB_FILE.exists():
+        return sent_ids
 
     try:
-        response = requests.post(
-            common_utils.OLLAMA_URL,
-            json={
-                "model": common_utils.OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=120
+        with LEGACY_DB_FILE.open("r", encoding="utf-8") as f:
+            last_url = f.read().strip()
+    except OSError:
+        return sent_ids
+
+    if not last_url:
+        return sent_ids
+
+    links = [item_link(item) for item in items]
+    if last_url in links:
+        # last_url과 그보다 오래된 글은 이미 발송된 것으로 처리
+        migrated = [link for link in links[links.index(last_url):] if link]
+    else:
+        # last_url이 피드에서 사라진 경우: 피드 전체 재발송을 막기 위해 현재 피드를 발송 완료로 간주
+        print("[!] last_url을 피드에서 찾지 못했습니다. 현재 피드 전체를 발송 완료로 간주합니다.")
+        migrated = [link for link in links if link]
+
+    print("[*] last_url.txt 상태를 sent_ids {}건으로 이관했습니다.".format(len(migrated)))
+    return migrated
+
+def item_text(item, tag):
+    found = item.find(tag)
+    return found.text.strip() if found is not None and found.text else ""
+
+
+def item_content_text(item):
+    """RSS 항목의 본문 텍스트. 전문(content:encoded)이 있으면 우선, 없으면 description 사용."""
+    raw_html = item_text(item, "encoded") or item_text(item, "description")
+    if not raw_html:
+        return ""
+    return common_utils.clean_text(BeautifulSoup(raw_html, "html.parser").get_text(" ", strip=True))
+
+
+POST_BODY_MAX_CHARS = 20000
+
+
+def fetch_post_body(url):
+    """블로그 글 페이지에서 본문 전체 텍스트를 추출. 실패 시 ""(피드 요약으로 대체).
+
+    ASEC RSS는 짧은 발췌만 제공해 IOC 목록과 상세 분석이 누락되므로 페이지를 직접 수집한다.
+    """
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=15,
         )
+        resp.raise_for_status()
+    except Exception as error:
+        print(f"[-] 본문 페이지 수집 실패({url}): {error}")
+        return ""
 
-        print("Ollama Status:", response.status_code)
-        print(response.text[:500])
+    soup = BeautifulSoup(resp.text, "html.parser")
+    container = (
+        soup.find("div", class_="entry-content")
+        or soup.find("article")
+        or soup.body
+    )
+    if container is None:
+        return ""
+    return common_utils.clean_text(container.get_text(" ", strip=True))[:POST_BODY_MAX_CHARS]
 
-        return response.json()["response"]
 
-    except Exception as e:
-        print("===== OLLAMA ERROR =====")
-        print(type(e))
-        print(e)
-        traceback.print_exc()
-        print("========================")
+def parse_rss_datetime(value):
+    if not value:
+        return ""
+    try:
+        return parsedate_to_datetime(value).isoformat()
+    except (TypeError, ValueError, IndexError):
+        return ""
 
-        return "AI 요약 생성 실패"
 
-def send_to_slack(title, link, ai_summary):
+def format_alert_summary(enrichment, fallback_text):
+    """구조화 enrichment를 기존 알림 형식(핵심요약/예상영향/관제포인트)으로 변환"""
+    if not enrichment or not enrichment.get("summary"):
+        return fallback_text[:300] or "AI 요약 생성 실패"
+    lines = ["[핵심요약]", enrichment["summary"]]
+    if enrichment.get("affected_products"):
+        lines += ["", "[예상영향]"] + ["- {}".format(p) for p in enrichment["affected_products"]]
+    if enrichment.get("recommended_actions"):
+        lines += ["", "[관제포인트]"] + ["- {}".format(a) for a in enrichment["recommended_actions"]]
+    return "\n".join(lines)
+
+def send_to_slack(title, link, ai_summary, triage=None):
     """슬랙으로 알림을 전송하는 함수"""
     payload = {
         "text": "🤖 안랩 ASEC 신규 리포트가 게시되었습니다.",
@@ -91,7 +150,7 @@ def send_to_slack(title, link, ai_summary):
             {
                 "type": "section",
                 "text": {
-                    "type": "mrkdwn", 
+                    "type": "mrkdwn",
                     "text": "🤖 *안랩 ASEC 신규 리포트가 게시되었습니다.*" # 이 부분이 채팅창에 보임
                 }
             },
@@ -100,66 +159,107 @@ def send_to_slack(title, link, ai_summary):
                 "text": {
                     "type": "mrkdwn",
                     "text":
-                        f"*📌 {title}*\n\n"
+                        f"{common_utils.triage_marker(triage)}*📌 {title}*{common_utils.triage_note(triage)}\n\n"
                         f"{ai_summary}\n\n"
                         f"🔗 <{link}|리포트 바로가기>"
                 }
-            }       
+            }
         ]
     }
-    webhook_url, _ = common_utils.select_slack_webhook(os.environ.get("SLACK_WEBHOOK_ASEC"), [title, ai_summary])
-    common_utils.send_slack_webhook(payload, webhook_url)
+    webhook_url = common_utils.pick_webhook(os.environ.get("SLACK_WEBHOOK_ASEC"), [triage])
+    return common_utils.send_slack_webhook(payload, webhook_url)
 
 def main():
     print("[*] ASEC 신규 게시글 체크 시작...")
-    
-    # 1. 모든 게시글 가져오기 (find_all로 수정 필요)
-    items = get_all_asec_posts() # get_all_asec_posts 내부에서 find_all 사용 필수
-    
-    # 2. 이전에 확인한 링크 로드
-    last_url = ""
-    if DB_FILE.exists():
-        with DB_FILE.open("r", encoding="utf-8") as f:
-            last_url = f.read().strip()
 
-    # 3. 신규 글 수집 (last_url을 만날 때까지)
+    # 1. 모든 게시글 가져오기
+    items = get_all_asec_posts()
+    if not items:
+        return
+
+    # 2. 발송 이력 로드 (구버전 last_url.txt는 최초 1회 자동 이관)
+    state = load_state()
+    sent_list = migrate_legacy_state(items, state["sent_ids"])
+    sent_ids = set(sent_list)
+
+    # 3. 신규 글 수집 (발송 이력에 없는 글 전부 — 최신 글이 수정/삭제되어도 안전)
     new_posts = []
     for item in items:
-        link = item.find("link").text.strip()
-        if link == last_url:
-            break
+        link = item_link(item)
+        if not link or link in sent_ids:
+            continue
         new_posts.append(item)
 
-    # 4. 신규 글이 있다면 역순으로(과거순으로) 발송
-    if new_posts:
-        print(f"[!] {len(new_posts)}개의 신규 게시글 포착")
-        
-        # 신규 글들을 오래된 순서대로 발송하기 위해 reversed 사용
-        for post in reversed(new_posts):
-            title = post.find("title").text.strip()
-            link = post.find("link").text.strip()
-            
-            # 각각의 게시글에 대해 알림 발송
-            email_subject = f"[ASEC 인텔리전스 알림] {title}"
-            email_body = f"📌 제목: {title}\n🔗 링크: {link}"
-            
-            description = ""
-
-            if post.find("description"):
-                 description = post.find("description").text.strip()
-            print(f"AI 분석중: {title}")
-
-            ai_summary = ai_summarize(title,description)
-
-            send_email(email_subject, email_body)
-            send_to_slack(title, link, ai_summary)
-        
-        # 5. 가장 최신 글(new_posts[0])의 링크를 DB_FILE에 저장
-        with DB_FILE.open("w", encoding="utf-8") as f:
-            f.write(new_posts[0].find("link").text.strip())
-            
-    else:
+    if not new_posts:
         print("[-] 업데이트된 새로운 게시글이 없습니다.")
+        if sent_list != state["sent_ids"]:
+            save_state(sent_list)
+        return
+
+    print(f"[!] {len(new_posts)}개의 신규 게시글 포착")
+
+    # 4. 오래된 순서대로 발송하고, 발송에 성공한 글만 즉시 상태에 반영
+    #    (중간에 실패/중단되어도 성공분은 재발송되지 않고 실패분은 다음 실행에서 재시도)
+    for post in reversed(new_posts):
+        link = item_link(post)
+        title = item_text(post, "title") or link
+
+        email_subject = f"[ASEC 인텔리전스 알림] {title}"
+        email_body = f"📌 제목: {title}\n🔗 링크: {link}"
+
+        content_text = fetch_post_body(link) or item_content_text(post)
+        published_at = parse_rss_datetime(item_text(post, "pubDate"))
+
+        print(f"AI 분석중: {title}")
+        enrichment = common_utils.ai_enrich_article(title, content_text) or {}
+        ai_summary = format_alert_summary(enrichment, content_text)
+
+        # 리포트 본문에서 CVE·IOC·ATT&CK 기법 추출 후 EPSS(악용 확률)와 연계하여 긴급도 분류 (P1/P2/P3)
+        extracted_cves = common_utils.extract_cves(title, content_text)
+        iocs = common_utils.extract_iocs(content_text)
+        attack_techniques = common_utils.extract_attack_techniques(title, content_text)
+        epss_scores = common_utils.fetch_epss_scores(extracted_cves)
+        triage = common_utils.classify_urgency(
+            [title, content_text],
+            epss=max(epss_scores.values()) if epss_scores else None,
+        )
+
+        email_sent = send_email(email_subject, email_body)
+        slack_sent = send_to_slack(title, link, ai_summary, triage)
+
+        if email_sent or slack_sent:
+            sent_list.append(link)
+            save_state(sent_list)
+
+            # 일간/주간 리포트용 통합 이벤트 로그 적재
+            common_utils.append_events(
+                [
+                    common_utils.make_event(
+                        "asec",
+                        link,
+                        title,
+                        url=link,
+                        summary=content_text[:500],
+                        severity=enrichment.get("severity") or "",
+                        cves=extracted_cves,
+                        category=enrichment.get("category") or "",
+                        affected_products=enrichment.get("affected_products"),
+                        threat_actor=enrichment.get("threat_actor") or "",
+                        malware_family=enrichment.get("malware_family") or "",
+                        relevance=enrichment.get("relevance") or "",
+                        confidence=enrichment.get("confidence") or "",
+                        iocs=iocs,
+                        attack_techniques=attack_techniques,
+                        published_at=published_at,
+                        ai_summary=enrichment.get("summary"),
+                        email_sent=bool(email_sent),
+                        slack_sent=bool(slack_sent),
+                        triage=triage,
+                    )
+                ]
+            )
+        else:
+            print(f"[-] 발송이 모두 실패하여 상태를 저장하지 않습니다: {title}")
 
 if __name__ == "__main__":
     main()
