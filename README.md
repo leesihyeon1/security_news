@@ -163,6 +163,24 @@ update_intel_data.bat
 If a file is missing, the related feature silently disables (alias names
 pass through, LLM technique proposals are discarded, no benign filtering).
 
+## PIR Alignment (Priority Intelligence Requirements)
+
+`assets/pir.json` declares the questions this organization needs answered
+(asset-targeting exploitation, Korea-targeted ransomware/supply-chain,
+AI-related attacks, endpoint initial-access trends like ClickFix/phishing).
+The LLM enrichment judges which PIRs each article answers (validated
+against the defined IDs), and matches feed into:
+
+- **Scoring**: a high-weight PIR match is a Moderate band rule (+8 push),
+  medium-weight is Info (+3); also exposed to feedback learning as
+  `pir_high`/`pir_other` features
+- **Reports**: a "PIR 현황" section groups the period's articles by PIR
+  with counts, right after the AI analysis
+
+Edit `pir.json` (not code) when priorities change. "Exclude product
+promo" is handled separately by the 제품행사 category score cap, not a
+PIR. If the file is missing, the prompt and scoring silently omit PIRs.
+
 ## Feedback Learning
 
 Label alerts as useful/noise, then learn scoring weights from your own

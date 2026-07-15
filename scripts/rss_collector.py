@@ -420,6 +420,7 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
                 confidence=enrichment.get("confidence") or "",
                 iocs=article["iocs"],
                 attack_techniques=article["attack_techniques"],
+                pirs=enrichment.get("pirs"),
                 published_at=article["published_at"],
                 ai_summary=enrichment.get("summary"),
                 email_sent=email_sent and article["alert"],

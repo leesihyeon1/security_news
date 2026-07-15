@@ -57,6 +57,7 @@ MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15
 MAX_TOP_ITEMS_IN_REPORT = 10
 MAX_CVE_CARDS = 5
 MAX_ITEMS_PER_CATEGORY = 8
+MAX_ITEMS_PER_PIR = 5
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -169,6 +170,7 @@ def build_stats(events):
     by_category = Counter(
         event.get("category") or "미분류" for event in events
     )
+    by_pir = Counter(pid for event in events for pid in event.get("pirs") or [])
 
     actor_counter = Counter()
     malware_counter = Counter()
@@ -195,6 +197,7 @@ def build_stats(events):
         "total": len(events),
         "by_source": by_source,
         "by_category": by_category,
+        "by_pir": by_pir,
         "critical": critical,
         "kev": kev,
         "ransomware": [event for event in events if event.get("ransomware_use")],
@@ -224,6 +227,20 @@ def event_sort_key(event):
 def top_items(events, limit=MAX_TOP_ITEMS_IN_REPORT):
     """P1 > P2 > 자산 매칭 > KEV > CVSS 점수 순으로 우선순위 정렬"""
     return sorted(events, key=event_sort_key)[:limit]
+
+
+def group_by_pir(events):
+    """PIR별 이벤트 그룹 [(pir_id, question, 우선순위 정렬된 이벤트들)]. 복수 PIR 매칭 시 중복 등장."""
+    pir_defs = common_utils.load_pirs()
+    grouped = {}
+    for event in events:
+        for pid in event.get("pirs") or []:
+            if pid in pir_defs:
+                grouped.setdefault(pid, []).append(event)
+    return [
+        (pid, pir_defs[pid]["question"], sorted(grouped[pid], key=event_sort_key))
+        for pid in sorted(grouped)
+    ]
 
 
 def group_by_category(events):
@@ -424,6 +441,13 @@ def build_digest(period_label, stats, events, cards):
         for category, count in stats["by_category"].most_common():
             lines.append("- {}: {}건".format(category, count))
 
+    if stats.get("by_pir"):
+        lines.append("")
+        lines.append("[우선 정보 요구사항(PIR)별 건수]")
+        pir_defs = common_utils.load_pirs()
+        for pid, count in sorted(stats["by_pir"].items()):
+            lines.append("- {} ({}): {}건".format(pid, (pir_defs.get(pid) or {}).get("question", "")[:40], count))
+
     if stats["top_actors"] or stats["top_malware"]:
         lines.append("")
         lines.append("[언급된 공격 그룹·악성코드]")
@@ -534,7 +558,7 @@ def ai_narrative(period_label, digest):
     return ""
 
 
-def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized):
+def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups):
     lines = [
         title,
         "기간: {}".format(period_label),
@@ -560,6 +584,19 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
         lines.append("")
         lines.append("[AI 분석]")
         lines.append(narrative)
+
+    if pir_groups:
+        lines.append("")
+        lines.append("[PIR 현황 — 우선 정보 요구사항]")
+        for pid, question, group in pir_groups:
+            lines.append("")
+            lines.append("■ {} — {} ({}건)".format(pid, question, len(group)))
+            for event in group[:MAX_ITEMS_PER_PIR]:
+                level_prefix = "[{}] ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
+                lines.append("- {}[{}] {}".format(level_prefix, source_label(event.get("source")), event.get("title")))
+                lines.append("  {}".format(event.get("url") or ""))
+            if len(group) > MAX_ITEMS_PER_PIR:
+                lines.append("- ...외 {}건".format(len(group) - MAX_ITEMS_PER_PIR))
 
     if cards:
         lines.append("")
@@ -613,7 +650,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
     return "\n".join(lines)
 
 
-def build_html_report(title, period_label, stats, narrative, highlights, cards, categorized):
+def build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups):
     parts = [
         "<html><body>",
         "<h2>{}</h2>".format(html.escape(title)),
@@ -640,6 +677,23 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
     if narrative:
         parts.append("<h3>AI 분석</h3>")
         parts.append("<p>{}</p>".format(html.escape(narrative).replace("\n", "<br>")))
+
+    if pir_groups:
+        parts.append("<h3>PIR 현황 — 우선 정보 요구사항</h3>")
+        for pid, question, group in pir_groups:
+            parts.append("<h4>{} — {} ({}건)</h4>".format(html.escape(pid), html.escape(question), len(group)))
+            parts.append("<ul>")
+            for event in group[:MAX_ITEMS_PER_PIR]:
+                level_prefix = "<b>{}</b> ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
+                parts.append('<li>{}[{}] <a href="{}">{}</a></li>'.format(
+                    level_prefix,
+                    html.escape(source_label(event.get("source"))),
+                    html.escape(event.get("url") or "#"),
+                    html.escape(event.get("title") or "(제목 없음)"),
+                ))
+            if len(group) > MAX_ITEMS_PER_PIR:
+                parts.append("<li>...외 {}건</li>".format(len(group) - MAX_ITEMS_PER_PIR))
+            parts.append("</ul>")
 
     if cards:
         parts.append("<h3>핵심 취약점 TOP {} — 복수 소스 교차 확인</h3>".format(min(len(cards), MAX_CVE_CARDS)))
@@ -726,7 +780,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
     return "".join(parts)
 
 
-def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized):
+def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups):
     stat_text = (
         "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`\n".format(
             stats["total"], len(stats["p1"]), len(stats["p2"]),
@@ -752,6 +806,28 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
     if narrative:
         blocks.append({"type": "divider"})
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🤖 *AI 분석*\n" + narrative}})
+
+    if pir_groups:
+        blocks.append({"type": "divider"})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🎯 *PIR 현황 — 우선 정보 요구사항*"}})
+        for pid, question, group in pir_groups:
+            pir_lines = []
+            for event in group[:3]:
+                level = event_level(event)
+                marker = "🚨" if level == "P1" else ("⚠️" if level == "P2" else "•")
+                pir_lines.append("{} [{}] <{}|{}>".format(
+                    marker, source_label(event.get("source")),
+                    event.get("url") or "#",
+                    (event.get("title") or "(제목 없음)")[:100],
+                ))
+            if len(group) > 3:
+                pir_lines.append("...외 {}건".format(len(group) - 3))
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*{}* — {} ({}건)\n{}".format(
+                    pid, question[:60], len(group), "\n".join(pir_lines)
+                )},
+            })
 
     if cards:
         card_lines = []
@@ -857,18 +933,19 @@ def main():
         shown_card_event_ids.update(card["event_ids"])
     highlights = top_items([event for event in events if event.get("id") not in shown_card_event_ids])
     categorized = group_by_category(events)
+    pir_groups = group_by_pir(events)
 
-    print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, 뉴스 카테고리 {}종). AI 해석 생성 중...".format(
-        stats["total"], len(cards), len(categorized)
+    print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, 뉴스 카테고리 {}종, PIR {}종). AI 해석 생성 중...".format(
+        stats["total"], len(cards), len(categorized), len(pir_groups)
     ))
     digest = build_digest(period_label, stats, events, cards)
     narrative = ai_narrative(period_label, digest)
     if not narrative:
         narrative = "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"
 
-    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, categorized)
-    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, categorized)
-    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized)
+    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups)
+    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups)
+    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups)
 
     if args.dry_run:
         print("===== DRY RUN: 발송 생략 =====")

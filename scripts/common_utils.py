@@ -318,6 +318,41 @@ def extract_iocs(*texts, limit=50):
 
     return found[:limit]
 
+# ===== PIR (우선 정보 요구사항 — assets/pir.json) =====
+PIR_FILE = ASSETS_DIR / "pir.json"
+
+def load_pirs():
+    """PIR 정의를 {"PIR-1": {"question", "weight"}}로 반환. 파일이 없으면 빈 dict."""
+    if "_pirs" not in _intel_cache:
+        pirs = {}
+        try:
+            with PIR_FILE.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+            for entry in data.get("pirs") or []:
+                pid = clean_text(entry.get("id")).upper()
+                question = clean_text(entry.get("question"))
+                if pid and question:
+                    pirs[pid] = {
+                        "question": question,
+                        "weight": str(entry.get("weight") or "medium").lower(),
+                    }
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+        _intel_cache["_pirs"] = pirs
+    return _intel_cache["_pirs"]
+
+def validate_pirs(candidates):
+    """LLM이 판정한 PIR ID 후보를 정의 목록으로 검증·정규화"""
+    pir_defs = load_pirs()
+    validated = []
+    if not isinstance(candidates, list):
+        return validated
+    for candidate in candidates:
+        pid = clean_text(candidate).upper().replace(" ", "")
+        if pid in pir_defs and pid not in validated:
+            validated.append(pid)
+    return validated
+
 # ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -332,13 +367,14 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
   "threat_actor": "언급된 공격 그룹명(영문 공식 명칭, 예: Lazarus). 없으면 빈 문자열",
   "malware_family": "언급된 악성코드·랜섬웨어 패밀리명(영문). 없으면 빈 문자열",
   "attack_techniques": ["기사에 서술된 공격 기법의 MITRE ATT&CK Enterprise 기법 ID (예: T1566, T1059.001). 기사 내용상 명확한 것만, 최대 5개. 불확실하면 빈 배열"],
+{pir_field}
   "relevance": "국내 IT·게임 기업 보안팀 관점의 중요도: high|medium|low 중 하나",
   "confidence": "위 분석에 대한 확신도: high|medium|low 중 하나 (기사 정보가 모호하면 low)",
   "recommended_actions": ["보안담당자 권고 조치(최대 3개)"]}}
 
 카테고리 기준: 제품 홍보·전시회·수상·인터뷰 기사는 "제품행사"로 분류하라.
 주의: 기사에 없는 사실을 만들어내지 마라. 해당 정보가 없으면 빈 배열/빈 문자열 또는 "info"를 사용하라.
-
+{pir_block}
 제목: {title}
 
 본문:
@@ -355,6 +391,22 @@ def _clean_str_list(value, limit):
         return []
     return [clean_text(item) for item in value if clean_text(item)][:limit]
 
+def _build_enrich_prompt(title, body):
+    """PIR 정의(있으면)를 프롬프트에 주입해 완성한다"""
+    pirs = load_pirs()
+    if pirs:
+        pir_field = '  "pirs": ["기사가 명확히 답하는 PIR ID 목록 (아래 정의 참조, 예: PIR-1). 해당 없으면 빈 배열"],'
+        pir_block = "\n조직의 우선 정보 요구사항(PIR) — 기사가 아래 질문에 답하는 경우에만 해당 ID를 부여하라:\n{}\n".format(
+            "\n".join("{}: {}".format(pid, pir["question"]) for pid, pir in pirs.items())
+        )
+    else:
+        pir_field = ""
+        pir_block = ""
+    return ENRICH_PROMPT.format(
+        title=title, body=body[:ENRICH_BODY_MAX_CHARS],
+        pir_field=pir_field, pir_block=pir_block,
+    )
+
 def ai_enrich_article(title, body):
     """기사 본문을 LLM으로 분석해 구조화된 enrichment를 반환. 실패 시 None."""
     if not body:
@@ -365,7 +417,7 @@ def ai_enrich_article(title, body):
             OLLAMA_URL,
             json={
                 "model": OLLAMA_MODEL,
-                "prompt": ENRICH_PROMPT.format(title=title, body=body[:ENRICH_BODY_MAX_CHARS]),
+                "prompt": _build_enrich_prompt(title, body),
                 "stream": False,
                 "format": "json",
             },
@@ -393,6 +445,7 @@ def ai_enrich_article(title, body):
             "threat_actor": clean_text(data.get("threat_actor")) or None,
             "malware_family": clean_text(data.get("malware_family")) or None,
             "attack_techniques": validate_attack_techniques(data.get("attack_techniques")),
+            "pirs": validate_pirs(data.get("pirs")),
             "relevance": relevance if relevance in ENRICH_RELEVANCES else None,
             "confidence": confidence if confidence in ENRICH_RELEVANCES else None,
             "recommended_actions": _clean_str_list(data.get("recommended_actions"), 3),
@@ -592,16 +645,23 @@ IMPORTANCE_FEATURE_LABELS = {
     "reliability_a": "소스 신뢰도 A",
     "reliability_b": "소스 신뢰도 B",
     "reliability_c": "소스 신뢰도 C",
+    "pir_high": "PIR 매칭(high)",
+    "pir_other": "PIR 매칭(medium)",
 }
 
 def importance_features(exploitation="none", asset_matched=False, impact="", severity="",
-                        relevance="", category="", has_cve=False, has_actor=False, reliability=""):
+                        relevance="", category="", has_cve=False, has_actor=False, reliability="",
+                        pir_ids=()):
     """중요도 판단에 쓰는 신호를 0/1 특징 벡터(dict)로 변환"""
     severity = str(severity or "").lower()
     relevance = str(relevance or "").lower()
     category = clean_text(category)
     reliability = str(reliability or "").strip().upper()
+    pir_defs = load_pirs()
+    pir_weights = {(pir_defs.get(pid) or {}).get("weight") for pid in (pir_ids or ())}
     features = {
+        "pir_high": "high" in pir_weights,
+        "pir_other": bool(pir_weights - {"high", None}),
         "exploitation_active": exploitation == "active",
         "exploitation_poc": exploitation == "poc",
         "asset_match": bool(asset_matched),
@@ -714,6 +774,14 @@ def _collect_risk_rules(triage, enrichment, cves):
     if actor or malware:
         add("named_threat", "info", "위협 그룹/악성코드 특정", ", ".join(filter(None, [actor, malware])))
 
+    pir_defs = load_pirs()
+    for pid in enrichment.get("pirs") or []:
+        pir = pir_defs.get(pid)
+        if pir is None:
+            continue
+        criticality = "moderate" if pir["weight"] == "high" else "info"
+        add("pir_{}".format(pid.lower()), criticality, "PIR 매칭 {}".format(pid), pir["question"][:40])
+
     return rules
 
 def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
@@ -744,6 +812,7 @@ def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
             has_cve=bool(cves),
             has_actor=bool(enrichment.get("threat_actor") or enrichment.get("malware_family")),
             reliability=normalized_reliability or "",
+            pir_ids=enrichment.get("pirs") or (),
         )
         return _score_with_learned(features, learned, normalized_reliability)
 
@@ -976,7 +1045,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                threat_actor="", malware_family="", kev=False, iocs=None, relevance="",
                references=None, fix_available=None, remediation="", due_date="",
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
-               cluster=None):
+               cluster=None, pirs=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -1008,6 +1077,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "threat_actor": normalize_threat_actor(threat_actor),
         "malware_family": clean_text(malware_family),
         "attack_techniques": [t for t in (attack_techniques or []) if t],
+        "pirs": [p for p in (pirs or []) if p],
         "iocs": [ioc for ioc in (iocs or []) if ioc],
         "relevance": clean_text(relevance).lower(),
         "references": [r for r in (references or []) if r],

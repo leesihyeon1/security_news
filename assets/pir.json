@@ -1,0 +1,25 @@
+{
+  "_doc": "조직의 우선 정보 요구사항(PIR). LLM이 기사마다 해당 PIR을 판정해 스코어링(weight: high=Moderate 규칙, medium=Info 규칙)과 리포트 PIR 섹션에 반영된다. 관심사가 바뀌면 이 파일만 수정하면 된다. '제품 홍보 등 불필요 기사 제외'는 PIR이 아니라 category 제품행사 점수 상한(20점)으로 처리된다.",
+  "pirs": [
+    {
+      "id": "PIR-1",
+      "question": "자사 인프라 제품군(inventory.yml 자산: 네트워크·보안 장비 등)을 노리는 취약점 악용·공격 활동",
+      "weight": "high"
+    },
+    {
+      "id": "PIR-2",
+      "question": "국내(한국) 기업·기관 대상 랜섬웨어 및 공급망(supply chain) 공격 동향",
+      "weight": "high"
+    },
+    {
+      "id": "PIR-3",
+      "question": "AI 관련 공격 동향 — AI를 악용한 공격, AI 시스템·서비스(LLM 등) 대상 공격, 프롬프트 인젝션",
+      "weight": "medium"
+    },
+    {
+      "id": "PIR-4",
+      "question": "ClickFix·InstallFix·피싱 등 엔드포인트(임직원 단말) 초기 침투 공격 동향",
+      "weight": "high"
+    }
+  ]
+}
