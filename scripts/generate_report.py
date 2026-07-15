@@ -58,6 +58,10 @@ MAX_TOP_ITEMS_IN_REPORT = 10
 MAX_CVE_CARDS = 5
 MAX_ITEMS_PER_CATEGORY = 8
 MAX_ITEMS_PER_PIR = 5
+
+# 주요 뉴스 TOP에서 제외할 비뉴스 소스 — API·공지형 항목은 CVSS 점수로 목록을
+# 도배하기 쉽고, CVE 카드·소스별 전용 알림이 이미 다루므로 뉴스만 노출한다.
+NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -620,7 +624,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
                 lines.append("   - [{}] {} {}".format(source_label(source), item_title, item_url))
 
     lines.append("")
-    lines.append("[주요 항목 TOP {}]".format(len(highlights)))
+    lines.append("[주요 뉴스 TOP {}]".format(len(highlights)))
     for idx, event in enumerate(highlights, start=1):
         level_prefix = "[{}] ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
         lines.append("{}. {}[{}] {}".format(idx, level_prefix, source_label(event.get("source")), event.get("title")))
@@ -724,7 +728,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             parts.append("<li>{}</li>".format("<br>".join(card_parts)))
         parts.append("</ol>")
 
-    parts.append("<h3>주요 항목 TOP {}</h3>".format(len(highlights)))
+    parts.append("<h3>주요 뉴스 TOP {}</h3>".format(len(highlights)))
     parts.append("<ol>")
     for event in highlights:
         extra = []
@@ -872,7 +876,7 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
                     (event.get("title") or "(제목 없음)")[:120],
                 )
             )
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*주요 항목 TOP {}*\n".format(len(highlights)) + "\n".join(highlight_lines)}})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*주요 뉴스 TOP {}*\n".format(len(highlights)) + "\n".join(highlight_lines)}})
 
     if categorized:
         blocks.append({"type": "divider"})
@@ -931,7 +935,11 @@ def main():
     shown_card_event_ids = set()
     for card in cards[:MAX_CVE_CARDS]:
         shown_card_event_ids.update(card["event_ids"])
-    highlights = top_items([event for event in events if event.get("id") not in shown_card_event_ids])
+    highlights = top_items([
+        event for event in events
+        if event.get("id") not in shown_card_event_ids
+        and (event.get("source") or "") not in NON_NEWS_SOURCES
+    ])
     categorized = group_by_category(events)
     pir_groups = group_by_pir(events)
 
