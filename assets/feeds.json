@@ -2,6 +2,7 @@
   {
     "name": "thehackernews",
     "label": "The Hacker News",
+    "reliability": "C",
     "rss_url": "https://feeds.feedburner.com/TheHackersNews",
     "fetch_body": true,
     "body_selector": "#articlebody",
@@ -13,6 +14,7 @@
   {
     "name": "bleepingcomputer",
     "label": "BleepingComputer",
+    "reliability": "C",
     "note": "Cloudflare가 비브라우저 요청을 403 차단(2026-07 확인). 정책 변경 시 enabled로 전환.",
     "rss_url": "https://www.bleepingcomputer.com/feed/",
     "fetch_body": true,
@@ -25,6 +27,7 @@
   {
     "name": "sans_isc",
     "label": "SANS ISC",
+    "reliability": "B",
     "rss_url": "https://isc.sans.edu/rssfeed_full.xml",
     "fetch_body": false,
     "enrich": true,
@@ -35,6 +38,7 @@
   {
     "name": "krebsonsecurity",
     "label": "Krebs on Security",
+    "reliability": "B",
     "rss_url": "https://krebsonsecurity.com/feed/",
     "fetch_body": false,
     "enrich": true,
@@ -45,6 +49,7 @@
   {
     "name": "therecord",
     "label": "The Record",
+    "reliability": "C",
     "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
     "rss_url": "https://therecord.media/feed",
     "fetch_body": true,
@@ -56,6 +61,7 @@
   {
     "name": "securityweek",
     "label": "SecurityWeek",
+    "reliability": "C",
     "rss_url": "https://www.securityweek.com/feed/",
     "fetch_body": true,
     "enrich": true,
@@ -66,6 +72,7 @@
   {
     "name": "darkreading",
     "label": "Dark Reading",
+    "reliability": "C",
     "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
     "rss_url": "https://www.darkreading.com/rss.xml",
     "fetch_body": false,
@@ -77,6 +84,7 @@
   {
     "name": "talos",
     "label": "Cisco Talos",
+    "reliability": "B",
     "note": "ignore_asset_terms: 'Cisco Talos' 자기 언급으로 자산 매칭이 상시 발동하는 것 방지. 실제 Cisco 취약점은 severity/악용 신호로 점수 확보.",
     "rss_url": "https://blog.talosintelligence.com/rss/",
     "fetch_body": false,
@@ -89,6 +97,7 @@
   {
     "name": "unit42",
     "label": "Unit 42",
+    "reliability": "B",
     "rss_url": "https://unit42.paloaltonetworks.com/feed/",
     "fetch_body": true,
     "ignore_asset_terms": ["Paloalto", "Palo Alto", "Palo Alto Networks"],
@@ -100,6 +109,7 @@
   {
     "name": "checkpoint_research",
     "label": "Check Point Research",
+    "reliability": "B",
     "rss_url": "https://research.checkpoint.com/feed/",
     "fetch_body": true,
     "ignore_asset_terms": ["Checkpoint", "Check Point"],
@@ -111,6 +121,7 @@
   {
     "name": "thedfirreport",
     "label": "The DFIR Report",
+    "reliability": "B",
     "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
     "rss_url": "https://thedfirreport.com/feed/",
     "fetch_body": true,
@@ -122,6 +133,7 @@
   {
     "name": "securelist",
     "label": "Securelist (Kaspersky)",
+    "reliability": "B",
     "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
     "rss_url": "https://securelist.com/feed/",
     "fetch_body": true,
@@ -133,6 +145,7 @@
   {
     "name": "google_security",
     "label": "Google Security Blog",
+    "reliability": "B",
     "rss_url": "https://security.googleblog.com/feeds/posts/default",
     "fetch_body": false,
     "enrich": true,

@@ -99,6 +99,12 @@ Per-feed options in `assets/feeds.json`:
 - `min_score`: per-feed alert threshold override
 - `ignore_asset_terms`: inventory terms to ignore during asset matching
   (prevents vendor blogs from always matching their own company name)
+- `reliability`: simplified Admiralty source grade applied as a score
+  multiplier — `A` x1.0 (authoritative/first-party), `B` x0.9 (vendor
+  research with own telemetry), `C` x0.75 (secondary news outlets).
+  Unset means neutral (x1.0). P1/P2 triage alerts regardless of the
+  multiplier because those decisions are based on factual signals.
+  Review grades periodically against each source's track record.
 
 ```bat
 python scripts\rss_collector.py --feed thehackernews --dry-run --no-enrich --limit 2

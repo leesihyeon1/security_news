@@ -427,12 +427,17 @@ _CATEGORY_POINTS = {
     "정책규제": -5, "제품행사": -30,
 }
 
-def score_importance(triage=None, enrichment=None, cves=None):
-    """기사 중요도를 0~100 점수로 산정해 {"score", "reasons"}를 반환.
+# Admiralty 간소화(3단계) 소스 신뢰도 → 점수 배수.
+# A: 당국·당사자 1차 소스 / B: 자체 텔레메트리 기반 벤더 리서치 / C: 2차 전달 매체.
+# 미지정 소스는 중립(1.0)으로 둔다. P1/P2 판정은 사실 신호 기반이라 배수와 무관하게 알림된다.
+RELIABILITY_MULTIPLIERS = {"A": 1.0, "B": 0.9, "C": 0.75}
+
+def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
+    """기사 중요도를 0~100 점수로 산정해 {"score", "reasons", "reliability"}를 반환.
 
     트리아지(악용 상태·자산 매칭·기술 영향)와 LLM enrichment(severity·relevance·
-    category)를 합산한다. enrichment가 없어도(LLM 다운) 트리아지 신호만으로
-    악용 중인 건은 임계값을 넘도록 가중치를 배분했다.
+    category)를 합산한 뒤 소스 신뢰도 배수를 적용한다. enrichment가 없어도(LLM 다운)
+    트리아지 신호만으로 악용 중인 건은 임계값을 넘도록 가중치를 배분했다.
     """
     triage = triage or {}
     enrichment = enrichment or {}
@@ -474,7 +479,15 @@ def score_importance(triage=None, enrichment=None, cves=None):
     if enrichment.get("threat_actor") or enrichment.get("malware_family"):
         add(5, "위협 그룹/악성코드 특정")
 
-    return {"score": max(0, min(100, score)), "reasons": reasons}
+    score = max(0, min(100, score))
+
+    reliability = str(reliability or "").strip().upper() or None
+    multiplier = RELIABILITY_MULTIPLIERS.get(reliability)
+    if multiplier is not None and multiplier != 1.0 and score > 0:
+        score = int(round(score * multiplier))
+        reasons.append("소스 신뢰도 {}(x{})".format(reliability, multiplier))
+
+    return {"score": score, "reasons": reasons, "reliability": reliability}
 
 def should_alert(importance, triage=None, min_score=None):
     """즉시 알림 여부 판정. P1/P2는 점수와 무관하게 항상 알림."""

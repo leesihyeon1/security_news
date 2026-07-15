@@ -321,6 +321,7 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
             article["enrichment"] = {}
         article["importance"] = common_utils.score_importance(
             triage=article["triage"], enrichment=article["enrichment"], cves=article["cves"],
+            reliability=feed.get("reliability"),
         )
         article["alert"] = common_utils.should_alert(
             article["importance"], triage=article["triage"], min_score=feed.get("min_score"),
@@ -400,8 +401,9 @@ def main():
 
     if args.list:
         for feed in feeds:
-            print("- {} ({}) enabled={} enrich={}".format(
-                feed["name"], feed["label"], feed.get("enabled", True), feed.get("enrich", True)
+            print("- {} ({}) enabled={} enrich={} reliability={}".format(
+                feed["name"], feed["label"], feed.get("enabled", True), feed.get("enrich", True),
+                feed.get("reliability") or "-",
             ))
         return
 
