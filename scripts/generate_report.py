@@ -62,6 +62,11 @@ MAX_ITEMS_PER_PIR = 5
 # 주요 뉴스 TOP에서 제외할 비뉴스 소스 — API·공지형 항목은 CVSS 점수로 목록을
 # 도배하기 쉽고, CVE 카드·소스별 전용 알림이 이미 다루므로 뉴스만 노출한다.
 NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
+
+# "읽을만한 동향" 큐레이션: 긴급도 점수가 낮아 알림되지 않은 기사 중
+# 인사이트 신호(PIR 매칭, 또는 high 관련성의 위협 분석 기사)가 있는 것을 고른다.
+MAX_TREND_ITEMS = 5
+TREND_CATEGORIES = {"공격캠페인", "침해사고", "악성코드"}
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -231,6 +236,52 @@ def event_sort_key(event):
 def top_items(events, limit=MAX_TOP_ITEMS_IN_REPORT):
     """P1 > P2 > 자산 매칭 > KEV > CVSS 점수 순으로 우선순위 정렬"""
     return sorted(events, key=event_sort_key)[:limit]
+
+
+def event_alerted(event):
+    delivery = event.get("delivery") or {}
+    return bool(delivery.get("email_sent") or delivery.get("slack_sent"))
+
+
+def importance_score(event):
+    return ((event.get("importance") or {}).get("score")) or 0
+
+
+def pick_trend_reads(events, exclude_ids):
+    """알림 문턱을 못 넘었지만 읽을 가치가 있는 동향 기사 큐레이션.
+
+    긴급도(악용·자산) 축과 별개로 '읽을 가치' 축을 보완한다:
+    미알림 뉴스 중 PIR에 답하거나, 관련성 high인 위협 분석·동향 기사를
+    중요도 점수 순으로 상위 N건 뽑는다.
+    """
+    candidates = []
+    for event in events:
+        if event.get("id") in exclude_ids:
+            continue
+        if (event.get("source") or "") in NON_NEWS_SOURCES:
+            continue
+        if event_alerted(event):
+            continue
+        has_insight = bool(event.get("pirs")) or (
+            (event.get("relevance") or "") == "high"
+            and (event.get("category") or "") in TREND_CATEGORIES
+        )
+        if has_insight:
+            candidates.append(event)
+    candidates.sort(key=lambda e: (-importance_score(e), -len(e.get("pirs") or [])))
+    return candidates[:MAX_TREND_ITEMS]
+
+
+def trend_bits(event):
+    """동향 기사 한 줄에 붙일 근거 조각들 (PIR, 관련성, 중요도 점수)"""
+    bits = []
+    if event.get("pirs"):
+        bits.append(", ".join(event["pirs"]))
+    if event.get("relevance") == "high":
+        bits.append("관련성 high")
+    if importance_score(event):
+        bits.append("{}점".format(importance_score(event)))
+    return bits
 
 
 def group_by_pir(events):
@@ -562,7 +613,8 @@ def ai_narrative(period_label, digest):
     return ""
 
 
-def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups):
+def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
+                      trend_reads):
     lines = [
         title,
         "기간: {}".format(period_label),
@@ -630,6 +682,15 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
         lines.append("{}. {}[{}] {}".format(idx, level_prefix, source_label(event.get("source")), event.get("title")))
         lines.append("   {}".format(event.get("url") or ""))
 
+    if trend_reads:
+        lines.append("")
+        lines.append("[읽을만한 동향 — 알림 외 주목 기사]")
+        for event in trend_reads:
+            bits = trend_bits(event)
+            suffix = " ({})".format(" | ".join(bits)) if bits else ""
+            lines.append("- [{}] {}{}".format(source_label(event.get("source")), event.get("title"), suffix))
+            lines.append("  {}".format(event.get("url") or ""))
+
     if categorized:
         lines.append("")
         lines.append("[카테고리별 뉴스]")
@@ -654,7 +715,8 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
     return "\n".join(lines)
 
 
-def build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups):
+def build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
+                      trend_reads):
     parts = [
         "<html><body>",
         "<h2>{}</h2>".format(html.escape(title)),
@@ -752,6 +814,20 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
         )
     parts.append("</ol>")
 
+    if trend_reads:
+        parts.append("<h3>읽을만한 동향 — 알림 외 주목 기사</h3>")
+        parts.append("<ul>")
+        for event in trend_reads:
+            bits = trend_bits(event)
+            suffix = " ({})".format(html.escape(" | ".join(bits))) if bits else ""
+            parts.append('<li>[{}] <a href="{}">{}</a>{}</li>'.format(
+                html.escape(source_label(event.get("source"))),
+                html.escape(event.get("url") or "#"),
+                html.escape(event.get("title") or "(제목 없음)"),
+                suffix,
+            ))
+        parts.append("</ul>")
+
     if categorized:
         parts.append("<h3>카테고리별 뉴스</h3>")
         for category, group in categorized:
@@ -784,7 +860,8 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
     return "".join(parts)
 
 
-def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups):
+def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
+                       trend_reads):
     stat_text = (
         "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`\n".format(
             stats["total"], len(stats["p1"]), len(stats["p2"]),
@@ -878,6 +955,23 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
             )
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*주요 뉴스 TOP {}*\n".format(len(highlights)) + "\n".join(highlight_lines)}})
 
+    if trend_reads:
+        trend_lines = []
+        for event in trend_reads:
+            bits = trend_bits(event)
+            suffix = " _({})_".format(" · ".join(bits)) if bits else ""
+            trend_lines.append("• [{}] <{}|{}>{}".format(
+                source_label(event.get("source")),
+                event.get("url") or "#",
+                (event.get("title") or "(제목 없음)")[:100],
+                suffix,
+            ))
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "📖 *읽을만한 동향 — 알림 외 주목 기사*\n" + "\n".join(trend_lines)},
+        })
+
     if categorized:
         blocks.append({"type": "divider"})
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🗂️ *카테고리별 뉴스*"}})
@@ -942,6 +1036,9 @@ def main():
     ])
     categorized = group_by_category(events)
     pir_groups = group_by_pir(events)
+    trend_reads = pick_trend_reads(
+        events, shown_card_event_ids | {event.get("id") for event in highlights},
+    )
 
     print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, 뉴스 카테고리 {}종, PIR {}종). AI 해석 생성 중...".format(
         stats["total"], len(cards), len(categorized), len(pir_groups)
@@ -951,9 +1048,9 @@ def main():
     if not narrative:
         narrative = "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"
 
-    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups)
-    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups)
-    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups)
+    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups, trend_reads)
+    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups, trend_reads)
+    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups, trend_reads)
 
     if args.dry_run:
         print("===== DRY RUN: 발송 생략 =====")
