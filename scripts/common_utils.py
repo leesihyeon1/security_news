@@ -4,7 +4,7 @@ import json
 import re
 import requests
 import smtplib
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -597,6 +597,133 @@ def should_alert(importance, triage=None, min_score=None):
     threshold = IMPORTANCE_ALERT_THRESHOLD if min_score is None else int(min_score)
     return (importance or {}).get("score", 0) >= threshold
 
+# ===== 크로스소스 클러스터링 (수집 시점 — 같은 사건의 중복 알림 억제 + 교차 보도 가점) =====
+CLUSTER_WINDOW_HOURS = int(os.environ.get("CLUSTER_WINDOW_HOURS", "72"))
+CLUSTER_CVE_CONTAINMENT = 0.5   # 겹친 CVE 수 / min(양쪽 CVE 수) — 대형 종합기사의 체인 병합 방지
+CLUSTER_TITLE_JACCARD = 0.5     # 제목 토큰 유사도 — 오병합이 미병합보다 해로우므로 보수적
+CORROBORATION_CAP = 20
+_RECENT_EVENTS_MAX_LINES = 5000
+
+# 취약점 카탈로그형 소스는 "보도"가 아니므로 클러스터링에서 제외
+# (NVD는 모든 CVE를 수록하므로 교차 확인 신호가 아니고, 뉴스 알림을 억제해서도 안 된다)
+CATALOG_SOURCES = {"nvd", "github_advisory"}
+
+# events.jsonl에 importance.reliability가 없는 소스의 신뢰도 폴백 (교차 보도 가점용)
+SOURCE_RELIABILITY_FALLBACK = {
+    "cisa_kev": "A", "msrc": "A", "kisa": "A", "asec": "B", "boannews": "C",
+}
+
+_TITLE_STOPWORDS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "from", "by", "at", "as", "is", "are", "its", "new", "via", "after",
+    "amid", "under", "over", "how", "what", "why", "now",
+}
+
+def _title_tokens(title):
+    tokens = re.findall(r"[0-9a-z가-힣]{2,}", clean_text(title).lower())
+    return {token for token in tokens if token not in _TITLE_STOPWORDS}
+
+def _read_recent_events(hours, events_file=None):
+    """events.jsonl 뒤쪽에서 시간 창 안의 이벤트만 파싱 (카탈로그형 소스 제외)"""
+    path = Path(events_file) if events_file else EVENTS_FILE
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            lines = file.readlines()[-_RECENT_EVENTS_MAX_LINES:]
+    except OSError:
+        return []
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (event.get("source") or "") in CATALOG_SOURCES:
+            continue
+        try:
+            fetched = datetime.fromisoformat(str(event.get("fetched_at")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            continue
+        if fetched >= cutoff:
+            events.append(event)
+    return events
+
+def find_related_events(cves, title, hours=None, exclude_source=None, events_file=None):
+    """최근 이벤트 중 같은 사건으로 판단되는 것들을 반환.
+
+    매칭 기준(둘 중 하나):
+    - CVE containment: 겹친 CVE 수 / min(양쪽 CVE 수) >= 0.5
+    - 제목 토큰 Jaccard >= 0.5 (CVE 없는 침해사고·캠페인 보도용)
+    같은 소스의 후속 기사는 교차 확인이 아니므로 exclude_source로 제외한다.
+    """
+    cve_set = {str(cve).upper() for cve in (cves or []) if cve}
+    tokens = _title_tokens(title)
+    related = []
+    for event in _read_recent_events(hours or CLUSTER_WINDOW_HOURS, events_file):
+        if exclude_source and event.get("source") == exclude_source:
+            continue
+
+        matched = False
+        event_cves = {str(cve).upper() for cve in (event.get("cves") or []) if cve}
+        if cve_set and event_cves:
+            overlap = len(cve_set & event_cves)
+            if overlap and overlap / min(len(cve_set), len(event_cves)) >= CLUSTER_CVE_CONTAINMENT:
+                matched = True
+        if not matched and tokens:
+            event_tokens = _title_tokens(event.get("title"))
+            union = tokens | event_tokens
+            if union and len(tokens & event_tokens) / len(union) >= CLUSTER_TITLE_JACCARD:
+                matched = True
+        if matched:
+            related.append(event)
+    return related
+
+def _event_reliability(event):
+    reliability = str((event.get("importance") or {}).get("reliability") or "").upper()
+    return reliability or SOURCE_RELIABILITY_FALLBACK.get(event.get("source") or "", "")
+
+def _event_delivered(event):
+    delivery = event.get("delivery") or {}
+    return bool(delivery.get("email_sent") or delivery.get("slack_sent"))
+
+def build_cluster_context(related_events, triage=None):
+    """관련 이벤트들로부터 교차 보도 가점과 중복 알림 억제 여부를 판정.
+
+    - bonus: 소스별 최고 신뢰도 기준 A/B +10, C·미상 +5 (순환 보도 할인), 상한 20
+    - already_alerted: 클러스터에서 이미 알림이 나갔는가
+    - escalated: 새 기사의 트리아지가 기존 알림보다 높으면(P3→P1 등) 억제하지 않고 재알림
+    """
+    sources = {}
+    for event in related_events or []:
+        source = event.get("source") or "unknown"
+        reliability = _event_reliability(event)
+        if reliability in ("A", "B"):
+            sources[source] = 10
+        else:
+            sources.setdefault(source, 5)
+    bonus = min(sum(sources.values()), CORROBORATION_CAP)
+
+    alerted = [event for event in related_events or [] if _event_delivered(event)]
+    level_rank = {"P1": 0, "P2": 1}
+    current_rank = level_rank.get((triage or {}).get("level"), 2)
+    best_alerted_rank = min(
+        (level_rank.get(((event.get("triage") or {}).get("level")), 2) for event in alerted),
+        default=2,
+    )
+    return {
+        "related_ids": [event.get("id") for event in related_events or []],
+        "corroborating_sources": sorted(sources),
+        "bonus": bonus,
+        "already_alerted": bool(alerted),
+        "escalated": bool(alerted) and current_rank < best_alerted_rank,
+    }
+
 def triage_marker(triage):
     level = (triage or {}).get("level")
     if level == "P1":
@@ -657,7 +784,8 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                triage=None, category="", affected_products=None, epss=None,
                threat_actor="", malware_family="", kev=False, iocs=None, relevance="",
                references=None, fix_available=None, remediation="", due_date="",
-               ransomware_use=None, confidence="", attack_techniques=None, importance=None):
+               ransomware_use=None, confidence="", attack_techniques=None, importance=None,
+               cluster=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -701,6 +829,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "ai_summary": ai_summary,
         "triage": triage,
         "importance": importance,
+        "cluster": cluster,
         "delivery": {"email_sent": bool(email_sent), "slack_sent": bool(slack_sent)},
     }
 

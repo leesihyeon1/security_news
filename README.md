@@ -113,6 +113,24 @@ python scripts\rss_collector.py --feed thehackernews --dry-run --no-enrich --lim
 Dry-run output shows each article's score, contributing factors, and whether
 it would alert.
 
+### Cross-source clustering
+
+Before alerting, each article is matched against events collected in the
+last `CLUSTER_WINDOW_HOURS` (default 72h): same story = shared CVEs
+(containment >= 0.5) or similar title (token Jaccard >= 0.5). Catalog
+sources (NVD, GitHub Advisory) are excluded from matching.
+
+- **Corroboration bonus**: each additional distinct source adds +10 (A/B
+  reliability) or +5 (C/unknown — circular-reporting discount), capped at
+  +20. Multi-source coverage can push a below-threshold story over the line.
+- **Duplicate suppression**: if the story was already alerted, the new
+  article is stored for reports but not re-alerted — unless its triage
+  level escalated (e.g. P3 -> P1 "now exploited"), which re-alerts.
+
+Cluster decisions are stored per event (`cluster` field) in events.jsonl.
+Note: title matching works best for English titles; Korean titles rely
+mostly on CVE matching due to particle suffixes.
+
 ## Intel Reference Data (extraction/normalization)
 
 `assets/intel/` holds processed reference data used during extraction:

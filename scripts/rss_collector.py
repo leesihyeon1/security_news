@@ -273,11 +273,25 @@ def print_dry_run(feed, articles):
             article["cves"], len(article["iocs"]), article["attack_techniques"],
         ))
         importance = article.get("importance") or {}
+        cluster = article.get("cluster") or {}
+        if cluster.get("suppressed"):
+            verdict = "중복 억제"
+        elif article.get("alert"):
+            verdict = "알림"
+        else:
+            verdict = "리포트만"
         print("  중요도: {}점 ({}) → {}".format(
             importance.get("score"),
             ", ".join(importance.get("reasons") or []) or "가점 없음",
-            "알림" if article.get("alert") else "리포트만",
+            verdict,
         ))
+        if cluster.get("related_ids"):
+            print("  클러스터: 관련 {}건 | 교차 소스: {} | 기존 알림: {}{}".format(
+                len(cluster["related_ids"]),
+                ", ".join(cluster.get("corroborating_sources") or []) or "-",
+                "예" if cluster.get("already_alerted") else "아니오",
+                " | 승격 재알림" if cluster.get("escalated") else "",
+            ))
         if enrichment:
             print("  enrichment: {}".format(json.dumps(enrichment, ensure_ascii=False)))
 
@@ -327,9 +341,32 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
             triage=article["triage"], enrichment=article["enrichment"], cves=article["cves"],
             reliability=feed.get("reliability"),
         )
+
+        # 크로스소스 클러스터링: 최근 72시간 내 같은 사건 검색 → 교차 보도 가점 / 중복 알림 억제
+        related = common_utils.find_related_events(
+            article["cves"], article["title"], exclude_source=feed["name"],
+        )
+        cluster = common_utils.build_cluster_context(related, triage=article["triage"])
+        if cluster["bonus"]:
+            article["importance"]["score"] = min(100, article["importance"]["score"] + cluster["bonus"])
+            article["importance"]["reasons"].append(
+                "교차 보도 {}곳(+{})".format(len(cluster["corroborating_sources"]), cluster["bonus"])
+            )
+
         article["alert"] = common_utils.should_alert(
             article["importance"], triage=article["triage"], min_score=feed.get("min_score"),
         )
+        cluster["suppressed"] = bool(
+            article["alert"] and cluster["already_alerted"] and not cluster["escalated"]
+        )
+        if cluster["suppressed"]:
+            article["alert"] = False
+            print("[*] 중복 알림 억제: {} (기존 알림 소스: {})".format(
+                article["title"][:60], ", ".join(cluster["corroborating_sources"])
+            ))
+        elif cluster["escalated"]:
+            article["importance"]["reasons"].append("기존 알림 대비 위험도 승격 — 재알림")
+        article["cluster"] = cluster
 
     if dry_run:
         print_dry_run(feed, new_articles)
@@ -377,6 +414,7 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
                 slack_sent=slack_sent and article["alert"],
                 triage=article["triage"],
                 importance=article["importance"],
+                cluster=article["cluster"],
             )
         )
     common_utils.append_events(events)
