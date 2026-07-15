@@ -107,6 +107,16 @@ python scripts\rss_collector.py --feed thehackernews --dry-run --no-enrich --lim
 Dry-run output shows each article's score, contributing factors, and whether
 it would alert.
 
+## News Categorization
+
+The LLM enrichment classifies each article into one of: 취약점, 악성코드,
+침해사고, 공격캠페인, 정책규제, 제품행사, 기타. The category appears as a
+tag (e.g. `[취약점]`) in email/Slack alerts, and daily/weekly reports include
+a "카테고리별 뉴스" section grouping collected articles by category
+(priority-sorted within each group, capped per category). Events without a
+category (API sources such as NVD, or when Ollama is unavailable) are not
+shown in that section but remain in the priority lists.
+
 ## Asset Matching
 
 Organization asset keywords are managed in `assets/inventory.yml`.

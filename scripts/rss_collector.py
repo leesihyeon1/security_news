@@ -181,6 +181,12 @@ def alert_summary(article):
     return (html_to_text(article["summary_html"]) or article["body"])[:300]
 
 
+def category_tag(article):
+    """LLM 분류 카테고리 태그(예: "[취약점] "). 분류가 없으면 빈 문자열."""
+    category = (article.get("enrichment") or {}).get("category")
+    return "[{}] ".format(category) if category else ""
+
+
 def send_email(feed, articles):
     subject = "[{}] 신규 보안 기사 {}건".format(feed["label"], len(articles))
     checked_at = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -194,13 +200,14 @@ def send_email(feed, articles):
 
     for idx, article in enumerate(articles, start=1):
         summary = alert_summary(article)
-        text_lines.append("{}. {}".format(idx, article["title"]))
+        tag = category_tag(article)
+        text_lines.append("{}. {}{}".format(idx, tag, article["title"]))
         text_lines.append("요약: {}".format(summary))
         text_lines.append("링크: {}".format(article["link"]))
         text_lines.append("")
 
         html_parts.append("<hr>")
-        html_parts.append("<h3>{}. {}</h3>".format(idx, html.escape(article["title"])))
+        html_parts.append("<h3>{}. {}{}</h3>".format(idx, html.escape(tag), html.escape(article["title"])))
         html_parts.append("<p>{}</p>".format(html.escape(summary)))
         html_parts.append(
             '<p><a href="{0}">{0}</a></p>'.format(html.escape(article["link"]))
@@ -229,8 +236,9 @@ def send_to_slack(feed, articles):
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        "{}*{}*{}\n\n{}\n\n<{}|기사 보기> · 중요도 {}점".format(
+                        "{}{}*{}*{}\n\n{}\n\n<{}|기사 보기> · 중요도 {}점".format(
                             common_utils.triage_marker(triage),
+                            category_tag(article),
                             article["title"],
                             common_utils.triage_note(triage),
                             alert_summary(article),
