@@ -152,6 +152,16 @@ def send_to_slack(title, link, summary, triage=None):
                         f"{summary}\n\n"
                         f"🔗 <{link}|리포트 바로가기>"
                 }
+            },
+            {
+                # 피드백 참조 해시 — 슬랙 폴러가 반응(👍/👎)을 이벤트로 역매핑한다
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": "`ref:{}` · 👍 유용 / 👎 노이즈 반응으로 피드백".format(
+                        common_utils.event_ref("asec:{}".format(link))
+                    ),
+                }],
             }
         ]
     }
@@ -209,6 +219,13 @@ def main():
             epss=max(epss_scores.values()) if epss_scores else None,
         )
 
+        # 크로스소스 클러스터링: 관련 사건 정보를 이벤트에 기록만 한다.
+        # ASEC은 1차 리서치 소스라 같은 사건의 뉴스 보도가 먼저 알림됐어도
+        # 억제하지 않는다 — 상세 분석·IOC의 가치가 중복 보도와 다르다.
+        related = common_utils.find_related_events(extracted_cves, title, exclude_source="asec")
+        cluster = common_utils.build_cluster_context(related, triage=triage)
+        cluster["suppressed"] = False
+
         # 알림은 원문 발췌로 즉시 발송 (보안뉴스와 동일 — LLM 대기로 알림을 지연시키지 않는다)
         alert_summary = (item_content_text(post) or content_text)[:300]
 
@@ -248,6 +265,7 @@ def main():
                         email_sent=bool(email_sent),
                         slack_sent=bool(slack_sent),
                         triage=triage,
+                        cluster=cluster,
                     )
                 ]
             )

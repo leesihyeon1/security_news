@@ -346,6 +346,16 @@ def send_to_slack(news_items):
                     f"<{news['link']}|기사 보기>"
                 }
     })
+        # 피드백 참조 해시 — 슬랙 폴러가 반응(👍/👎)을 이벤트로 역매핑한다
+        blocks.append({
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": "`ref:{}` · 👍 유용 / 👎 노이즈 반응으로 피드백".format(
+                    common_utils.event_ref("boannews:{}".format(news["id"]))
+                ),
+            }],
+        })
 
     blocks.append({
         "type": "divider"
@@ -385,14 +395,35 @@ def main():
             epss=max(epss_values) if epss_values else None,
         )
 
-    fetched_at = utc_now_iso()
-    slack_sent = send_to_slack(new_articles)
-    email_sent = send_email(new_articles)
+    # 크로스소스 클러스터링: 다른 소스가 이미 알림한 같은 사건은 중복 알림을 억제한다
+    # (위험도 승격 시에는 재알림). 억제된 기사도 이벤트로는 적재되어 리포트에서 다룬다.
+    for news in new_articles:
+        related = common_utils.find_related_events(
+            news["extracted_cves"], news["title"], exclude_source="boannews",
+        )
+        news["cluster"] = common_utils.build_cluster_context(related, triage=news.get("triage"))
+        news["cluster"]["suppressed"] = bool(
+            news["cluster"]["already_alerted"] and not news["cluster"]["escalated"]
+        )
+        if news["cluster"]["suppressed"]:
+            print("[*] 중복 알림 억제: {} (기존 알림 소스: {})".format(
+                news["title"][:50], ", ".join(news["cluster"]["corroborating_sources"])
+            ))
 
-    # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
-    if not slack_sent and not email_sent:
-        print("슬랙/메일 발송이 모두 실패하여 상태를 저장하지 않았습니다. 다음 실행 시 재시도합니다.")
-        return
+    alert_articles = [news for news in new_articles if not news["cluster"]["suppressed"]]
+
+    fetched_at = utc_now_iso()
+    if alert_articles:
+        slack_sent = send_to_slack(alert_articles)
+        email_sent = send_email(alert_articles)
+
+        # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
+        if not slack_sent and not email_sent:
+            print("슬랙/메일 발송이 모두 실패하여 상태를 저장하지 않았습니다. 다음 실행 시 재시도합니다.")
+            return
+    else:
+        slack_sent = email_sent = False
+        print("[*] 신규 기사 {}건 모두 중복 억제 — 알림 없이 이벤트만 적재합니다.".format(len(new_articles)))
 
     # 알림 발송을 지연시키지 않도록 LLM enrichment는 발송 후·저장 전에 수행
     for news in new_articles:
@@ -403,8 +434,8 @@ def main():
         normalize_boannews_event(
             article,
             fetched_at,
-            email_sent=email_sent,
-            slack_sent=slack_sent,
+            email_sent=email_sent and not article["cluster"]["suppressed"],
+            slack_sent=slack_sent and not article["cluster"]["suppressed"],
         )
         for article in new_articles
     ]
@@ -431,11 +462,13 @@ def main():
                 confidence=enrichment.get("confidence") or "",
                 iocs=article.get("iocs"),
                 attack_techniques=article.get("attack_techniques"),
+                pirs=enrichment.get("pirs"),
                 published_at=parse_rss_datetime(article["pub_date"]) or article.get("article_published_at") or "",
                 ai_summary=enrichment.get("summary"),
-                email_sent=email_sent,
-                slack_sent=slack_sent,
+                email_sent=email_sent and not article["cluster"]["suppressed"],
+                slack_sent=slack_sent and not article["cluster"]["suppressed"],
                 triage=article.get("triage"),
+                cluster=article["cluster"],
             )
         )
     common_utils.append_events(unified_events)
