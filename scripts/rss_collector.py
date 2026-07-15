@@ -319,6 +319,10 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
             article["enrichment"] = common_utils.ai_enrich_article(article["title"], article["body"]) or {}
         else:
             article["enrichment"] = {}
+        # 정규식 추출(명시된 ID) + LLM 매핑(서술형, 공식 카탈로그로 검증됨) 병합
+        for technique in article["enrichment"].get("attack_techniques") or []:
+            if technique not in article["attack_techniques"]:
+                article["attack_techniques"].append(technique)
         article["importance"] = common_utils.score_importance(
             triage=article["triage"], enrichment=article["enrichment"], cves=article["cves"],
             reliability=feed.get("reliability"),

@@ -113,6 +113,30 @@ python scripts\rss_collector.py --feed thehackernews --dry-run --no-enrich --lim
 Dry-run output shows each article's score, contributing factors, and whether
 it would alert.
 
+## Intel Reference Data (extraction/normalization)
+
+`assets/intel/` holds processed reference data used during extraction:
+
+- `threat_actor_aliases.json`: MISP Galaxy alias map — `make_event`
+  normalizes threat actor names to canonical ones (e.g. Hidden Cobra →
+  Lazarus Group) so cross-source counting works
+- `attack_techniques.json`: official MITRE ATT&CK technique catalog —
+  the LLM may propose technique IDs for narrative descriptions, and only
+  IDs present in this catalog survive (hallucination guard); regex still
+  extracts explicitly mentioned IDs
+- `benign_iocs.json`: MISP warninglists (public DNS, Cloudflare, Google,
+  Microsoft) — extracted IOCs matching benign infrastructure are dropped
+
+The processed files are committed so everything works out of the box.
+Refresh them quarterly (or when needed) with:
+
+```bat
+update_intel_data.bat
+```
+
+If a file is missing, the related feature silently disables (alias names
+pass through, LLM technique proposals are discarded, no benign filtering).
+
 ## News Categorization
 
 The LLM enrichment classifies each article into one of: 취약점, 악성코드,

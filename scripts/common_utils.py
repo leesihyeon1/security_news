@@ -1,3 +1,4 @@
+import ipaddress
 import os
 import json
 import re
@@ -123,6 +124,100 @@ def match_inventory_terms(values, inventory_file=None):
             matched.append(term)
     return matched
 
+# ===== 인텔 참조 데이터 (assets/intel/ — update_intel_data.py로 갱신) =====
+INTEL_DIR = ASSETS_DIR / "intel"
+_intel_cache = {}
+
+def _load_intel(name):
+    """assets/intel/<name>.json을 읽어 캐시. 파일이 없거나 깨졌으면 None (기능 자동 비활성)."""
+    if name in _intel_cache:
+        return _intel_cache[name]
+    data = None
+    try:
+        with (INTEL_DIR / (name + ".json")).open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        pass
+    _intel_cache[name] = data
+    return data
+
+def normalize_threat_actor(name):
+    """위협그룹 명칭을 MISP Galaxy 공식 명칭으로 정규화 (예: Hidden Cobra → Lazarus Group).
+
+    앨리어스 사전에 없으면 원문 그대로 반환. 참조 데이터가 없어도 동작한다.
+    """
+    name = clean_text(name)
+    if not name:
+        return ""
+    aliases = (_load_intel("threat_actor_aliases") or {}).get("aliases") or {}
+    return aliases.get(name.lower(), name)
+
+def validate_attack_techniques(candidates):
+    """LLM이 제시한 ATT&CK 기법 ID 후보를 공식 카탈로그로 검증해 환각을 차단.
+
+    카탈로그(assets/intel/attack_techniques.json)가 없으면 전부 폐기한다 —
+    검증 불가능한 LLM 출력을 통과시키는 것보다 놓치는 쪽이 안전하다.
+    """
+    catalog = (_load_intel("attack_techniques") or {}).get("techniques") or {}
+    if not catalog or not isinstance(candidates, list):
+        return []
+    validated = []
+    seen = set()
+    for candidate in candidates:
+        match = ATTACK_TECHNIQUE_RE.search(str(candidate).upper().strip())
+        technique = match.group(0) if match else ""
+        if technique and technique in catalog and technique not in seen:
+            seen.add(technique)
+            validated.append(technique)
+    return validated
+
+def _benign_ioc_sets():
+    """warninglists 기반 벤인 인프라 조회 구조 (ips set / CIDR 네트워크 / domains set)"""
+    if "_benign_parsed" in _intel_cache:
+        return _intel_cache["_benign_parsed"]
+    data = _load_intel("benign_iocs")
+    parsed = None
+    if data:
+        networks = []
+        for cidr in data.get("cidrs") or []:
+            try:
+                networks.append(ipaddress.ip_network(cidr))
+            except ValueError:
+                continue
+        parsed = {
+            "ips": set(data.get("ips") or []),
+            "networks": networks,
+            "domains": set(data.get("domains") or []),
+        }
+    _intel_cache["_benign_parsed"] = parsed
+    return parsed
+
+def _is_benign_domain(domain, benign):
+    domain = domain.lower().strip(".")
+    return domain in benign["domains"] or any(
+        domain.endswith("." + suffix) for suffix in benign["domains"]
+    )
+
+def is_benign_ioc(ioc_type, value):
+    """공용 DNS·CDN·대형 벤더 도메인 등 차단 지표로 무의미한 값인지 판별 (MISP warninglists)"""
+    benign = _benign_ioc_sets()
+    if not benign:
+        return False
+    if ioc_type == "ipv4":
+        if value in benign["ips"]:
+            return True
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            return False
+        return any(address in network for network in benign["networks"])
+    if ioc_type == "domain":
+        return _is_benign_domain(value, benign)
+    if ioc_type == "url":
+        host = urllib.parse.urlparse(value).hostname or ""
+        return bool(host) and _is_benign_domain(host, benign)
+    return False
+
 CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
 # MITRE ATT&CK Enterprise 기법 ID (T1566, T1566.001 등). LLM 환각을 피하기 위해 정규식으로만 추출.
 # re.ASCII: 한글 조사("T1059를")가 \b에 걸리지 않는 문제 방지
@@ -183,6 +278,7 @@ def extract_iocs(*texts, limit=50):
     MISP/STIX 관행대로 타입을 함께 저장해 리포트에서 타입별 분류·차단 목록 변환이 가능하다.
     일반 도메인·URL은 뉴스 본문 오탐이 많아 제외하고, 작성자가 의도적으로
     디팽(defang)한 것(example[.]com, hxxp://)만 IOC로 간주한다.
+    공용 DNS·CDN 등 벤인 인프라(MISP warninglists)는 걸러낸다.
     """
     found = []
     seen = set()
@@ -190,9 +286,12 @@ def extract_iocs(*texts, limit=50):
     def add(ioc_type, value):
         value = value.strip().strip(".,;:)]}")
         key = value.lower()
-        if value and key not in seen:
-            seen.add(key)
-            found.append({"type": ioc_type, "value": value})
+        if not value or key in seen:
+            return
+        seen.add(key)
+        if is_benign_ioc(ioc_type, value):
+            return
+        found.append({"type": ioc_type, "value": value})
 
     for text in texts:
         if not text:
@@ -228,6 +327,7 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
   "affected_products": ["영향받는 제품·서비스명. 영문 공식 명칭으로 정규화 (예: Fortinet FortiGate, Apache Tomcat)"],
   "threat_actor": "언급된 공격 그룹명(영문 공식 명칭, 예: Lazarus). 없으면 빈 문자열",
   "malware_family": "언급된 악성코드·랜섬웨어 패밀리명(영문). 없으면 빈 문자열",
+  "attack_techniques": ["기사에 서술된 공격 기법의 MITRE ATT&CK Enterprise 기법 ID (예: T1566, T1059.001). 기사 내용상 명확한 것만, 최대 5개. 불확실하면 빈 배열"],
   "relevance": "국내 IT·게임 기업 보안팀 관점의 중요도: high|medium|low 중 하나",
   "confidence": "위 분석에 대한 확신도: high|medium|low 중 하나 (기사 정보가 모호하면 low)",
   "recommended_actions": ["보안담당자 권고 조치(최대 3개)"]}}
@@ -288,6 +388,7 @@ def ai_enrich_article(title, body):
             "affected_products": _clean_str_list(data.get("affected_products"), 10),
             "threat_actor": clean_text(data.get("threat_actor")) or None,
             "malware_family": clean_text(data.get("malware_family")) or None,
+            "attack_techniques": validate_attack_techniques(data.get("attack_techniques")),
             "relevance": relevance if relevance in ENRICH_RELEVANCES else None,
             "confidence": confidence if confidence in ENRICH_RELEVANCES else None,
             "recommended_actions": _clean_str_list(data.get("recommended_actions"), 3),
@@ -585,7 +686,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "exploitation_status": (triage or {}).get("exploitation") or "none",
         "kev": bool(kev) or source == "cisa_kev",
         "ransomware_use": ransomware_use,
-        "threat_actor": clean_text(threat_actor),
+        "threat_actor": normalize_threat_actor(threat_actor),
         "malware_family": clean_text(malware_family),
         "attack_techniques": [t for t in (attack_techniques or []) if t],
         "iocs": [ioc for ioc in (iocs or []) if ioc],
