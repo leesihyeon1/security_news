@@ -131,18 +131,7 @@ def parse_rss_datetime(value):
         return ""
 
 
-def format_alert_summary(enrichment, fallback_text):
-    """구조화 enrichment를 기존 알림 형식(핵심요약/예상영향/관제포인트)으로 변환"""
-    if not enrichment or not enrichment.get("summary"):
-        return fallback_text[:300] or "AI 요약 생성 실패"
-    lines = ["[핵심요약]", enrichment["summary"]]
-    if enrichment.get("affected_products"):
-        lines += ["", "[예상영향]"] + ["- {}".format(p) for p in enrichment["affected_products"]]
-    if enrichment.get("recommended_actions"):
-        lines += ["", "[관제포인트]"] + ["- {}".format(a) for a in enrichment["recommended_actions"]]
-    return "\n".join(lines)
-
-def send_to_slack(title, link, ai_summary, triage=None):
+def send_to_slack(title, link, summary, triage=None):
     """슬랙으로 알림을 전송하는 함수"""
     payload = {
         "text": "🤖 안랩 ASEC 신규 리포트가 게시되었습니다.",
@@ -160,7 +149,7 @@ def send_to_slack(title, link, ai_summary, triage=None):
                     "type": "mrkdwn",
                     "text":
                         f"{common_utils.triage_marker(triage)}*📌 {title}*{common_utils.triage_note(triage)}\n\n"
-                        f"{ai_summary}\n\n"
+                        f"{summary}\n\n"
                         f"🔗 <{link}|리포트 바로가기>"
                 }
             }
@@ -210,10 +199,6 @@ def main():
         content_text = fetch_post_body(link) or item_content_text(post)
         published_at = parse_rss_datetime(item_text(post, "pubDate"))
 
-        print(f"AI 분석중: {title}")
-        enrichment = common_utils.ai_enrich_article(title, content_text) or {}
-        ai_summary = format_alert_summary(enrichment, content_text)
-
         # 리포트 본문에서 CVE·IOC·ATT&CK 기법 추출 후 EPSS(악용 확률)와 연계하여 긴급도 분류 (P1/P2/P3)
         extracted_cves = common_utils.extract_cves(title, content_text)
         iocs = common_utils.extract_iocs(content_text)
@@ -224,12 +209,19 @@ def main():
             epss=max(epss_scores.values()) if epss_scores else None,
         )
 
+        # 알림은 원문 발췌로 즉시 발송 (보안뉴스와 동일 — LLM 대기로 알림을 지연시키지 않는다)
+        alert_summary = (item_content_text(post) or content_text)[:300]
+
         email_sent = send_email(email_subject, email_body)
-        slack_sent = send_to_slack(title, link, ai_summary, triage)
+        slack_sent = send_to_slack(title, link, alert_summary, triage)
 
         if email_sent or slack_sent:
             sent_list.append(link)
             save_state(sent_list)
+
+            # LLM enrichment는 발송 후 수행 — 알림에는 쓰지 않고 리포트용 이벤트 필드만 채운다
+            print(f"AI 분석중: {title}")
+            enrichment = common_utils.ai_enrich_article(title, content_text) or {}
 
             # 일간/주간 리포트용 통합 이벤트 로그 적재
             common_utils.append_events(
@@ -250,6 +242,7 @@ def main():
                         confidence=enrichment.get("confidence") or "",
                         iocs=iocs,
                         attack_techniques=attack_techniques,
+                        pirs=enrichment.get("pirs"),
                         published_at=published_at,
                         ai_summary=enrichment.get("summary"),
                         email_sent=bool(email_sent),
