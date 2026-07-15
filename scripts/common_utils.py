@@ -1,4 +1,6 @@
+import hashlib
 import ipaddress
+import math
 import os
 import json
 import re
@@ -19,6 +21,8 @@ ASSETS_DIR = PROJECT_ROOT / "assets"
 INVENTORY_FILE = ASSETS_DIR / "inventory.yml"
 DATA_DIR = PROJECT_ROOT / "data"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
+FEEDBACK_FILE = DATA_DIR / "feedback.jsonl"
+LEARNED_WEIGHTS_FILE = DATA_DIR / "learned_weights.json"
 
 def load_env_file(dotenv_path=None):
     if dotenv_path is None:
@@ -517,6 +521,37 @@ def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, 
         "reasons": reasons,
     }
 
+# ===== 피드백 라벨 (알림 유용성 학습용 — feedback.py / slack_feedback_poller.py가 기록) =====
+def event_ref(event_id):
+    """이벤트 ID의 10자리 참조 해시. 슬랙 메시지·CLI에서 긴 ID 대신 사용한다."""
+    return hashlib.sha1(str(event_id).encode("utf-8")).hexdigest()[:10]
+
+def load_feedback(feedback_file=None):
+    """피드백 라벨을 {event_id: 최신 레코드}로 반환 (같은 이벤트는 마지막 라벨 우선)"""
+    path = Path(feedback_file) if feedback_file else FEEDBACK_FILE
+    labels = {}
+    if not path.exists():
+        return labels
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("event_id") and record.get("label") in ("useful", "noise"):
+                labels[record["event_id"]] = record
+    return labels
+
+def append_feedback(records, feedback_file=None):
+    path = Path(feedback_file) if feedback_file else FEEDBACK_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
 # ===== 중요도 스코어링 (뉴스 소스 확대에 따른 알림 필터링) =====
 # 점수 미달 기사는 즉시 알림을 생략하고 events.jsonl에만 적재해 일간 리포트에서 다룬다.
 IMPORTANCE_ALERT_THRESHOLD = int(os.environ.get("NEWS_ALERT_MIN_SCORE", "50"))
@@ -533,15 +568,119 @@ _CATEGORY_POINTS = {
 # 미지정 소스는 중립(1.0)으로 둔다. P1/P2 판정은 사실 신호 기반이라 배수와 무관하게 알림된다.
 RELIABILITY_MULTIPLIERS = {"A": 1.0, "B": 0.9, "C": 0.75}
 
-def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
-    """기사 중요도를 0~100 점수로 산정해 {"score", "reasons", "reliability"}를 반환.
+# 학습 모델(train_weights.py)과 규칙 스코어링이 공유하는 이진 특징 정의.
+# 새 특징을 추가하면 두 경로 모두 자동 반영되도록 여기서만 정의한다.
+IMPORTANCE_FEATURE_LABELS = {
+    "exploitation_active": "실제 악용 정황",
+    "exploitation_poc": "PoC/악용 가능성",
+    "asset_match": "자사 자산 매칭",
+    "impact_total": "고위험 유형(RCE/권한상승 등)",
+    "severity_critical": "심각도 critical",
+    "severity_high": "심각도 high",
+    "severity_medium": "심각도 medium",
+    "relevance_high": "관련성 high",
+    "relevance_medium": "관련성 medium",
+    "category_취약점": "분류 취약점",
+    "category_악성코드": "분류 악성코드",
+    "category_침해사고": "분류 침해사고",
+    "category_공격캠페인": "분류 공격캠페인",
+    "category_정책규제": "분류 정책규제",
+    "category_제품행사": "분류 제품행사",
+    "has_cve": "CVE 언급",
+    "has_actor": "위협 그룹/악성코드 특정",
+    "reliability_a": "소스 신뢰도 A",
+    "reliability_b": "소스 신뢰도 B",
+    "reliability_c": "소스 신뢰도 C",
+}
 
-    트리아지(악용 상태·자산 매칭·기술 영향)와 LLM enrichment(severity·relevance·
-    category)를 합산한 뒤 소스 신뢰도 배수를 적용한다. enrichment가 없어도(LLM 다운)
-    트리아지 신호만으로 악용 중인 건은 임계값을 넘도록 가중치를 배분했다.
+def importance_features(exploitation="none", asset_matched=False, impact="", severity="",
+                        relevance="", category="", has_cve=False, has_actor=False, reliability=""):
+    """중요도 판단에 쓰는 신호를 0/1 특징 벡터(dict)로 변환"""
+    severity = str(severity or "").lower()
+    relevance = str(relevance or "").lower()
+    category = clean_text(category)
+    reliability = str(reliability or "").strip().upper()
+    features = {
+        "exploitation_active": exploitation == "active",
+        "exploitation_poc": exploitation == "poc",
+        "asset_match": bool(asset_matched),
+        "impact_total": impact == "total",
+        "severity_critical": severity == "critical",
+        "severity_high": severity == "high",
+        "severity_medium": severity == "medium",
+        "relevance_high": relevance == "high",
+        "relevance_medium": relevance == "medium",
+        "has_cve": bool(has_cve),
+        "has_actor": bool(has_actor),
+        "reliability_a": reliability == "A",
+        "reliability_b": reliability == "B",
+        "reliability_c": reliability == "C",
+    }
+    for name in ENRICH_CATEGORIES:
+        key = "category_{}".format(name)
+        if key in IMPORTANCE_FEATURE_LABELS:
+            features[key] = category == name
+    return {name: int(value) for name, value in features.items()}
+
+def load_learned_weights():
+    """train_weights.py가 생성한 학습 가중치. 없으면 None (규칙 기반으로 동작)."""
+    if "_learned_weights" not in _intel_cache:
+        data = None
+        try:
+            with LEARNED_WEIGHTS_FILE.open("r", encoding="utf-8") as file:
+                loaded = json.load(file)
+            if isinstance(loaded.get("weights"), dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+        _intel_cache["_learned_weights"] = data
+    return _intel_cache["_learned_weights"]
+
+def _score_with_learned(features, learned, reliability):
+    """학습된 로지스틱 회귀로 '유용할 확률'을 0~100 점수로 환산"""
+    weights = learned["weights"]
+    z = float(learned.get("bias") or 0.0)
+    reasons = []
+    for name, active in features.items():
+        weight = float(weights.get(name) or 0.0)
+        if active and weight:
+            z += weight
+            reasons.append("{}({:+.2f})".format(IMPORTANCE_FEATURE_LABELS.get(name, name), weight))
+    score = int(round(100.0 / (1.0 + math.exp(-z))))
+    reasons.append("학습 모델 적용(라벨 {}건)".format(learned.get("samples") or "?"))
+    return {"score": score, "reasons": reasons, "reliability": reliability, "mode": "learned"}
+
+def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
+    """기사 중요도를 0~100 점수로 산정해 {"score", "reasons", "reliability", "mode"}를 반환.
+
+    기본은 규칙 기반: 트리아지(악용 상태·자산 매칭·기술 영향)와 LLM enrichment
+    (severity·relevance·category)를 합산한 뒤 소스 신뢰도 배수를 적용한다.
+    enrichment가 없어도(LLM 다운) 트리아지 신호만으로 악용 중인 건은 임계값을
+    넘도록 가중치를 배분했다.
+
+    학습 가중치(data/learned_weights.json — 피드백 라벨로 훈련)가 있으면 규칙 대신
+    로지스틱 회귀의 '유용 확률 x100'을 점수로 쓴다. 신뢰도는 특징으로 포함되므로
+    학습 모드에서는 배수를 따로 곱하지 않는다.
     """
     triage = triage or {}
     enrichment = enrichment or {}
+
+    normalized_reliability = str(reliability or "").strip().upper() or None
+    learned = load_learned_weights()
+    if learned:
+        features = importance_features(
+            exploitation=triage.get("exploitation") or "none",
+            asset_matched=bool(triage.get("matched_assets")),
+            impact=triage.get("impact") or "",
+            severity=enrichment.get("severity"),
+            relevance=enrichment.get("relevance"),
+            category=enrichment.get("category"),
+            has_cve=bool(cves),
+            has_actor=bool(enrichment.get("threat_actor") or enrichment.get("malware_family")),
+            reliability=normalized_reliability or "",
+        )
+        return _score_with_learned(features, learned, normalized_reliability)
+
     score = 0
     reasons = []
 
@@ -582,13 +721,12 @@ def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
 
     score = max(0, min(100, score))
 
-    reliability = str(reliability or "").strip().upper() or None
-    multiplier = RELIABILITY_MULTIPLIERS.get(reliability)
+    multiplier = RELIABILITY_MULTIPLIERS.get(normalized_reliability)
     if multiplier is not None and multiplier != 1.0 and score > 0:
         score = int(round(score * multiplier))
-        reasons.append("소스 신뢰도 {}(x{})".format(reliability, multiplier))
+        reasons.append("소스 신뢰도 {}(x{})".format(normalized_reliability, multiplier))
 
-    return {"score": score, "reasons": reasons, "reliability": reliability}
+    return {"score": score, "reasons": reasons, "reliability": normalized_reliability, "mode": "rules"}
 
 def should_alert(importance, triage=None, min_score=None):
     """즉시 알림 여부 판정. P1/P2는 점수와 무관하게 항상 알림."""

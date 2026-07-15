@@ -249,6 +249,18 @@ def send_to_slack(feed, articles):
                 },
             }
         )
+        # 피드백 참조 해시 — 슬랙 폴러가 반응(👍/👎)을 이 ref로 이벤트에 역매핑한다
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": "`ref:{}` · 👍 유용 / 👎 노이즈 반응으로 피드백".format(
+                        common_utils.event_ref("{}:{}".format(feed["name"], article["id"]))
+                    ),
+                }],
+            }
+        )
 
     payload = {
         "text": "{} 신규 기사 {}건이 수집되었습니다.".format(feed["label"], len(articles)),

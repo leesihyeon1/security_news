@@ -155,6 +155,36 @@ update_intel_data.bat
 If a file is missing, the related feature silently disables (alias names
 pass through, LLM technique proposals are discarded, no benign filtering).
 
+## Feedback Learning
+
+Label alerts as useful/noise, then learn scoring weights from your own
+judgments instead of hand-tuned points.
+
+**Collecting labels** (stored in `data/feedback.jsonl`):
+
+- CLI: `python scripts\feedback.py --list` shows recent alerts with a
+  10-char `ref` hash; `--useful <ref>` / `--noise <ref>` records a label.
+- Slack: react 👍/👎 to alert messages (each article shows its `ref:` in
+  a context line) and run `slack_feedback.bat` (schedule daily). Requires
+  `SLACK_BOT_TOKEN` + `SLACK_FEEDBACK_CHANNELS`; a reaction on a
+  multi-article message labels every article in it — use the CLI for
+  per-article control.
+
+**Training**: once you have 30+ labels (10+ per class):
+
+```bat
+python scripts\train_weights.py --dry-run   # inspect learned weights
+python scripts\train_weights.py             # write data\learned_weights.json
+python scripts\train_weights.py --reset     # back to rule-based scoring
+```
+
+While `data/learned_weights.json` exists, `score_importance` returns the
+logistic model's usefulness probability x100 (same 0-100 scale and alert
+threshold; P1/P2 still always alerts). Deleting the file reverts to the
+built-in rule weights instantly. Retrain quarterly or whenever your
+interests shift. The file lives in `data/` (not synced via git) — retrain
+per machine or copy it manually.
+
 ## News Categorization
 
 The LLM enrichment classifies each article into one of: 취약점, 악성코드,
