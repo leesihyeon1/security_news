@@ -94,6 +94,14 @@ signals (exploitation status, asset match, impact) with LLM enrichment
 (default 50) are stored in `data/events.jsonl` for the daily report but do
 not trigger immediate email/Slack alerts. P1/P2 triage always alerts.
 
+Scoring is band-based (Recorded Future style): the strongest triggered
+rule sets the band — High 65-100 (active exploitation), Moderate 30-64
+(PoC, asset match, critical/high severity, high relevance), Info 5-24 —
+and remaining rules push the score up within the band. Weak signals alone
+can never reach the High band, so a score of 65+ always means a strong
+signal exists. Each reason carries its evidence (EPSS value, matched
+asset names, CVE list). Product-event articles are capped at 20.
+
 Per-feed options in `assets/feeds.json`:
 
 - `min_score`: per-feed alert threshold override

@@ -556,12 +556,13 @@ def append_feedback(records, feedback_file=None):
 # 점수 미달 기사는 즉시 알림을 생략하고 events.jsonl에만 적재해 일간 리포트에서 다룬다.
 IMPORTANCE_ALERT_THRESHOLD = int(os.environ.get("NEWS_ALERT_MIN_SCORE", "50"))
 
-_SEVERITY_POINTS = {"critical": 25, "high": 15, "medium": 5}
-_RELEVANCE_POINTS = {"high": 25, "medium": 10}
-_CATEGORY_POINTS = {
-    "취약점": 5, "악성코드": 5, "침해사고": 5, "공격캠페인": 5,
-    "정책규제": -5, "제품행사": -30,
-}
+# Recorded Future식 밴드 스코어링: 가장 강한 규칙이 밴드(하한~상한)를 결정하고,
+# 나머지 규칙은 밴드 안에서 점수를 밀어올린다. 약한 신호가 아무리 쌓여도
+# 강한 신호 없이는 High 밴드(65+)에 못 들어가므로, "65점 이상 = 강한 신호 실재"가 보장된다.
+IMPORTANCE_BANDS = {"high": (65, 100), "moderate": (30, 64), "info": (5, 24)}
+IMPORTANCE_PUSH = {"high": 15, "moderate": 8, "info": 3}
+_BAND_ORDER = {"high": 0, "moderate": 1, "info": 2}
+PRODUCT_EVENT_SCORE_CAP = 20  # 제품행사 기사는 다른 신호와 무관하게 이 점수를 넘지 못한다
 
 # Admiralty 간소화(3단계) 소스 신뢰도 → 점수 배수.
 # A: 당국·당사자 1차 소스 / B: 자체 텔레메트리 기반 벤더 리서치 / C: 2차 전달 매체.
@@ -650,13 +651,78 @@ def _score_with_learned(features, learned, reliability):
     reasons.append("학습 모델 적용(라벨 {}건)".format(learned.get("samples") or "?"))
     return {"score": score, "reasons": reasons, "reliability": reliability, "mode": "learned"}
 
+def _triage_evidence(triage, prefixes):
+    """classify_urgency가 남긴 상세 근거(EPSS 수치, 매칭 자산명 등)에서 해당 항목을 찾는다"""
+    for reason in (triage or {}).get("reasons") or []:
+        if any(reason.startswith(prefix) for prefix in prefixes):
+            return reason
+    return ""
+
+def _collect_risk_rules(triage, enrichment, cves):
+    """트리거된 위험 규칙 목록을 [{"id", "criticality", "label", "evidence"}]로 반환.
+
+    evidence에는 판단 근거 값(EPSS 수치, 매칭된 자산명, LLM 판정값 등)을 담아
+    알림·리포트에서 "왜 이 점수인가"를 추적할 수 있게 한다.
+    """
+    rules = []
+
+    def add(rule_id, criticality, label, evidence=""):
+        rules.append({"id": rule_id, "criticality": criticality, "label": label, "evidence": evidence})
+
+    exploitation = triage.get("exploitation") or "none"
+    if exploitation == "active":
+        add("active_exploitation", "high", "실제 악용 정황",
+            _triage_evidence(triage, ("실제 악용", "악용 정황", "악용 확률 높음")))
+    elif exploitation == "poc":
+        add("poc_available", "moderate", "PoC/악용 가능성",
+            _triage_evidence(triage, ("공격 코드", "PoC", "악용 확률 주의")))
+
+    if triage.get("matched_assets"):
+        add("asset_match", "moderate", "자사 자산 매칭", ", ".join(triage["matched_assets"]))
+
+    if triage.get("impact") == "total":
+        add("impact_total", "moderate", "고위험 유형",
+            _triage_evidence(triage, ("CVSS",)) or "RCE/권한상승 등")
+
+    severity = str(enrichment.get("severity") or "").lower()
+    if severity in ("critical", "high"):
+        add("severity_{}".format(severity), "moderate", "심각도 {}".format(severity), "LLM 판정")
+    elif severity == "medium":
+        add("severity_medium", "info", "심각도 medium", "LLM 판정")
+
+    relevance = str(enrichment.get("relevance") or "").lower()
+    if relevance == "high":
+        add("relevance_high", "moderate", "관련성 high", "LLM 판정")
+    elif relevance == "medium":
+        add("relevance_medium", "info", "관련성 medium", "LLM 판정")
+
+    category = clean_text(enrichment.get("category"))
+    if category in ("취약점", "악성코드", "침해사고", "공격캠페인"):
+        add("category_threat", "info", "분류 {}".format(category))
+    elif category == "정책규제":
+        add("category_policy", "penalty", "분류 정책규제")
+    elif category == "제품행사":
+        add("category_product_event", "suppress", "분류 제품행사")
+
+    if cves:
+        cve_list = [cve for cve in cves if cve]
+        evidence = ", ".join(cve_list[:3]) + (" 외 {}건".format(len(cve_list) - 3) if len(cve_list) > 3 else "")
+        add("cve_present", "info", "CVE 언급", evidence)
+
+    actor = enrichment.get("threat_actor") or ""
+    malware = enrichment.get("malware_family") or ""
+    if actor or malware:
+        add("named_threat", "info", "위협 그룹/악성코드 특정", ", ".join(filter(None, [actor, malware])))
+
+    return rules
+
 def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
     """기사 중요도를 0~100 점수로 산정해 {"score", "reasons", "reliability", "mode"}를 반환.
 
-    기본은 규칙 기반: 트리아지(악용 상태·자산 매칭·기술 영향)와 LLM enrichment
-    (severity·relevance·category)를 합산한 뒤 소스 신뢰도 배수를 적용한다.
-    enrichment가 없어도(LLM 다운) 트리아지 신호만으로 악용 중인 건은 임계값을
-    넘도록 가중치를 배분했다.
+    기본은 규칙 기반 밴드 스코어링(Recorded Future식): 트리거된 규칙 중 가장 강한
+    것이 밴드를 결정하고(High 65~100 / Moderate 30~64 / Info 5~24), 나머지 규칙이
+    밴드 안에서 점수를 밀어올린다. 약한 신호 누적만으로는 High 밴드에 못 들어간다.
+    각 근거에는 판단 상세(EPSS 수치, 매칭 자산명 등)가 붙는다.
 
     학습 가중치(data/learned_weights.json — 피드백 라벨로 훈련)가 있으면 규칙 대신
     로지스틱 회귀의 '유용 확률 x100'을 점수로 쓴다. 신뢰도는 특징으로 포함되므로
@@ -681,45 +747,32 @@ def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
         )
         return _score_with_learned(features, learned, normalized_reliability)
 
-    score = 0
+    rules = _collect_risk_rules(triage, enrichment, cves)
     reasons = []
+    positive = sorted(
+        (rule for rule in rules if rule["criticality"] in IMPORTANCE_BANDS),
+        key=lambda rule: _BAND_ORDER[rule["criticality"]],
+    )
 
-    def add(points, reason):
-        nonlocal score
-        score += points
-        reasons.append("{}({:+d})".format(reason, points))
+    score = 0
+    if positive:
+        band = positive[0]["criticality"]
+        floor, cap = IMPORTANCE_BANDS[band]
+        score = floor + sum(IMPORTANCE_PUSH[rule["criticality"]] for rule in positive[1:])
+        score = min(score, cap)
+        for rule in positive:
+            reasons.append(
+                "{} — {}".format(rule["label"], rule["evidence"]) if rule["evidence"] else rule["label"]
+            )
+        reasons.append("판정 밴드 {}({}~{})".format(band.capitalize(), floor, cap))
 
-    exploitation = triage.get("exploitation") or "none"
-    if exploitation == "active":
-        add(40, "실제 악용 정황")
-    elif exploitation == "poc":
-        add(20, "PoC/악용 가능성")
-
-    if triage.get("matched_assets"):
-        add(35, "자사 자산 매칭")
-
-    if triage.get("impact") == "total":
-        add(10, "고위험 유형(RCE/권한상승 등)")
-
-    severity = str(enrichment.get("severity") or "").lower()
-    if severity in _SEVERITY_POINTS:
-        add(_SEVERITY_POINTS[severity], "심각도 {}".format(severity))
-
-    relevance = str(enrichment.get("relevance") or "").lower()
-    if relevance in _RELEVANCE_POINTS:
-        add(_RELEVANCE_POINTS[relevance], "관련성 {}".format(relevance))
-
-    category = clean_text(enrichment.get("category"))
-    if category in _CATEGORY_POINTS:
-        add(_CATEGORY_POINTS[category], "분류 {}".format(category))
-
-    if cves:
-        add(5, "CVE 언급")
-
-    if enrichment.get("threat_actor") or enrichment.get("malware_family"):
-        add(5, "위협 그룹/악성코드 특정")
-
-    score = max(0, min(100, score))
+    for rule in rules:
+        if rule["criticality"] == "penalty":
+            score = max(0, score - 5)
+            reasons.append("{}(-5)".format(rule["label"]))
+        elif rule["criticality"] == "suppress":
+            score = min(score, PRODUCT_EVENT_SCORE_CAP)
+            reasons.append("{} — 점수 상한 {}".format(rule["label"], PRODUCT_EVENT_SCORE_CAP))
 
     multiplier = RELIABILITY_MULTIPLIERS.get(normalized_reliability)
     if multiplier is not None and multiplier != 1.0 and score > 0:
