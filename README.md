@@ -86,6 +86,27 @@ Runtime outputs are intentionally ignored by Git:
 - `data/`: collected event data
 - `.env`: local secrets and delivery settings
 
+## Importance Filtering (RSS collector)
+
+`scripts/rss_collector.py` scores every article 0-100 by combining triage
+signals (exploitation status, asset match, impact) with LLM enrichment
+(severity, relevance, category). Articles below `NEWS_ALERT_MIN_SCORE`
+(default 50) are stored in `data/events.jsonl` for the daily report but do
+not trigger immediate email/Slack alerts. P1/P2 triage always alerts.
+
+Per-feed options in `assets/feeds.json`:
+
+- `min_score`: per-feed alert threshold override
+- `ignore_asset_terms`: inventory terms to ignore during asset matching
+  (prevents vendor blogs from always matching their own company name)
+
+```bat
+python scripts\rss_collector.py --feed thehackernews --dry-run --no-enrich --limit 2
+```
+
+Dry-run output shows each article's score, contributing factors, and whether
+it would alert.
+
 ## Asset Matching
 
 Organization asset keywords are managed in `assets/inventory.yml`.

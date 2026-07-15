@@ -2,7 +2,12 @@
 
 소스마다 다른 것(RSS URL, 본문 셀렉터, 웹훅)은 설정으로 두고, 공통 파이프라인
 (신규 선별 → 본문 수집 → CVE·IOC·ATT&CK 추출 → EPSS 트리아지 → LLM enrichment
-→ 메일·슬랙 발송 → events.jsonl 적재)은 이 스크립트 하나가 담당한다.
+→ 중요도 스코어링 → 메일·슬랙 발송 → events.jsonl 적재)은 이 스크립트 하나가 담당한다.
+
+중요도 스코어(0~100)가 임계값(NEWS_ALERT_MIN_SCORE, 기본 50) 미만인 기사는
+즉시 알림을 생략하고 events.jsonl에만 적재해 일간 리포트에서 다룬다.
+P1/P2 트리아지는 점수와 무관하게 항상 알림된다. 피드별 min_score로 조정 가능.
+RSS 2.0과 Atom 피드를 모두 지원한다.
 
 구조가 다른 소스(API 기반, 인증 필요, 비RSS)는 여기에 우겨넣지 말고
 NVD/MSRC처럼 전용 수집기를 만든다. 통합 스키마(make_event)만 지키면 된다.
@@ -18,6 +23,7 @@ import argparse
 import html
 import json
 import os
+import sys
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
@@ -25,6 +31,11 @@ import requests
 from bs4 import BeautifulSoup
 
 import common_utils
+
+# Windows 콘솔(cp949)에서 기사 제목의 특수문자(— 등) 출력이 죽지 않도록 UTF-8로 강제
+for stream in (sys.stdout, sys.stderr):
+    if stream and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 FEEDS_FILE = common_utils.ASSETS_DIR / "feeds.json"
 MAX_STORED_SENT_IDS = 500
@@ -66,6 +77,11 @@ def parse_rss_datetime(value):
     try:
         return parsedate_to_datetime(value).isoformat()
     except (TypeError, ValueError, IndexError):
+        pass
+    # Atom(ISO 8601) 날짜 폴백
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+    except ValueError:
         return ""
 
 
@@ -95,6 +111,27 @@ def fetch_feed_items(feed):
                 "summary_html": item_text(item, "description"),
                 "content_html": item_text(item, "encoded"),
                 "pub_date": item_text(item, "pubDate"),
+            }
+        )
+    if items:
+        return items
+
+    # Atom 피드 폴백 (<entry> 기반 — Google 보안 블로그 등)
+    for entry in soup.find_all("entry"):
+        link_el = entry.find("link", rel="alternate") or entry.find("link")
+        link = (link_el.get("href") or "").strip() if link_el is not None else ""
+        entry_id = item_text(entry, "id")
+        title = common_utils.clean_text(item_text(entry, "title"))
+        if not (link or entry_id) or not title:
+            continue
+        items.append(
+            {
+                "id": entry_id or link,
+                "title": title,
+                "link": link or entry_id,
+                "summary_html": item_text(entry, "summary"),
+                "content_html": item_text(entry, "content"),
+                "pub_date": item_text(entry, "published") or item_text(entry, "updated"),
             }
         )
     return items
@@ -192,12 +229,13 @@ def send_to_slack(feed, articles):
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        "{}*{}*{}\n\n{}\n\n<{}|기사 보기>".format(
+                        "{}*{}*{}\n\n{}\n\n<{}|기사 보기> · 중요도 {}점".format(
                             common_utils.triage_marker(triage),
                             article["title"],
                             common_utils.triage_note(triage),
                             alert_summary(article),
                             article["link"],
+                            (article.get("importance") or {}).get("score", "-"),
                         )
                     ),
                 },
@@ -225,6 +263,12 @@ def print_dry_run(feed, articles):
         print("  트리아지: {} | CVE: {} | IOC: {}건 | ATT&CK: {}".format(
             (article.get("triage") or {}).get("level"),
             article["cves"], len(article["iocs"]), article["attack_techniques"],
+        ))
+        importance = article.get("importance") or {}
+        print("  중요도: {}점 ({}) → {}".format(
+            importance.get("score"),
+            ", ".join(importance.get("reasons") or []) or "가점 없음",
+            "알림" if article.get("alert") else "리포트만",
         ))
         if enrichment:
             print("  enrichment: {}".format(json.dumps(enrichment, ensure_ascii=False)))
@@ -260,24 +304,39 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
         article["triage"] = common_utils.classify_urgency(
             [article["title"], article["body"]],
             epss=max(epss_values) if epss_values else None,
+            exclude_assets=feed.get("ignore_asset_terms"),
         )
         if enrich_enabled and feed.get("enrich", True):
             print("[*] AI enrichment 생성 중: {}".format(article["title"][:60]))
             article["enrichment"] = common_utils.ai_enrich_article(article["title"], article["body"]) or {}
         else:
             article["enrichment"] = {}
+        article["importance"] = common_utils.score_importance(
+            triage=article["triage"], enrichment=article["enrichment"], cves=article["cves"],
+        )
+        article["alert"] = common_utils.should_alert(
+            article["importance"], triage=article["triage"], min_score=feed.get("min_score"),
+        )
 
     if dry_run:
         print_dry_run(feed, new_articles)
         return
 
-    email_sent = send_email(feed, new_articles)
-    slack_sent = send_to_slack(feed, new_articles)
+    # 중요도 미달 기사는 알림 없이 events.jsonl에만 적재한다 (일간 리포트에서 확인).
+    alerts = [article for article in new_articles if article["alert"]]
+    if alerts:
+        email_sent = send_email(feed, alerts)
+        slack_sent = send_to_slack(feed, alerts)
 
-    # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
-    if not email_sent and not slack_sent:
-        print("[-] {}: 메일/슬랙 발송이 모두 실패하여 상태를 저장하지 않습니다.".format(feed["label"]))
-        return
+        # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
+        if not email_sent and not slack_sent:
+            print("[-] {}: 메일/슬랙 발송이 모두 실패하여 상태를 저장하지 않습니다.".format(feed["label"]))
+            return
+    else:
+        email_sent = slack_sent = False
+        print("[*] {}: 중요도 임계값 미달 {}건 — 알림 생략, 리포트용으로만 적재".format(
+            feed["label"], len(new_articles)
+        ))
 
     events = []
     for article in new_articles:
@@ -301,9 +360,10 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
                 attack_techniques=article["attack_techniques"],
                 published_at=article["published_at"],
                 ai_summary=enrichment.get("summary"),
-                email_sent=email_sent,
-                slack_sent=slack_sent,
+                email_sent=email_sent and article["alert"],
+                slack_sent=slack_sent and article["alert"],
                 triage=article["triage"],
+                importance=article["importance"],
             )
         )
     common_utils.append_events(events)
@@ -313,7 +373,9 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
         state_file(feed), {"sent_ids": updated_ids},
         max_items=MAX_STORED_SENT_IDS, keys_to_trim=["sent_ids"],
     )
-    print("[+] {}: 신규 기사 {}건 처리 완료".format(feed["label"], len(new_articles)))
+    print("[+] {}: 신규 기사 {}건 처리 완료 (알림 {}건, 리포트만 {}건)".format(
+        feed["label"], len(new_articles), len(alerts), len(new_articles) - len(alerts)
+    ))
 
 
 def main():

@@ -335,12 +335,17 @@ def fetch_epss_scores(cve_ids, timeout=20):
             print("[-] EPSS 조회 실패({}건): {}".format(len(batch), error))
     return scores
 
-def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, poc_public=False, epss=None):
+def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, poc_public=False, epss=None,
+                     exclude_assets=None):
     """SSVC 간소화 트리로 P1/P2/P3 판정.
 
     P1: 실제 악용 중 + 자사 자산 매칭
     P2: 실제 악용 중 / (PoC 공개 또는 Critical 영향) + 자산 매칭
     P3: 그 외
+
+    exclude_assets: 자산 매칭에서 무시할 용어 목록. 벤더 리서치 블로그가
+    본문에 항상 자사명을 넣어(예: Unit 42 → "Palo Alto Networks") 생기는
+    상시 오탐을 소스별로 걸러낼 때 사용한다.
     """
     if isinstance(match_values, (str, bytes)):
         match_values = [match_values]
@@ -373,6 +378,9 @@ def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, 
 
     # 결정점 2: 자사 자산 매칭
     matched_assets = match_inventory_terms(match_values or [])
+    if exclude_assets:
+        excluded = {clean_text(term).lower() for term in exclude_assets}
+        matched_assets = [term for term in matched_assets if clean_text(term).lower() not in excluded]
     if matched_assets:
         reasons.append("자사 자산 매칭({})".format(", ".join(matched_assets)))
 
@@ -407,6 +415,73 @@ def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, 
         "epss": epss,
         "reasons": reasons,
     }
+
+# ===== 중요도 스코어링 (뉴스 소스 확대에 따른 알림 필터링) =====
+# 점수 미달 기사는 즉시 알림을 생략하고 events.jsonl에만 적재해 일간 리포트에서 다룬다.
+IMPORTANCE_ALERT_THRESHOLD = int(os.environ.get("NEWS_ALERT_MIN_SCORE", "50"))
+
+_SEVERITY_POINTS = {"critical": 25, "high": 15, "medium": 5}
+_RELEVANCE_POINTS = {"high": 25, "medium": 10}
+_CATEGORY_POINTS = {
+    "취약점": 5, "악성코드": 5, "침해사고": 5, "공격캠페인": 5,
+    "정책규제": -5, "제품행사": -30,
+}
+
+def score_importance(triage=None, enrichment=None, cves=None):
+    """기사 중요도를 0~100 점수로 산정해 {"score", "reasons"}를 반환.
+
+    트리아지(악용 상태·자산 매칭·기술 영향)와 LLM enrichment(severity·relevance·
+    category)를 합산한다. enrichment가 없어도(LLM 다운) 트리아지 신호만으로
+    악용 중인 건은 임계값을 넘도록 가중치를 배분했다.
+    """
+    triage = triage or {}
+    enrichment = enrichment or {}
+    score = 0
+    reasons = []
+
+    def add(points, reason):
+        nonlocal score
+        score += points
+        reasons.append("{}({:+d})".format(reason, points))
+
+    exploitation = triage.get("exploitation") or "none"
+    if exploitation == "active":
+        add(40, "실제 악용 정황")
+    elif exploitation == "poc":
+        add(20, "PoC/악용 가능성")
+
+    if triage.get("matched_assets"):
+        add(35, "자사 자산 매칭")
+
+    if triage.get("impact") == "total":
+        add(10, "고위험 유형(RCE/권한상승 등)")
+
+    severity = str(enrichment.get("severity") or "").lower()
+    if severity in _SEVERITY_POINTS:
+        add(_SEVERITY_POINTS[severity], "심각도 {}".format(severity))
+
+    relevance = str(enrichment.get("relevance") or "").lower()
+    if relevance in _RELEVANCE_POINTS:
+        add(_RELEVANCE_POINTS[relevance], "관련성 {}".format(relevance))
+
+    category = clean_text(enrichment.get("category"))
+    if category in _CATEGORY_POINTS:
+        add(_CATEGORY_POINTS[category], "분류 {}".format(category))
+
+    if cves:
+        add(5, "CVE 언급")
+
+    if enrichment.get("threat_actor") or enrichment.get("malware_family"):
+        add(5, "위협 그룹/악성코드 특정")
+
+    return {"score": max(0, min(100, score)), "reasons": reasons}
+
+def should_alert(importance, triage=None, min_score=None):
+    """즉시 알림 여부 판정. P1/P2는 점수와 무관하게 항상 알림."""
+    if (triage or {}).get("level") in ("P1", "P2"):
+        return True
+    threshold = IMPORTANCE_ALERT_THRESHOLD if min_score is None else int(min_score)
+    return (importance or {}).get("score", 0) >= threshold
 
 def triage_marker(triage):
     level = (triage or {}).get("level")
@@ -468,7 +543,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                triage=None, category="", affected_products=None, epss=None,
                threat_actor="", malware_family="", kev=False, iocs=None, relevance="",
                references=None, fix_available=None, remediation="", due_date="",
-               ransomware_use=None, confidence="", attack_techniques=None):
+               ransomware_use=None, confidence="", attack_techniques=None, importance=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -511,6 +586,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "fetched_at": utc_now_iso(),
         "ai_summary": ai_summary,
         "triage": triage,
+        "importance": importance,
         "delivery": {"email_sent": bool(email_sent), "slack_sent": bool(slack_sent)},
     }
 
