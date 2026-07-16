@@ -85,9 +85,10 @@ that answer a PIR, or high-relevance threat/trend articles, or
 medium-relevance analysis from reliability-B sources (vendor research
 with own telemetry). Re-reports of stories already alerted via another
 source (cluster match) and events labeled noise via feedback are
-excluded. Selection is greedy: articles covering not-yet-covered PIRs
-are picked first (breadth across intelligence requirements over depth
-on one), then remaining slots fill by insight order (PIR-high matches,
+excluded. Selection is greedy: PIR coverage is seeded with PIRs already
+answered by alerted articles in the period, so recommendations fill the
+gaps alerts left — high-weight uncovered PIRs are picked first, then any
+uncovered PIR, then remaining slots fill by insight order (PIR-high matches,
 PIR count, topic freshness — actors/malware already alerted in the
 period rank lower, relevance, content depth as judged by the LLM
 (analysis > report > news > opinion), intel richness (IOC/ATT&CK
@@ -209,7 +210,10 @@ against the defined IDs), and matches feed into:
   medium-weight is Info (+3); also exposed to feedback learning as
   `pir_high`/`pir_other` features
 - **Reports**: a "PIR 현황" section groups the period's articles by PIR
-  with counts, right after the AI analysis
+  with counts, right after the AI analysis. PIRs with zero matches in
+  the period are listed as 무응답 (collection gap) — a signal that
+  sources don't cover the topic, the question is too narrow, or the LLM
+  is missing the match
 
 Edit `pir.json` (not code) when priorities change. "Exclude product
 promo" is handled separately by the 제품행사 category score cap, not a

@@ -260,10 +260,12 @@ def pick_trend_reads(events, exclude_ids):
     쓴다(점수 우선으로 두면 "알림 문턱에 가까웠던 기사"가 PIR에 정확히
     답하는 기사를 항상 밀어낸다).
 
-    선택은 그리디 — 새 PIR을 커버하는 기사를 먼저 뽑아 서로 다른 정보
-    요구에 넓게 답하게 하고, 남은 슬롯을 정렬순으로 채운다. 같은 사건
-    (클러스터)·같은 행위자/멀웨어 주제는 1건만, 카테고리당 최대
-    MAX_TREND_PER_CATEGORY건 (슬롯이 남으면 상한 해제).
+    선택은 그리디 — PIR 커버리지는 기간 내 알림된 기사가 이미 답한 PIR을
+    커버된 것으로 시드해서, 추천이 "알림이 못 채운 정보 요구의 빈틈"을
+    메우게 한다. 1차로 미커버 high 가중치 PIR, 2차로 미커버 PIR 전체,
+    3차는 정렬순 충원. 같은 사건(클러스터)·같은 행위자/멀웨어 주제는
+    1건만, 카테고리당 최대 MAX_TREND_PER_CATEGORY건 (슬롯이 남으면
+    상한 해제).
     """
     pir_defs = common_utils.load_pirs()
     feedback = common_utils.load_feedback()
@@ -275,10 +277,11 @@ def pick_trend_reads(events, exclude_ids):
     def event_topics(event):
         return {str(value).lower() for value in (event.get("threat_actor"), event.get("malware_family")) if value}
 
-    alerted_topics = set()
+    alerted_topics, alerted_pirs = set(), set()
     for event in events:
         if event_alerted(event):
             alerted_topics.update(event_topics(event))
+            alerted_pirs.update(event.get("pirs") or [])
 
     # 미판정(구 이벤트, enrichment 실패)은 2 — report와 news 사이에 둬서 불이익을 줄인다
     depth_rank = {"analysis": 0, "report": 1, "news": 3, "opinion": 4}
@@ -321,9 +324,9 @@ def pick_trend_reads(events, exclude_ids):
 
     picked, picked_ids, picked_related, picked_topics = [], set(), set(), set()
     category_counts = Counter()
-    covered_pirs = set()
+    covered_pirs = set(alerted_pirs)  # 알림이 이미 답한 PIR은 커버된 것으로 시드
 
-    def try_pick(event, require_new_pir, enforce_cap):
+    def try_pick(event, require_new_pir, require_high, enforce_cap):
         if len(picked) >= MAX_TREND_ITEMS or event.get("id") in picked_ids:
             return
         related = set((event.get("cluster") or {}).get("related_ids") or [])
@@ -337,6 +340,8 @@ def pick_trend_reads(events, exclude_ids):
         new_pirs = set(event.get("pirs") or []) - covered_pirs
         if require_new_pir and not new_pirs:
             return
+        if require_high and not any((pir_defs.get(pid) or {}).get("weight") == "high" for pid in new_pirs):
+            return
         picked.append(event)
         picked_ids.add(event.get("id"))
         picked_related.update(related)
@@ -344,10 +349,13 @@ def pick_trend_reads(events, exclude_ids):
         category_counts[category] += 1
         covered_pirs.update(new_pirs)
 
-    # 1차: 새 PIR 커버 우선 / 2차: 정렬순 충원 / 3차: 슬롯이 남으면 카테고리 상한 해제
-    for require_new_pir, enforce_cap in ((True, True), (False, True), (False, False)):
+    # 1차: 미커버 high 가중치 PIR / 2차: 미커버 PIR 전체 / 3차: 정렬순 충원 /
+    # 4차: 슬롯이 남으면 카테고리·주제 상한 해제
+    for require_new_pir, require_high, enforce_cap in (
+        (True, True, True), (True, False, True), (False, False, True), (False, False, False)
+    ):
         for event in candidates:
-            try_pick(event, require_new_pir, enforce_cap)
+            try_pick(event, require_new_pir, require_high, enforce_cap)
 
     return picked
 
@@ -379,6 +387,13 @@ def group_by_pir(events):
         (pid, pir_defs[pid]["question"], sorted(grouped[pid], key=event_sort_key))
         for pid in sorted(grouped)
     ]
+
+
+def unanswered_pirs(pir_groups):
+    """정의된 PIR 중 기간 내 매칭 기사가 0건인 것 — 수집 공백(collection gap) 신호"""
+    matched = {pid for pid, _, _ in pir_groups}
+    pir_defs = common_utils.load_pirs()
+    return [(pid, pir_defs[pid]["question"]) for pid in sorted(pir_defs) if pid not in matched]
 
 
 def group_by_category(events):
@@ -706,7 +721,8 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
         lines.append("[AI 분석]")
         lines.append(narrative)
 
-    if pir_groups:
+    pir_gaps = unanswered_pirs(pir_groups)
+    if pir_groups or pir_gaps:
         lines.append("")
         lines.append("[PIR 현황 — 우선 정보 요구사항]")
         for pid, question, group in pir_groups:
@@ -718,6 +734,11 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
                 lines.append("  {}".format(event.get("url") or ""))
             if len(group) > MAX_ITEMS_PER_PIR:
                 lines.append("- ...외 {}건".format(len(group) - MAX_ITEMS_PER_PIR))
+        if pir_gaps:
+            lines.append("")
+            lines.append("■ 무응답 PIR — 기간 내 매칭 기사 없음 (수집 공백)")
+            for pid, question in pir_gaps:
+                lines.append("- {} — {}".format(pid, question))
 
     if cards:
         lines.append("")
@@ -809,7 +830,8 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
         parts.append("<h3>AI 분석</h3>")
         parts.append("<p>{}</p>".format(html.escape(narrative).replace("\n", "<br>")))
 
-    if pir_groups:
+    pir_gaps = unanswered_pirs(pir_groups)
+    if pir_groups or pir_gaps:
         parts.append("<h3>PIR 현황 — 우선 정보 요구사항</h3>")
         for pid, question, group in pir_groups:
             parts.append("<h4>{} — {} ({}건)</h4>".format(html.escape(pid), html.escape(question), len(group)))
@@ -824,6 +846,12 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
                 ))
             if len(group) > MAX_ITEMS_PER_PIR:
                 parts.append("<li>...외 {}건</li>".format(len(group) - MAX_ITEMS_PER_PIR))
+            parts.append("</ul>")
+        if pir_gaps:
+            parts.append("<h4>무응답 PIR — 기간 내 매칭 기사 없음 (수집 공백)</h4>")
+            parts.append("<ul>")
+            for pid, question in pir_gaps:
+                parts.append("<li>{} — {}</li>".format(html.escape(pid), html.escape(question)))
             parts.append("</ul>")
 
     if cards:
@@ -953,7 +981,8 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
         blocks.append({"type": "divider"})
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🤖 *AI 분석*\n" + narrative}})
 
-    if pir_groups:
+    pir_gaps = unanswered_pirs(pir_groups)
+    if pir_groups or pir_gaps:
         blocks.append({"type": "divider"})
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🎯 *PIR 현황 — 우선 정보 요구사항*"}})
         for pid, question, group in pir_groups:
@@ -973,6 +1002,16 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
                 "text": {"type": "mrkdwn", "text": "*{}* — {} ({}건)\n{}".format(
                     pid, question[:60], len(group), "\n".join(pir_lines)
                 )},
+            })
+        if pir_gaps:
+            blocks.append({
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": "⚪ 무응답 PIR (기간 내 매칭 기사 없음 — 수집 공백): {}".format(
+                        ", ".join(pid for pid, _ in pir_gaps)
+                    ),
+                }],
             })
 
     if cards:
