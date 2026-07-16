@@ -8,7 +8,7 @@
     },
     {
       "id": "PIR-2",
-      "question": "국내(한국) 기업·기관 대상 랜섬웨어 및 공급망(supply chain) 공격 동향",
+      "question": "국내(한국) 기업·기관 대상 랜섬웨어 공격·협박 동향",
       "weight": "high"
     },
     {
@@ -19,6 +19,16 @@
     {
       "id": "PIR-4",
       "question": "ClickFix·InstallFix·피싱 등 엔드포인트(임직원 단말) 초기 침투 공격 동향",
+      "weight": "high"
+    },
+    {
+      "id": "PIR-5",
+      "question": "소프트웨어 공급망 공격 — 오픈소스 패키지(npm·PyPI 등)·벤더·업데이트 경로를 통한 공격 (국내외 불문)",
+      "weight": "high"
+    },
+    {
+      "id": "PIR-6",
+      "question": "게임 산업 표적 위협 — 게임사 대상 APT(Lazarus 등), 게임 클라이언트·런처 위장 악성코드, 게임 계정 탈취·크리덴셜 스터핑",
       "weight": "high"
     }
   ]
