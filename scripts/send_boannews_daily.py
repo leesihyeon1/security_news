@@ -24,6 +24,9 @@ TO_EMAIL = common_utils.DEFAULT_TO_EMAIL
 SMTP_SERVER = common_utils.SMTP_SERVER
 SMTP_PORT = common_utils.SMTP_PORT
 
+# Admiralty 소스 신뢰도: 2차 전달 매체 (feeds.json의 thehackernews 등과 동일 기준)
+BOANNEWS_RELIABILITY = "C"
+
 STATE_FILE = common_utils.STATE_DIR / "boannews_sent_state.json"
 DATA_DIR = PROJECT_ROOT / "data"
 EVENTS_FILE = DATA_DIR / "boannews_events.jsonl"
@@ -241,8 +244,13 @@ def build_email_body(news_items):
     """.format(count=len(news_items), checked_at=checked_at)
 
     for idx, news in enumerate(news_items, start=1):
+        summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
+        score = (news.get("importance") or {}).get("score")
+
         text_body += "{}. {}\n".format(idx, news["title"])
-        text_body += "요약: {}\n".format(news["summary"])
+        text_body += "요약: {}\n".format(summary)
+        if score is not None:
+            text_body += "중요도: {}점\n".format(score)
         text_body += "기사 링크: {}\n".format(news["link"])
         text_body += "발행일: {}\n\n".format(news["pub_date"])
 
@@ -250,12 +258,14 @@ def build_email_body(news_items):
         <hr>
         <h3>{idx}. {title}</h3>
         <p><b>요약:</b> {summary}</p>
+        {score_row}
         <p><b>발행일:</b> {pub_date}</p>
         <p><b>기사 링크:</b> <a href="{link}">{link}</a></p>
         """.format(
             idx=idx,
             title=html.escape(news["title"]),
-            summary=html.escape(news["summary"]),
+            summary=html.escape(summary),
+            score_row="<p><b>중요도:</b> {}점</p>".format(score) if score is not None else "",
             pub_date=html.escape(news["pub_date"]),
             link=html.escape(news["link"]),
         )
@@ -273,31 +283,6 @@ def send_email(news_items):
     text_body, html_body = build_email_body(news_items)
     return common_utils.send_email_message(subject, text_body, html_body)
 
-def ai_summarize(title, summary):
-
-    prompt = f"""
-당신은 10년 경력의 보안관제 분석가이다.
-
-다음 보안뉴스를 읽고 아래 형식으로 답변하라.
-
-[핵심요약]
-- 3줄 이내
-
-[영향]
-- 영향받는 시스템 또는 제품
-
-[권고조치]
-- 보안담당자가 해야할 일
-
-제목:
-{title}
-
-내용:
-{summary}
-"""
-
-    return common_utils.llm_generate(prompt, timeout=120) or summary[:300]
-    
 def send_to_slack(news_items):
     """보안뉴스 메일 내용과 동일한 데이터를 슬랙으로 전송"""
     if not news_items:
@@ -312,13 +297,7 @@ def send_to_slack(news_items):
     ]
 
     for news in news_items:
-        # Ollama LLM 요약은 JSON/ELK 연동 안정화 후 다시 활성화합니다.
-        # print(f"AI 요약 생성 중: {news['title']}")
-        # ai_summary = ai_summarize(
-        #     news["title"],
-        #     news["summary"]
-        # )
-        ai_summary = news["summary"]
+        ai_summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
 
         triage = news.get("triage")
         blocks.append({
@@ -328,7 +307,7 @@ def send_to_slack(news_items):
                 "text":
                     f"{common_utils.triage_marker(triage)}📰 *{news['title']}*\n\n"
                     f"{ai_summary}{common_utils.triage_note(triage)}\n\n"
-                    f"<{news['link']}|기사 보기>"
+                    f"<{news['link']}|기사 보기> · 중요도 {(news.get('importance') or {}).get('score', '-')}점"
                 }
     })
         # 피드백 참조 해시 — 슬랙 폴러가 반응(👍/👎)을 이벤트로 역매핑한다
@@ -380,22 +359,47 @@ def main():
             epss=max(epss_values) if epss_values else None,
         )
 
-    # 크로스소스 클러스터링: 다른 소스가 이미 알림한 같은 사건은 중복 알림을 억제한다
-    # (위험도 승격 시에는 재알림). 억제된 기사도 이벤트로는 적재되어 리포트에서 다룬다.
+        # LLM enrichment를 발송 전에 수행해 중요도 스코어링(카테고리·심각도·PIR)에 반영한다
+        print("[*] AI enrichment 생성 중: {}".format(news["title"][:50]))
+        news["enrichment"] = common_utils.ai_enrich_article(news["title"], news["body"] or news["summary"]) or {}
+        # 정규식 추출(명시된 ID) + LLM 매핑(서술형, 공식 카탈로그로 검증됨) 병합
+        for technique in news["enrichment"].get("attack_techniques") or []:
+            if technique not in news["attack_techniques"]:
+                news["attack_techniques"].append(technique)
+        news["importance"] = common_utils.score_importance(
+            triage=news["triage"], enrichment=news["enrichment"],
+            cves=news["extracted_cves"], reliability=BOANNEWS_RELIABILITY,
+        )
+
+    # 크로스소스 클러스터링(교차 보도 가점 / 중복 알림 억제) + 중요도 알림 게이트.
+    # 임계값 미달·중복 기사도 이벤트로는 적재되어 일간 리포트에서 다룬다.
     for news in new_articles:
         related = common_utils.find_related_events(
             news["extracted_cves"], news["title"], exclude_source="boannews",
         )
         news["cluster"] = common_utils.build_cluster_context(related, triage=news.get("triage"))
+        if news["cluster"]["bonus"]:
+            news["importance"]["score"] = min(100, news["importance"]["score"] + news["cluster"]["bonus"])
+            news["importance"]["reasons"].append(
+                "교차 보도 {}곳(+{})".format(len(news["cluster"]["corroborating_sources"]), news["cluster"]["bonus"])
+            )
+        news["alert"] = common_utils.should_alert(news["importance"], triage=news["triage"])
         news["cluster"]["suppressed"] = bool(
-            news["cluster"]["already_alerted"] and not news["cluster"]["escalated"]
+            news["alert"] and news["cluster"]["already_alerted"] and not news["cluster"]["escalated"]
         )
         if news["cluster"]["suppressed"]:
+            news["alert"] = False
             print("[*] 중복 알림 억제: {} (기존 알림 소스: {})".format(
                 news["title"][:50], ", ".join(news["cluster"]["corroborating_sources"])
             ))
+        elif news["cluster"]["escalated"]:
+            news["importance"]["reasons"].append("기존 알림 대비 위험도 승격 — 재알림")
+        elif not news["alert"]:
+            print("[*] 중요도 임계값 미달: {} ({}점) — 알림 생략, 리포트용으로만 적재".format(
+                news["title"][:50], news["importance"]["score"]
+            ))
 
-    alert_articles = [news for news in new_articles if not news["cluster"]["suppressed"]]
+    alert_articles = [news for news in new_articles if news["alert"]]
 
     fetched_at = utc_now_iso()
     if alert_articles:
@@ -408,19 +412,14 @@ def main():
             return
     else:
         slack_sent = email_sent = False
-        print("[*] 신규 기사 {}건 모두 중복 억제 — 알림 없이 이벤트만 적재합니다.".format(len(new_articles)))
-
-    # 알림 발송을 지연시키지 않도록 LLM enrichment는 발송 후·저장 전에 수행
-    for news in new_articles:
-        print("[*] AI enrichment 생성 중: {}".format(news["title"][:50]))
-        news["enrichment"] = common_utils.ai_enrich_article(news["title"], news["body"] or news["summary"])
+        print("[*] 신규 기사 {}건 모두 알림 기준 미달 또는 중복 억제 — 이벤트만 적재합니다.".format(len(new_articles)))
 
     new_events = [
         normalize_boannews_event(
             article,
             fetched_at,
-            email_sent=email_sent and not article["cluster"]["suppressed"],
-            slack_sent=slack_sent and not article["cluster"]["suppressed"],
+            email_sent=email_sent and article["alert"],
+            slack_sent=slack_sent and article["alert"],
         )
         for article in new_articles
     ]
@@ -450,9 +449,10 @@ def main():
                 pirs=enrichment.get("pirs"),
                 published_at=parse_rss_datetime(article["pub_date"]) or article.get("article_published_at") or "",
                 ai_summary=enrichment.get("summary"),
-                email_sent=email_sent and not article["cluster"]["suppressed"],
-                slack_sent=slack_sent and not article["cluster"]["suppressed"],
+                email_sent=email_sent and article["alert"],
+                slack_sent=slack_sent and article["alert"],
                 triage=article.get("triage"),
+                importance=article.get("importance"),
                 cluster=article["cluster"],
             )
         )
@@ -461,7 +461,9 @@ def main():
     updated_sent_ids = state["sent_ids"] + [article["id"] for article in new_articles]
     save_state(updated_sent_ids)
 
-    print("발송 완료: 신규 기사 {}개".format(len(new_articles)))
+    print("처리 완료: 신규 기사 {}건 (알림 {}건, 리포트만 {}건)".format(
+        len(new_articles), len(alert_articles), len(new_articles) - len(alert_articles)
+    ))
 
 
 if __name__ == "__main__":
