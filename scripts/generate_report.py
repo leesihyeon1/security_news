@@ -14,12 +14,9 @@ import argparse
 import html
 import json
 import os
-import re
 import sys
 from collections import Counter
 from datetime import datetime, timedelta
-
-import requests
 
 import common_utils
 
@@ -67,7 +64,6 @@ NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
 # 인사이트 신호(PIR 매칭, 또는 high 관련성의 위협 분석 기사)가 있는 것을 고른다.
 MAX_TREND_ITEMS = 5
 TREND_CATEGORIES = {"공격캠페인", "침해사고", "악성코드"}
-THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def source_label(source):
@@ -592,25 +588,7 @@ def ai_narrative(period_label, digest):
 {digest}
 """.format(period=period_label, digest=digest)
 
-    try:
-        response = requests.post(
-            common_utils.OLLAMA_URL,
-            json={
-                "model": common_utils.OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-            },
-            timeout=300,
-        )
-        if response.status_code == 200:
-            text = (response.json() or {}).get("response", "")
-            text = THINK_TAG_RE.sub("", text).strip()
-            if text:
-                return text
-        print("[-] AI 해석 생성 실패: HTTP {}".format(response.status_code))
-    except Exception as error:
-        print("[-] AI 해석 생성 실패: {}".format(error))
-    return ""
+    return common_utils.llm_generate(prompt, timeout=300) or ""
 
 
 def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,

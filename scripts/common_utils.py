@@ -6,6 +6,7 @@ import json
 import re
 import requests
 import smtplib
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from email.mime.multipart import MIMEMultipart
@@ -57,6 +58,10 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 SLACK_WEBHOOK_URGENT = os.environ.get("SLACK_WEBHOOK_URGENT")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
+NVIDIA_API_URL = os.environ.get("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
+NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 
 def clean_text(value):
     if value is None:
@@ -353,8 +358,64 @@ def validate_pirs(candidates):
             validated.append(pid)
     return validated
 
-# ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
+# ===== LLM 호출 공용 계층 (LLM_PROVIDER: nvidia = NVIDIA NIM API, ollama = 로컬) =====
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+def _generate_nvidia(prompt, timeout):
+    payload = {
+        "model": NVIDIA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": 8192,
+        "stream": False,
+    }
+    headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
+    for attempt in (1, 2):
+        response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
+        if response.status_code == 429 and attempt == 1:
+            # 무료 티어 40 RPM 제한 — 한 번만 대기 후 재시도
+            time.sleep(15)
+            continue
+        break
+    if response.status_code != 200:
+        raise RuntimeError("HTTP {}".format(response.status_code))
+    choices = (response.json() or {}).get("choices") or []
+    if not choices:
+        raise RuntimeError("빈 choices 응답")
+    return (choices[0].get("message") or {}).get("content") or ""
+
+def _generate_ollama(prompt, timeout, json_format):
+    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
+    if json_format:
+        payload["format"] = "json"
+    response = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError("HTTP {}".format(response.status_code))
+    return (response.json() or {}).get("response", "")
+
+def llm_generate(prompt, timeout=120, json_format=False):
+    """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
+
+    LLM_PROVIDER=nvidia 이면 NVIDIA NIM을 먼저 시도하고 실패 시 로컬 Ollama로 폴백한다.
+    """
+    providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
+    for provider in providers:
+        try:
+            if provider == "nvidia":
+                if not NVIDIA_API_KEY:
+                    raise RuntimeError("NVIDIA_API_KEY 미설정")
+                text = _generate_nvidia(prompt, timeout)
+            else:
+                text = _generate_ollama(prompt, timeout, json_format)
+            text = THINK_TAG_RE.sub("", text).strip()
+            if text:
+                return text
+            raise RuntimeError("빈 응답")
+        except Exception as error:
+            print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
+    return None
+
+# ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
 
 ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 분석가이다.
 아래 보안 기사를 분석해 JSON 하나만 출력하라. JSON 외 다른 텍스트를 출력하지 마라.
@@ -412,22 +473,11 @@ def ai_enrich_article(title, body):
     if not body:
         return None
 
-    try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": _build_enrich_prompt(title, body),
-                "stream": False,
-                "format": "json",
-            },
-            timeout=120,
-        )
-        if response.status_code != 200:
-            print("[-] AI enrichment 실패: HTTP {}".format(response.status_code))
-            return None
+    text = llm_generate(_build_enrich_prompt(title, body), timeout=120, json_format=True)
+    if not text:
+        return None
 
-        text = THINK_TAG_RE.sub("", (response.json() or {}).get("response", "")).strip()
+    try:
         start, end = text.find("{"), text.rfind("}")
         if start == -1 or end <= start:
             return None

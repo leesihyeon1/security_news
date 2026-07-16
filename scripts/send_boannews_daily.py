@@ -296,22 +296,7 @@ def ai_summarize(title, summary):
 {summary}
 """
 
-    try:
-        response = requests.post(
-            common_utils.OLLAMA_URL,
-            json={
-                "model": common_utils.OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=120
-        )
-
-        return response.json()["response"]
-
-    except Exception as e:
-        print(f"Ollama 요약 실패: {e}")
-        return summary[:300]
+    return common_utils.llm_generate(prompt, timeout=120) or summary[:300]
     
 def send_to_slack(news_items):
     """보안뉴스 메일 내용과 동일한 데이터를 슬랙으로 전송"""

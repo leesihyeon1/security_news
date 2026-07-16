@@ -65,7 +65,7 @@ microsoft_patch.bat
 
 All collector scripts append normalized events to `data/events.jsonl`.
 `scripts/generate_report.py` aggregates them (counts, CVSS distribution, KEV,
-asset matches) and asks the local Ollama model for a narrative analysis, then
+asset matches) and asks the configured LLM for a narrative analysis, then
 sends the report via email and Slack (`SLACK_WEBHOOK_REPORT`, falling back to
 `SLACK_WEBHOOK_URL`).
 
@@ -75,7 +75,18 @@ weekly_report.bat
 python scripts\generate_report.py --period weekly --dry-run
 ```
 
-If Ollama is unavailable, the report is still sent with statistics only.
+If the LLM is unavailable, the report is still sent with statistics only.
+
+## LLM Provider
+
+All LLM calls (article enrichment, summaries, report narrative) go through
+`common_utils.llm_generate()`. Set `LLM_PROVIDER` in `.env`:
+
+- `ollama` (default): local Ollama (`OLLAMA_URL`, `OLLAMA_MODEL`).
+- `nvidia`: NVIDIA NIM API (build.nvidia.com) using `NVIDIA_API_KEY` and
+  `NVIDIA_MODEL` (default `nvidia/nemotron-3-ultra-550b-a55b`). Free tier is rate-limited
+  to ~40 requests/min; a 429 is retried once after a short wait. If the NIM
+  call fails, the request automatically falls back to local Ollama.
 
 ## Runtime Files
 
@@ -218,7 +229,7 @@ The LLM enrichment classifies each article into one of: 취약점, 악성코드,
 tag (e.g. `[취약점]`) in email/Slack alerts, and daily/weekly reports include
 a "카테고리별 뉴스" section grouping collected articles by category
 (priority-sorted within each group, capped per category). Events without a
-category (API sources such as NVD, or when Ollama is unavailable) are not
+category (API sources such as NVD, or when the LLM is unavailable) are not
 shown in that section but remain in the priority lists.
 
 ## Asset Matching

@@ -200,28 +200,7 @@ def ai_summarize(title, content):
 {content}
 """
 
-    try:
-
-        response = requests.post(
-            common_utils.OLLAMA_URL,
-            json={
-                "model": common_utils.OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=180
-        )
-
-        if response.status_code == 200:
-            return response.json().get(
-                "response",
-                "AI 분석 실패"
-            )
-
-    except Exception as e:
-        print("Ollama 오류:", e)
-
-    return "AI 분석 실패"
+    return common_utils.llm_generate(prompt, timeout=180) or "AI 분석 실패"
 
 def filter_new_items(items, sent_ids):
     new_items = []
