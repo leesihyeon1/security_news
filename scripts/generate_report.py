@@ -48,6 +48,23 @@ SOURCE_LABELS = {
     "thedfirreport": "The DFIR Report",
     "securelist": "Securelist",
     "google_security": "Google Security Blog",
+    "microsoft_security": "Microsoft Security Blog",
+    "mandiant": "Google TI (Mandiant)",
+    "crowdstrike": "CrowdStrike",
+    "sentinelone": "SentinelOne Labs",
+    "welivesecurity": "ESET WeLiveSecurity",
+    "sophos": "Sophos News",
+    "trendmicro": "Trend Micro Research",
+    "rapid7": "Rapid7",
+    "elastic_security": "Elastic Security Labs",
+    "volexity": "Volexity",
+    "jpcert": "JPCERT/CC",
+    "cyberscoop": "CyberScoop",
+    "infosecurity_magazine": "Infosecurity Magazine",
+    "theregister_security": "The Register",
+    "helpnetsecurity": "Help Net Security",
+    "securityaffairs": "Security Affairs",
+    "dailysecu": "데일리시큐",
 }
 
 MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15
