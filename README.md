@@ -90,7 +90,8 @@ answered by alerted articles in the period, so recommendations fill the
 gaps alerts left — high-weight uncovered PIRs are picked first, then any
 uncovered PIR, then remaining slots fill by insight order (PIR-high matches,
 PIR count, topic freshness — actors/malware already alerted in the
-period rank lower, relevance, content depth as judged by the LLM
+period rank lower, LLM confidence (low ranks lower), relevance, novelty
+(new > update > known), content depth as judged by the LLM
 (analysis > report > news > opinion), intel richness (IOC/ATT&CK
 count), importance score, recency), with one article per story cluster,
 one per actor/malware topic, and at most 2 per category (caps lifted if
@@ -269,3 +270,21 @@ shown in that section but remain in the priority lists.
 Organization asset keywords are managed in `assets/inventory.yml`.
 When a Slack notification contains a matching product name or alias, the message is sent to `SLACK_WEBHOOK_URGENT`.
 If there is no match, each script uses its normal Slack webhook setting.
+
+Each asset may declare an optional `criticality: high|low` (default
+high — exposed/core assets). Active exploitation matching only
+low-criticality assets triages as P2 instead of P1, so internal or
+low-value assets do not page the urgent channel:
+
+```yaml
+  - name: Memoq
+    aliases: [Memoq, memoQ]
+    criticality: low
+```
+
+The LLM enrichment also extracts `affected_versions` and patch status
+(`fix_available`, `patch_info`) from articles; alerts show them as a
+"대응:" line (affected version range and available fix) so the
+"are we affected / is there a patch" decision can be made from the
+alert itself. Articles the LLM marks `confidence: low` receive a score
+penalty and rank lower in trend-reads.

@@ -254,9 +254,10 @@ def pick_trend_reads(events, exclude_ids):
     이미 다른 소스로 알림된 사건의 재보도와 noise로 라벨된 이벤트는 제외.
 
     정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 주제 반복
-    여부(이미 알림된 행위자·멀웨어 재탕은 후순위) → 관련성 → 콘텐츠 깊이
-    (심층 분석 > 보고서 > 단신 > 칼럼) → 인텔 풍부도(IOC·ATT&CK 수) →
-    중요도 점수 → 최신순. 중요도 점수는 긴급도 축 산물이라 동점 처리자로만
+    여부(이미 알림된 행위자·멀웨어 재탕은 후순위) → LLM 확신도(low 후순위)
+    → 관련성 → 신규성(new > update > known) → 콘텐츠 깊이(심층 분석 >
+    보고서 > 단신 > 칼럼) → 인텔 풍부도(IOC·ATT&CK 수) → 중요도 점수 →
+    최신순. 중요도 점수는 긴급도 축 산물이라 동점 처리자로만
     쓴다(점수 우선으로 두면 "알림 문턱에 가까웠던 기사"가 PIR에 정확히
     답하는 기사를 항상 밀어낸다).
 
@@ -283,8 +284,9 @@ def pick_trend_reads(events, exclude_ids):
             alerted_topics.update(event_topics(event))
             alerted_pirs.update(event.get("pirs") or [])
 
-    # 미판정(구 이벤트, enrichment 실패)은 2 — report와 news 사이에 둬서 불이익을 줄인다
+    # 미판정(구 이벤트, enrichment 실패)은 중간값 — 신규 필드가 없는 이벤트가 불이익을 받지 않게
     depth_rank = {"analysis": 0, "report": 1, "news": 3, "opinion": 4}
+    novelty_rank = {"new": 0, "update": 1, "known": 3}
 
     def insight_sort_key(event):
         weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
@@ -293,7 +295,9 @@ def pick_trend_reads(events, exclude_ids):
             -sum(1 for weight in weights if weight == "high"),
             -len(weights),
             1 if event_topics(event) & alerted_topics else 0,
+            1 if (event.get("confidence") or "") == "low" else 0,  # LLM 스스로 모호하다 한 판정은 후순위
             {"high": 0, "medium": 1}.get(event.get("relevance") or "", 2),
+            novelty_rank.get(event.get("novelty") or "", 2),
             depth_rank.get(event.get("content_depth") or "", 2),
             -intel_richness,
             -importance_score(event),
@@ -363,6 +367,8 @@ def pick_trend_reads(events, exclude_ids):
 def trend_bits(event):
     """동향 기사 한 줄에 붙일 근거 조각들 (기사 유형, PIR, 관련성, 중요도 점수)"""
     bits = []
+    if (event.get("novelty") or "") == "new":
+        bits.append("신규")
     depth_label = {"analysis": "심층 분석", "report": "보고서"}.get(event.get("content_depth") or "")
     if depth_label:
         bits.append(depth_label)

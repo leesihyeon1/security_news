@@ -201,14 +201,19 @@ def send_email(feed, articles):
     for idx, article in enumerate(articles, start=1):
         summary = alert_summary(article)
         tag = category_tag(article)
+        response = " · ".join(common_utils.enrichment_response_bits(article.get("enrichment")))
         text_lines.append("{}. {}{}".format(idx, tag, article["title"]))
         text_lines.append("요약: {}".format(summary))
+        if response:
+            text_lines.append("대응: {}".format(response))
         text_lines.append("링크: {}".format(article["link"]))
         text_lines.append("")
 
         html_parts.append("<hr>")
         html_parts.append("<h3>{}. {}{}</h3>".format(idx, html.escape(tag), html.escape(article["title"])))
         html_parts.append("<p>{}</p>".format(html.escape(summary)))
+        if response:
+            html_parts.append("<p><b>대응:</b> {}</p>".format(html.escape(response)))
         html_parts.append(
             '<p><a href="{0}">{0}</a></p>'.format(html.escape(article["link"]))
         )
@@ -230,18 +235,20 @@ def send_to_slack(feed, articles):
 
     for article in articles:
         triage = article.get("triage")
+        response = " · ".join(common_utils.enrichment_response_bits(article.get("enrichment")))
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        "{}{}*{}*{}\n\n{}\n\n<{}|기사 보기> · 중요도 {}점".format(
+                        "{}{}*{}*{}\n\n{}{}\n\n<{}|기사 보기> · 중요도 {}점".format(
                             common_utils.triage_marker(triage),
                             category_tag(article),
                             article["title"],
                             common_utils.triage_note(triage),
                             alert_summary(article),
+                            "\n🔧 {}".format(response) if response else "",
                             article["link"],
                             (article.get("importance") or {}).get("score", "-"),
                         )
@@ -431,8 +438,12 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
                 importance=article["importance"],
                 cluster=article["cluster"],
                 content_depth=enrichment.get("content_depth") or "",
+                novelty=enrichment.get("novelty") or "",
                 body_chars=len(article["body"] or ""),
                 recommended_actions=enrichment.get("recommended_actions"),
+                affected_versions=enrichment.get("affected_versions"),
+                fix_available=enrichment.get("fix_available"),
+                remediation=enrichment.get("patch_info") or "",
             )
         )
     common_utils.append_events(events)

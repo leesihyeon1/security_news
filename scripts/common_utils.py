@@ -80,30 +80,65 @@ def _parse_inline_list(value):
             items.append(item)
     return items
 
-def load_inventory_terms(inventory_file=None):
-    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
-    if not path.exists():
-        return []
+def _load_inventory_items(path):
+    """inventory.yml을 [{name, aliases, criticality}]로 파싱.
 
-    terms = []
-    current_name = ""
-
+    criticality: high(기본 — 노출·핵심 자산) | low(내부·저중요 자산).
+    low로 표시된 자산만 실악용 시 P1 대신 P2로 판정된다. 미지정은 high 취급이라
+    기존 인벤토리 파일은 동작이 바뀌지 않는다.
+    """
+    items = []
+    current = None
     try:
         with path.open("r", encoding="utf-8") as file:
             for raw_line in file:
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue
-
                 if line.startswith("- name:"):
-                    current_name = line.split(":", 1)[1].strip().strip("'\"")
-                    if current_name:
-                        terms.append(current_name)
-                elif line.startswith("aliases:"):
-                    aliases = _parse_inline_list(line.split(":", 1)[1])
-                    terms.extend(aliases)
+                    if current and current["name"]:
+                        items.append(current)
+                    current = {
+                        "name": line.split(":", 1)[1].strip().strip("'\""),
+                        "aliases": [],
+                        "criticality": "high",
+                    }
+                elif current is not None and line.startswith("aliases:"):
+                    current["aliases"] = _parse_inline_list(line.split(":", 1)[1])
+                elif current is not None and line.startswith("criticality:"):
+                    value = line.split(":", 1)[1].strip().strip("'\"").lower()
+                    if value in ("high", "low"):
+                        current["criticality"] = value
     except OSError:
         return []
+    if current and current["name"]:
+        items.append(current)
+    return items
+
+
+def inventory_criticality_map(inventory_file=None):
+    """정규화된 자산 용어(이름·별칭) → criticality 매핑"""
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    if not path.exists():
+        return {}
+    mapping = {}
+    for item in _load_inventory_items(path):
+        for term in [item["name"]] + item["aliases"]:
+            normalized = clean_text(term).lower()
+            if normalized:
+                mapping.setdefault(normalized, item["criticality"])
+    return mapping
+
+
+def load_inventory_terms(inventory_file=None):
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    if not path.exists():
+        return []
+
+    terms = []
+    for item in _load_inventory_items(path):
+        terms.append(item["name"])
+        terms.extend(item["aliases"])
 
     seen = set()
     unique_terms = []
@@ -425,10 +460,14 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
   "severity": "critical|high|medium|low|info 중 하나",
   "category": "취약점|악성코드|침해사고|개인정보유출|공격캠페인|공급망공격|피싱사기|정책규제|기술동향|제품행사|기타 중 하나",
   "affected_products": ["영향받는 제품·서비스명. 영문 공식 명칭으로 정규화 (예: Fortinet FortiGate, Apache Tomcat)"],
+  "affected_versions": ["영향받는 버전·버전 범위. 기사에 명시된 것만 (예: 7.2.0~7.2.4, 3.x 전체). 없으면 빈 배열"],
   "threat_actor": "언급된 공격 그룹명(영문 공식 명칭, 예: Lazarus). 없으면 빈 문자열",
   "malware_family": "언급된 악성코드·랜섬웨어 패밀리명(영문). 없으면 빈 문자열",
   "attack_techniques": ["기사에 서술된 공격 기법의 MITRE ATT&CK Enterprise 기법 ID (예: T1566, T1059.001). 기사 내용상 명확한 것만, 최대 5개. 불확실하면 빈 배열"],
   "exploitation": "기사가 보도 시점 기준으로 전하는 악용 상태: active(현재 실제 악용·공격 진행 중을 보도)|poc(공격 코드·PoC 공개까지만 보도)|none(그 외. 과거 사건 회고, 일반 동향, 연구 결과 소개는 none)",
+  "fix_available": "패치·수정본 상태: yes(패치 배포됨을 보도)|no(패치가 아직 없음이 명시됨)|unknown(언급 없음) 중 하나",
+  "patch_info": "패치 버전·완화책 한 줄 (예: 7.2.5로 업데이트, 워크어라운드로 SSL-VPN 비활성화). 없으면 빈 문자열",
+  "novelty": "정보의 새로움: new(새 위협·기법·캠페인의 최초 보도)|update(알려진 위협의 새 전개·변형)|known(기존에 알려진 내용의 정리·재보도) 중 하나",
 {pir_field}
   "relevance": "국내 IT·게임 기업 보안팀 관점의 중요도: high|medium|low 중 하나",
   "content_depth": "기사 유형: analysis(자체 조사·기술 분석을 담은 심층 분석)|report(보고서·통계·조사 결과 전달)|news(사건·발표 단신)|opinion(칼럼·의견) 중 하나",
@@ -459,6 +498,7 @@ ENRICH_CATEGORIES = (
 )
 ENRICH_RELEVANCES = ("high", "medium", "low")
 ENRICH_DEPTHS = ("analysis", "report", "news", "opinion")
+ENRICH_NOVELTIES = ("new", "update", "known")
 ENRICH_BODY_MAX_CHARS = 4000
 
 def _clean_str_list(value, limit):
@@ -503,13 +543,19 @@ def ai_enrich_article(title, body):
         confidence = str(data.get("confidence") or "").lower()
         exploitation = str(data.get("exploitation") or "").lower()
         content_depth = str(data.get("content_depth") or "").lower()
+        novelty = str(data.get("novelty") or "").lower()
+        fix_raw = str(data.get("fix_available") or "").lower()
         return {
             "summary": clean_text(data.get("summary"))[:500] or None,
             "severity": severity if severity in ENRICH_SEVERITIES else None,
             "exploitation": exploitation if exploitation in ("active", "poc", "none") else None,
             "content_depth": content_depth if content_depth in ENRICH_DEPTHS else None,
+            "novelty": novelty if novelty in ENRICH_NOVELTIES else None,
+            "fix_available": True if fix_raw == "yes" else (False if fix_raw == "no" else None),
+            "patch_info": clean_text(data.get("patch_info"))[:200] or None,
             "category": category if category in ENRICH_CATEGORIES else ("기타" if category else None),
             "affected_products": _clean_str_list(data.get("affected_products"), 10),
+            "affected_versions": _clean_str_list(data.get("affected_versions"), 10),
             "threat_actor": clean_text(data.get("threat_actor")) or None,
             "malware_family": clean_text(data.get("malware_family")) or None,
             "attack_techniques": validate_attack_techniques(data.get("attack_techniques")),
@@ -521,6 +567,23 @@ def ai_enrich_article(title, body):
     except Exception as error:
         print("[-] AI enrichment 실패: {}".format(error))
         return None
+
+def enrichment_response_bits(enrichment):
+    """알림 메시지에 붙일 대응 판단 정보 조각(영향 버전, 패치 상태). 없으면 빈 리스트."""
+    enrichment = enrichment or {}
+    bits = []
+    versions = enrichment.get("affected_versions") or []
+    if versions:
+        products = enrichment.get("affected_products") or []
+        prefix = "{} ".format(products[0]) if products else ""
+        bits.append("영향: {}{}".format(prefix, ", ".join(versions[:3])))
+    patch = enrichment.get("patch_info") or ""
+    fix = enrichment.get("fix_available")
+    if patch or fix is True:
+        bits.append("조치: {}".format(patch or "패치 배포됨"))
+    elif fix is False:
+        bits.append("조치: 패치 미출시 — 완화책 검토 필요")
+    return bits
 
 # ===== 긴급도 분류 (CISA SSVC 간소화: 악용 상태 → 자산 매칭 → 기술 영향) =====
 EPSS_API_URL = "https://api.first.org/data/v1/epss"
@@ -607,13 +670,18 @@ def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, 
         exploitation, basis = "poc", "keyword"
         reasons.append("PoC 공개 키워드")
 
-    # 결정점 2: 자사 자산 매칭
+    # 결정점 2: 자사 자산 매칭 (+ 자산 중요도 — low 자산만 매칭이면 P1 대신 P2)
     matched_assets = match_inventory_terms(match_values or [])
     if exclude_assets:
         excluded = {clean_text(term).lower() for term in exclude_assets}
         matched_assets = [term for term in matched_assets if clean_text(term).lower() not in excluded]
+    criticality_map = inventory_criticality_map() if matched_assets else {}
+    asset_high_value = any(
+        criticality_map.get(clean_text(term).lower(), "high") == "high" for term in matched_assets
+    )
     if matched_assets:
-        reasons.append("자사 자산 매칭({})".format(", ".join(matched_assets)))
+        note = "" if asset_high_value else " — 중요도 low"
+        reasons.append("자사 자산 매칭({}){}".format(", ".join(matched_assets), note))
 
     # 결정점 3: 기술 영향 (partial / total)
     impact = "partial"
@@ -629,11 +697,12 @@ def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, 
         reasons.append("고위험 유형(RCE/권한상승 등)")
 
     return {
-        "level": _urgency_level(exploitation, matched_assets, impact),
+        "level": _urgency_level(exploitation, matched_assets, impact, asset_high_value),
         "exploitation": exploitation,
         "exploitation_basis": basis,
         "impact": impact,
         "matched_assets": matched_assets,
+        "asset_high_value": asset_high_value,
         "epss": epss,
         "reasons": reasons,
     }
@@ -661,12 +730,19 @@ def refine_triage_with_enrichment(triage, enrichment):
     updated["exploitation"] = llm
     updated["exploitation_basis"] = "llm" if llm != "none" else "none"
     updated["reasons"] = reasons
-    updated["level"] = _urgency_level(llm, triage.get("matched_assets"), triage.get("impact"))
+    updated["level"] = _urgency_level(
+        llm, triage.get("matched_assets"), triage.get("impact"),
+        triage.get("asset_high_value", True),
+    )
     return updated
 
-def _urgency_level(exploitation, matched_assets, impact):
-    """SSVC 판정 매트릭스 — classify_urgency와 refine_triage_with_enrichment가 공유"""
-    if exploitation == "active" and matched_assets:
+def _urgency_level(exploitation, matched_assets, impact, asset_high_value=True):
+    """SSVC 판정 매트릭스 — classify_urgency와 refine_triage_with_enrichment가 공유.
+
+    asset_high_value: 매칭 자산 중 criticality high가 있는가. low 자산만
+    매칭된 실악용 건은 P1 대신 P2 (알림은 되지만 긴급 채널 승격 없음).
+    """
+    if exploitation == "active" and matched_assets and asset_high_value:
         return "P1"
     if exploitation == "active":
         return "P2"
@@ -749,6 +825,7 @@ IMPORTANCE_FEATURE_LABELS = {
     "category_제품행사": "분류 제품행사",
     "has_cve": "CVE 언급",
     "has_actor": "위협 그룹/악성코드 특정",
+    "confidence_low": "LLM 확신도 low",
     "reliability_a": "소스 신뢰도 A",
     "reliability_b": "소스 신뢰도 B",
     "reliability_c": "소스 신뢰도 C",
@@ -758,12 +835,13 @@ IMPORTANCE_FEATURE_LABELS = {
 
 def importance_features(exploitation="none", asset_matched=False, impact="", severity="",
                         relevance="", category="", has_cve=False, has_actor=False, reliability="",
-                        pir_ids=()):
+                        pir_ids=(), confidence=""):
     """중요도 판단에 쓰는 신호를 0/1 특징 벡터(dict)로 변환"""
     severity = str(severity or "").lower()
     relevance = str(relevance or "").lower()
     category = clean_text(category)
     reliability = str(reliability or "").strip().upper()
+    confidence = str(confidence or "").lower()
     pir_defs = load_pirs()
     pir_weights = {(pir_defs.get(pid) or {}).get("weight") for pid in (pir_ids or ())}
     features = {
@@ -780,6 +858,7 @@ def importance_features(exploitation="none", asset_matched=False, impact="", sev
         "relevance_medium": relevance == "medium",
         "has_cve": bool(has_cve),
         "has_actor": bool(has_actor),
+        "confidence_low": confidence == "low",
         "reliability_a": reliability == "A",
         "reliability_b": reliability == "B",
         "reliability_c": reliability == "C",
@@ -893,6 +972,9 @@ def _collect_risk_rules(triage, enrichment, cves):
         criticality = "moderate" if pir["weight"] == "high" else "info"
         add("pir_{}".format(pid.lower()), criticality, "PIR 매칭 {}".format(pid), pir["question"][:40])
 
+    if str(enrichment.get("confidence") or "").lower() == "low":
+        add("confidence_low", "penalty", "LLM 확신도 low")
+
     return rules
 
 def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
@@ -924,6 +1006,7 @@ def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
             has_actor=bool(enrichment.get("threat_actor") or enrichment.get("malware_family")),
             reliability=normalized_reliability or "",
             pir_ids=enrichment.get("pirs") or (),
+            confidence=enrichment.get("confidence") or "",
         )
         return _score_with_learned(features, learned, normalized_reliability)
 
@@ -1157,7 +1240,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                references=None, fix_available=None, remediation="", due_date="",
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
                cluster=None, pirs=None, content_depth="", body_chars=None,
-               recommended_actions=None):
+               recommended_actions=None, affected_versions=None, novelty=""):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -1193,6 +1276,8 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "iocs": [ioc for ioc in (iocs or []) if ioc],
         "relevance": clean_text(relevance).lower(),
         "content_depth": clean_text(content_depth).lower(),
+        "novelty": clean_text(novelty).lower(),
+        "affected_versions": _clean_str_list(affected_versions or [], 10),
         "body_chars": body_chars,
         "recommended_actions": _clean_str_list(recommended_actions or [], 3),
         "references": [r for r in (references or []) if r],

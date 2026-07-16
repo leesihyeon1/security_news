@@ -46,6 +46,7 @@ def features_from_event(event):
         has_actor=bool(event.get("threat_actor") or event.get("malware_family")),
         reliability=(event.get("importance") or {}).get("reliability") or "",
         pir_ids=event.get("pirs") or (),
+        confidence=event.get("confidence") or "",
     )
 
 

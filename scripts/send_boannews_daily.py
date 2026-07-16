@@ -246,9 +246,12 @@ def build_email_body(news_items):
     for idx, news in enumerate(news_items, start=1):
         summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
         score = (news.get("importance") or {}).get("score")
+        response = " · ".join(common_utils.enrichment_response_bits(news.get("enrichment")))
 
         text_body += "{}. {}\n".format(idx, news["title"])
         text_body += "요약: {}\n".format(summary)
+        if response:
+            text_body += "대응: {}\n".format(response)
         if score is not None:
             text_body += "중요도: {}점\n".format(score)
         text_body += "기사 링크: {}\n".format(news["link"])
@@ -298,6 +301,8 @@ def send_to_slack(news_items):
 
     for news in news_items:
         ai_summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
+        response = " · ".join(common_utils.enrichment_response_bits(news.get("enrichment")))
+        response_line = f"\n🔧 {response}" if response else ""
 
         triage = news.get("triage")
         blocks.append({
@@ -306,7 +311,7 @@ def send_to_slack(news_items):
                 "type": "mrkdwn",
                 "text":
                     f"{common_utils.triage_marker(triage)}📰 *{news['title']}*\n\n"
-                    f"{ai_summary}{common_utils.triage_note(triage)}\n\n"
+                    f"{ai_summary}{common_utils.triage_note(triage)}{response_line}\n\n"
                     f"<{news['link']}|기사 보기> · 중요도 {(news.get('importance') or {}).get('score', '-')}점"
                 }
     })
@@ -457,8 +462,12 @@ def main():
                 importance=article.get("importance"),
                 cluster=article["cluster"],
                 content_depth=enrichment.get("content_depth") or "",
+                novelty=enrichment.get("novelty") or "",
                 body_chars=len(article.get("body") or ""),
                 recommended_actions=enrichment.get("recommended_actions"),
+                affected_versions=enrichment.get("affected_versions"),
+                fix_available=enrichment.get("fix_available"),
+                remediation=enrichment.get("patch_info") or "",
             )
         )
     common_utils.append_events(unified_events)
