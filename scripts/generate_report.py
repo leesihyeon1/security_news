@@ -63,6 +63,7 @@ NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
 # "읽을만한 동향" 큐레이션: 긴급도 점수가 낮아 알림되지 않은 기사 중
 # 인사이트 신호(PIR 매칭, 또는 high 관련성의 위협 분석 기사)가 있는 것을 고른다.
 MAX_TREND_ITEMS = 5
+MAX_TREND_PER_CATEGORY = 2  # 카테고리 쏠림 방지 (슬롯이 남으면 상한 해제)
 TREND_CATEGORIES = {"공격캠페인", "침해사고", "개인정보유출", "악성코드", "공급망공격", "기술동향"}
 
 
@@ -246,21 +247,36 @@ def importance_score(event):
 def pick_trend_reads(events, exclude_ids):
     """알림 문턱을 못 넘었지만 읽을 가치가 있는 동향 기사 큐레이션.
 
-    긴급도(악용·자산) 축과 별개로 '읽을 가치' 축을 보완한다:
-    미알림 뉴스 중 PIR에 답하거나, 관련성 high인 위협 분석·동향 기사를 뽑는다.
+    긴급도(악용·자산) 축과 별개로 '읽을 가치' 축을 보완한다.
 
-    정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 중요도 점수.
-    중요도 점수는 긴급도 축 산물이라 동점 처리자로만 쓴다(점수 우선으로 두면
-    "알림 문턱에 가까웠던 기사"가 PIR에 정확히 답하는 기사를 항상 밀어낸다).
+    후보: 미알림·미노출 뉴스 중 ①PIR에 답하거나 ②관련성 high인 위협/동향
+    기사 ③신뢰도 B(자체 텔레메트리 벤더 리서치) 소스의 관련성 medium 분석.
+    이미 다른 소스로 알림된 사건의 재보도와 noise로 라벨된 이벤트는 제외.
+
+    정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 관련성 →
+    중요도 점수 → 최신순. 중요도 점수는 긴급도 축 산물이라 동점 처리자로만
+    쓴다(점수 우선으로 두면 "알림 문턱에 가까웠던 기사"가 PIR에 정확히
+    답하는 기사를 항상 밀어낸다).
+
+    선택은 그리디 — 새 PIR을 커버하는 기사를 먼저 뽑아 서로 다른 정보
+    요구에 넓게 답하게 하고, 남은 슬롯을 정렬순으로 채운다. 같은 사건
+    (클러스터)은 1건만, 카테고리당 최대 MAX_TREND_PER_CATEGORY건.
     """
     pir_defs = common_utils.load_pirs()
+    feedback = common_utils.load_feedback()
+
+    def published_ts(event):
+        parsed = parse_iso(event.get("published_at"))
+        return parsed.timestamp() if parsed else 0.0
 
     def insight_sort_key(event):
         weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
         return (
             -sum(1 for weight in weights if weight == "high"),
             -len(weights),
+            {"high": 0, "medium": 1}.get(event.get("relevance") or "", 2),
             -importance_score(event),
+            -published_ts(event),
         )
 
     candidates = []
@@ -271,14 +287,48 @@ def pick_trend_reads(events, exclude_ids):
             continue
         if event_alerted(event):
             continue
+        if (event.get("cluster") or {}).get("already_alerted"):
+            continue  # 다른 소스로 이미 알림된 사건의 재보도
+        if (feedback.get(event.get("id")) or {}).get("label") == "noise":
+            continue
+        relevance = event.get("relevance") or ""
+        reliability = (event.get("importance") or {}).get("reliability") or ""
         has_insight = bool(event.get("pirs")) or (
-            (event.get("relevance") or "") == "high"
-            and (event.get("category") or "") in TREND_CATEGORIES
+            (event.get("category") or "") in TREND_CATEGORIES
+            and (relevance == "high" or (relevance == "medium" and reliability == "B"))
         )
         if has_insight:
             candidates.append(event)
     candidates.sort(key=insight_sort_key)
-    return candidates[:MAX_TREND_ITEMS]
+
+    picked, picked_ids, picked_related = [], set(), set()
+    category_counts = Counter()
+    covered_pirs = set()
+
+    def try_pick(event, require_new_pir, enforce_cap):
+        if len(picked) >= MAX_TREND_ITEMS or event.get("id") in picked_ids:
+            return
+        related = set((event.get("cluster") or {}).get("related_ids") or [])
+        if event.get("id") in picked_related or related & picked_ids:
+            return  # 이미 뽑힌 기사와 같은 사건
+        category = event.get("category") or "기타"
+        if enforce_cap and category_counts[category] >= MAX_TREND_PER_CATEGORY:
+            return
+        new_pirs = set(event.get("pirs") or []) - covered_pirs
+        if require_new_pir and not new_pirs:
+            return
+        picked.append(event)
+        picked_ids.add(event.get("id"))
+        picked_related.update(related)
+        category_counts[category] += 1
+        covered_pirs.update(new_pirs)
+
+    # 1차: 새 PIR 커버 우선 / 2차: 정렬순 충원 / 3차: 슬롯이 남으면 카테고리 상한 해제
+    for require_new_pir, enforce_cap in ((True, True), (False, True), (False, False)):
+        for event in candidates:
+            try_pick(event, require_new_pir, enforce_cap)
+
+    return picked
 
 
 def trend_bits(event):

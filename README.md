@@ -77,6 +77,21 @@ python scripts\generate_report.py --period weekly --dry-run
 
 If the LLM is unavailable, the report is still sent with statistics only.
 
+### Trend reads (curated recommendations)
+
+Reports include a "읽을만한 동향" section: articles that did not meet the
+alert threshold but are worth reading. Candidates are non-alerted news
+that answer a PIR, or high-relevance threat/trend articles, or
+medium-relevance analysis from reliability-B sources (vendor research
+with own telemetry). Re-reports of stories already alerted via another
+source (cluster match) and events labeled noise via feedback are
+excluded. Selection is greedy: articles covering not-yet-covered PIRs
+are picked first (breadth across intelligence requirements over depth
+on one), then remaining slots fill by insight order (PIR-high matches,
+PIR count, relevance, importance score, recency), with one article per
+story cluster and at most 2 per category (cap lifted if slots remain).
+Each item carries a hash for `feedback.py` labeling.
+
 ## LLM Provider
 
 All LLM calls (article enrichment, summaries, report narrative) go through
