@@ -366,6 +366,8 @@ def main():
         for technique in news["enrichment"].get("attack_techniques") or []:
             if technique not in news["attack_techniques"]:
                 news["attack_techniques"].append(technique)
+        # LLM 악용 판정으로 키워드 기반 트리아지를 보정 (회고성 기사 하향, 표현 변형 상향)
+        news["triage"] = common_utils.refine_triage_with_enrichment(news["triage"], news["enrichment"])
         news["importance"] = common_utils.score_importance(
             triage=news["triage"], enrichment=news["enrichment"],
             cves=news["extracted_cves"], reliability=BOANNEWS_RELIABILITY,

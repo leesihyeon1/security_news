@@ -428,6 +428,7 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
   "threat_actor": "언급된 공격 그룹명(영문 공식 명칭, 예: Lazarus). 없으면 빈 문자열",
   "malware_family": "언급된 악성코드·랜섬웨어 패밀리명(영문). 없으면 빈 문자열",
   "attack_techniques": ["기사에 서술된 공격 기법의 MITRE ATT&CK Enterprise 기법 ID (예: T1566, T1059.001). 기사 내용상 명확한 것만, 최대 5개. 불확실하면 빈 배열"],
+  "exploitation": "기사가 보도 시점 기준으로 전하는 악용 상태: active(현재 실제 악용·공격 진행 중을 보도)|poc(공격 코드·PoC 공개까지만 보도)|none(그 외. 과거 사건 회고, 일반 동향, 연구 결과 소개는 none)",
 {pir_field}
   "relevance": "국내 IT·게임 기업 보안팀 관점의 중요도: high|medium|low 중 하나",
   "confidence": "위 분석에 대한 확신도: high|medium|low 중 하나 (기사 정보가 모호하면 low)",
@@ -487,9 +488,11 @@ def ai_enrich_article(title, body):
         category = clean_text(data.get("category"))
         relevance = str(data.get("relevance") or "").lower()
         confidence = str(data.get("confidence") or "").lower()
+        exploitation = str(data.get("exploitation") or "").lower()
         return {
             "summary": clean_text(data.get("summary"))[:500] or None,
             "severity": severity if severity in ENRICH_SEVERITIES else None,
+            "exploitation": exploitation if exploitation in ("active", "poc", "none") else None,
             "category": category if category in ENRICH_CATEGORIES else ("기타" if category else None),
             "affected_products": _clean_str_list(data.get("affected_products"), 10),
             "threat_actor": clean_text(data.get("threat_actor")) or None,
@@ -512,10 +515,12 @@ EPSS_ACTIVE_THRESHOLD = float(os.environ.get("EPSS_ACTIVE_THRESHOLD", "0.5"))
 EXPLOIT_ACTIVE_KEYWORDS = [
     "actively exploited", "exploitation detected", "exploited in the wild",
     "in the wild", "known exploited", "제로데이 공격", "실제 악용", "악용 확인",
+    "악용 사례", "악용되고", "실제 공격", "공격 확산", "유포 중",
 ]
 EXPLOIT_POC_KEYWORDS = [
     "proof of concept", "proof-of-concept", "poc released", "poc 공개",
     "exploit code", "exploit available", "metasploit", "공격 코드 공개",
+    "익스플로잇 공개",
 ]
 TOTAL_IMPACT_KEYWORDS = [
     "remote code execution", "원격 코드 실행", "원격코드실행",
@@ -560,28 +565,31 @@ def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, 
     text = " ".join(clean_text(value).lower() for value in (match_values or []) if value is not None)
     reasons = []
 
-    # 결정점 1: 악용 상태 (none / poc / active)
+    # 결정점 1: 악용 상태 (none / poc / active).
+    # basis는 판정 근거 구분 — fact(KEV/MSRC/EPSS/공식 플래그)는 LLM 판정으로도
+    # 뒤집히지 않고, keyword는 refine_triage_with_enrichment에서 LLM 판정이 대체한다.
     exploitation = "none"
+    basis = "none"
     if kev:
-        exploitation = "active"
+        exploitation, basis = "active", "fact"
         reasons.append("실제 악용 확인(CISA KEV)")
     elif exploited:
-        exploitation = "active"
+        exploitation, basis = "active", "fact"
         reasons.append("실제 악용 확인(MSRC)")
     elif any(keyword in text for keyword in EXPLOIT_ACTIVE_KEYWORDS):
-        exploitation = "active"
+        exploitation, basis = "active", "keyword"
         reasons.append("악용 정황 키워드")
     elif epss is not None and epss >= EPSS_ACTIVE_THRESHOLD:
-        exploitation = "active"
+        exploitation, basis = "active", "fact"
         reasons.append("악용 확률 높음(EPSS {:.0%})".format(epss))
     elif poc_public:
-        exploitation = "poc"
+        exploitation, basis = "poc", "fact"
         reasons.append("공격 코드 공개")
     elif epss is not None and epss >= EPSS_POC_THRESHOLD:
-        exploitation = "poc"
+        exploitation, basis = "poc", "fact"
         reasons.append("악용 확률 주의(EPSS {:.0%})".format(epss))
     elif any(keyword in text for keyword in EXPLOIT_POC_KEYWORDS):
-        exploitation = "poc"
+        exploitation, basis = "poc", "keyword"
         reasons.append("PoC 공개 키워드")
 
     # 결정점 2: 자사 자산 매칭
@@ -605,24 +613,51 @@ def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, 
         impact = "total"
         reasons.append("고위험 유형(RCE/권한상승 등)")
 
-    # 판정 매트릭스
-    if exploitation == "active" and matched_assets:
-        level = "P1"
-    elif exploitation == "active":
-        level = "P2"
-    elif matched_assets and (exploitation == "poc" or impact == "total"):
-        level = "P2"
-    else:
-        level = "P3"
-
     return {
-        "level": level,
+        "level": _urgency_level(exploitation, matched_assets, impact),
         "exploitation": exploitation,
+        "exploitation_basis": basis,
         "impact": impact,
         "matched_assets": matched_assets,
         "epss": epss,
         "reasons": reasons,
     }
+
+def refine_triage_with_enrichment(triage, enrichment):
+    """LLM 악용 판정(enrichment.exploitation)을 반영해 갱신된 트리아지를 반환.
+
+    사실 신호(KEV/MSRC/EPSS/공식 PoC 플래그) 판정은 유지한다. 키워드 판정은
+    문맥을 모르므로(과거 사건 회고 기사도 매칭) LLM 판정이 있으면 상향·하향
+    모두 LLM을 따르고, LLM 판정이 없으면(실패 등) 키워드 판정이 폴백으로 남는다.
+    """
+    triage = triage or {}
+    llm = str((enrichment or {}).get("exploitation") or "").lower()
+    if llm not in ("active", "poc", "none"):
+        return triage
+    if triage.get("exploitation_basis") == "fact" or llm == triage.get("exploitation"):
+        return triage
+
+    updated = dict(triage)
+    reasons = [r for r in (triage.get("reasons") or []) if r not in ("악용 정황 키워드", "PoC 공개 키워드")]
+    if llm != "none":
+        reasons.insert(0, "악용 정황(LLM 판정: {})".format(llm))
+    elif triage.get("exploitation") != "none":
+        reasons.append("키워드 악용 신호를 LLM이 비진행형(회고·동향)으로 판정 — 하향")
+    updated["exploitation"] = llm
+    updated["exploitation_basis"] = "llm" if llm != "none" else "none"
+    updated["reasons"] = reasons
+    updated["level"] = _urgency_level(llm, triage.get("matched_assets"), triage.get("impact"))
+    return updated
+
+def _urgency_level(exploitation, matched_assets, impact):
+    """SSVC 판정 매트릭스 — classify_urgency와 refine_triage_with_enrichment가 공유"""
+    if exploitation == "active" and matched_assets:
+        return "P1"
+    if exploitation == "active":
+        return "P2"
+    if matched_assets and (exploitation == "poc" or impact == "total"):
+        return "P2"
+    return "P3"
 
 # ===== 피드백 라벨 (알림 유용성 학습용 — feedback.py / slack_feedback_poller.py가 기록) =====
 def event_ref(event_id):
@@ -657,7 +692,10 @@ def append_feedback(records, feedback_file=None):
 
 # ===== 중요도 스코어링 (뉴스 소스 확대에 따른 알림 필터링) =====
 # 점수 미달 기사는 즉시 알림을 생략하고 events.jsonl에만 적재해 일간 리포트에서 다룬다.
-IMPORTANCE_ALERT_THRESHOLD = int(os.environ.get("NEWS_ALERT_MIN_SCORE", "50"))
+# 기본 45: Moderate 밴드 상한(64)에 신뢰도 C 배수(x0.75)가 적용되면 48이 되므로,
+# 50이면 C 소스는 점수로 알림이 불가능해진다. 45는 "Moderate 상단을 채운 C 소스
+# 기사"를 알림 경계에 둔다.
+IMPORTANCE_ALERT_THRESHOLD = int(os.environ.get("NEWS_ALERT_MIN_SCORE", "45"))
 
 # Recorded Future식 밴드 스코어링: 가장 강한 규칙이 밴드(하한~상한)를 결정하고,
 # 나머지 규칙은 밴드 안에서 점수를 밀어올린다. 약한 신호가 아무리 쌓여도

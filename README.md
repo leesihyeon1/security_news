@@ -102,8 +102,13 @@ Runtime outputs are intentionally ignored by Git:
 `scripts/rss_collector.py` scores every article 0-100 by combining triage
 signals (exploitation status, asset match, impact) with LLM enrichment
 (severity, relevance, category). Articles below `NEWS_ALERT_MIN_SCORE`
-(default 50) are stored in `data/events.jsonl` for the daily report but do
+(default 45) are stored in `data/events.jsonl` for the daily report but do
 not trigger immediate email/Slack alerts. P1/P2 triage always alerts.
+The LLM also judges the exploitation status reported by the article
+(active/poc/none); this overrides keyword-based triage in both directions
+(a retrospective mention of past exploitation is downgraded, Korean
+phrasing variants missed by keywords are upgraded), while fact-based
+signals (CISA KEV, MSRC, EPSS) are never overridden.
 
 Scoring is band-based (Recorded Future style): the strongest triggered
 rule sets the band — High 65-100 (active exploitation), Moderate 30-64

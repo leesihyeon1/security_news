@@ -247,9 +247,22 @@ def pick_trend_reads(events, exclude_ids):
     """알림 문턱을 못 넘었지만 읽을 가치가 있는 동향 기사 큐레이션.
 
     긴급도(악용·자산) 축과 별개로 '읽을 가치' 축을 보완한다:
-    미알림 뉴스 중 PIR에 답하거나, 관련성 high인 위협 분석·동향 기사를
-    중요도 점수 순으로 상위 N건 뽑는다.
+    미알림 뉴스 중 PIR에 답하거나, 관련성 high인 위협 분석·동향 기사를 뽑는다.
+
+    정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 중요도 점수.
+    중요도 점수는 긴급도 축 산물이라 동점 처리자로만 쓴다(점수 우선으로 두면
+    "알림 문턱에 가까웠던 기사"가 PIR에 정확히 답하는 기사를 항상 밀어낸다).
     """
+    pir_defs = common_utils.load_pirs()
+
+    def insight_sort_key(event):
+        weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
+        return (
+            -sum(1 for weight in weights if weight == "high"),
+            -len(weights),
+            -importance_score(event),
+        )
+
     candidates = []
     for event in events:
         if event.get("id") in exclude_ids:
@@ -264,7 +277,7 @@ def pick_trend_reads(events, exclude_ids):
         )
         if has_insight:
             candidates.append(event)
-    candidates.sort(key=lambda e: (-importance_score(e), -len(e.get("pirs") or [])))
+    candidates.sort(key=insight_sort_key)
     return candidates[:MAX_TREND_ITEMS]
 
 
@@ -938,16 +951,27 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
         for event in trend_reads:
             bits = trend_bits(event)
             suffix = " _({})_".format(" · ".join(bits)) if bits else ""
-            trend_lines.append("• [{}] <{}|{}>{}".format(
+            # 해시는 feedback.py 라벨링용 식별자. 의도적으로 `ref:` 접두사를 뺐다 —
+            # 슬랙 폴러가 ref: 패턴을 메시지 단위로 매칭하므로, 리포트 메시지에 단 반응
+            # 하나가 트렌드 기사 전체에 동일 라벨로 번지는 오염을 막는다.
+            trend_lines.append("• [{}] <{}|{}>{} `{}`".format(
                 source_label(event.get("source")),
                 event.get("url") or "#",
                 (event.get("title") or "(제목 없음)")[:100],
                 suffix,
+                common_utils.event_ref(event.get("id") or ""),
             ))
         blocks.append({"type": "divider"})
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": "📖 *읽을만한 동향 — 알림 외 주목 기사*\n" + "\n".join(trend_lines)},
+        })
+        blocks.append({
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": "추천이 유용/노이즈였는지 `python scripts\\feedback.py --useful(--noise) <해시>`로 라벨링하면 큐레이션·중요도 학습에 반영됩니다.",
+            }],
         })
 
     if categorized:

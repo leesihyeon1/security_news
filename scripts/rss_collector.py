@@ -4,7 +4,7 @@
 (신규 선별 → 본문 수집 → CVE·IOC·ATT&CK 추출 → EPSS 트리아지 → LLM enrichment
 → 중요도 스코어링 → 메일·슬랙 발송 → events.jsonl 적재)은 이 스크립트 하나가 담당한다.
 
-중요도 스코어(0~100)가 임계값(NEWS_ALERT_MIN_SCORE, 기본 50) 미만인 기사는
+중요도 스코어(0~100)가 임계값(NEWS_ALERT_MIN_SCORE, 기본 45) 미만인 기사는
 즉시 알림을 생략하고 events.jsonl에만 적재해 일간 리포트에서 다룬다.
 P1/P2 트리아지는 점수와 무관하게 항상 알림된다. 피드별 min_score로 조정 가능.
 RSS 2.0과 Atom 피드를 모두 지원한다.
@@ -349,6 +349,8 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
         for technique in article["enrichment"].get("attack_techniques") or []:
             if technique not in article["attack_techniques"]:
                 article["attack_techniques"].append(technique)
+        # LLM 악용 판정으로 키워드 기반 트리아지를 보정 (회고성 기사 하향, 표현 변형 상향)
+        article["triage"] = common_utils.refine_triage_with_enrichment(article["triage"], article["enrichment"])
         article["importance"] = common_utils.score_importance(
             triage=article["triage"], enrichment=article["enrichment"], cves=article["cves"],
             reliability=feed.get("reliability"),
