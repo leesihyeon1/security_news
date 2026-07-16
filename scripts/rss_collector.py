@@ -430,6 +430,9 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
                 triage=article["triage"],
                 importance=article["importance"],
                 cluster=article["cluster"],
+                content_depth=enrichment.get("content_depth") or "",
+                body_chars=len(article["body"] or ""),
+                recommended_actions=enrichment.get("recommended_actions"),
             )
         )
     common_utils.append_events(events)

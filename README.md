@@ -88,9 +88,12 @@ source (cluster match) and events labeled noise via feedback are
 excluded. Selection is greedy: articles covering not-yet-covered PIRs
 are picked first (breadth across intelligence requirements over depth
 on one), then remaining slots fill by insight order (PIR-high matches,
-PIR count, relevance, importance score, recency), with one article per
-story cluster and at most 2 per category (cap lifted if slots remain).
-Each item carries a hash for `feedback.py` labeling.
+PIR count, topic freshness — actors/malware already alerted in the
+period rank lower, relevance, content depth as judged by the LLM
+(analysis > report > news > opinion), intel richness (IOC/ATT&CK
+count), importance score, recency), with one article per story cluster,
+one per actor/malware topic, and at most 2 per category (caps lifted if
+slots remain). Each item carries a hash for `feedback.py` labeling.
 
 ## LLM Provider
 

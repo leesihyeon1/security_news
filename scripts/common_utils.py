@@ -431,6 +431,7 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
   "exploitation": "기사가 보도 시점 기준으로 전하는 악용 상태: active(현재 실제 악용·공격 진행 중을 보도)|poc(공격 코드·PoC 공개까지만 보도)|none(그 외. 과거 사건 회고, 일반 동향, 연구 결과 소개는 none)",
 {pir_field}
   "relevance": "국내 IT·게임 기업 보안팀 관점의 중요도: high|medium|low 중 하나",
+  "content_depth": "기사 유형: analysis(자체 조사·기술 분석을 담은 심층 분석)|report(보고서·통계·조사 결과 전달)|news(사건·발표 단신)|opinion(칼럼·의견) 중 하나",
   "confidence": "위 분석에 대한 확신도: high|medium|low 중 하나 (기사 정보가 모호하면 low)",
   "recommended_actions": ["보안담당자 권고 조치(최대 3개)"]}}
 
@@ -457,6 +458,7 @@ ENRICH_CATEGORIES = (
     "피싱사기", "정책규제", "기술동향", "제품행사", "기타",
 )
 ENRICH_RELEVANCES = ("high", "medium", "low")
+ENRICH_DEPTHS = ("analysis", "report", "news", "opinion")
 ENRICH_BODY_MAX_CHARS = 4000
 
 def _clean_str_list(value, limit):
@@ -500,10 +502,12 @@ def ai_enrich_article(title, body):
         relevance = str(data.get("relevance") or "").lower()
         confidence = str(data.get("confidence") or "").lower()
         exploitation = str(data.get("exploitation") or "").lower()
+        content_depth = str(data.get("content_depth") or "").lower()
         return {
             "summary": clean_text(data.get("summary"))[:500] or None,
             "severity": severity if severity in ENRICH_SEVERITIES else None,
             "exploitation": exploitation if exploitation in ("active", "poc", "none") else None,
+            "content_depth": content_depth if content_depth in ENRICH_DEPTHS else None,
             "category": category if category in ENRICH_CATEGORIES else ("기타" if category else None),
             "affected_products": _clean_str_list(data.get("affected_products"), 10),
             "threat_actor": clean_text(data.get("threat_actor")) or None,
@@ -1152,7 +1156,8 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                threat_actor="", malware_family="", kev=False, iocs=None, relevance="",
                references=None, fix_available=None, remediation="", due_date="",
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
-               cluster=None, pirs=None):
+               cluster=None, pirs=None, content_depth="", body_chars=None,
+               recommended_actions=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -1187,6 +1192,9 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "pirs": [p for p in (pirs or []) if p],
         "iocs": [ioc for ioc in (iocs or []) if ioc],
         "relevance": clean_text(relevance).lower(),
+        "content_depth": clean_text(content_depth).lower(),
+        "body_chars": body_chars,
+        "recommended_actions": _clean_str_list(recommended_actions or [], 3),
         "references": [r for r in (references or []) if r],
         "fix_available": fix_available,
         "remediation": clean_text(remediation),

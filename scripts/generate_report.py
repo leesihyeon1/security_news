@@ -253,14 +253,17 @@ def pick_trend_reads(events, exclude_ids):
     기사 ③신뢰도 B(자체 텔레메트리 벤더 리서치) 소스의 관련성 medium 분석.
     이미 다른 소스로 알림된 사건의 재보도와 noise로 라벨된 이벤트는 제외.
 
-    정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 관련성 →
+    정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 주제 반복
+    여부(이미 알림된 행위자·멀웨어 재탕은 후순위) → 관련성 → 콘텐츠 깊이
+    (심층 분석 > 보고서 > 단신 > 칼럼) → 인텔 풍부도(IOC·ATT&CK 수) →
     중요도 점수 → 최신순. 중요도 점수는 긴급도 축 산물이라 동점 처리자로만
     쓴다(점수 우선으로 두면 "알림 문턱에 가까웠던 기사"가 PIR에 정확히
     답하는 기사를 항상 밀어낸다).
 
     선택은 그리디 — 새 PIR을 커버하는 기사를 먼저 뽑아 서로 다른 정보
     요구에 넓게 답하게 하고, 남은 슬롯을 정렬순으로 채운다. 같은 사건
-    (클러스터)은 1건만, 카테고리당 최대 MAX_TREND_PER_CATEGORY건.
+    (클러스터)·같은 행위자/멀웨어 주제는 1건만, 카테고리당 최대
+    MAX_TREND_PER_CATEGORY건 (슬롯이 남으면 상한 해제).
     """
     pir_defs = common_utils.load_pirs()
     feedback = common_utils.load_feedback()
@@ -269,12 +272,27 @@ def pick_trend_reads(events, exclude_ids):
         parsed = parse_iso(event.get("published_at"))
         return parsed.timestamp() if parsed else 0.0
 
+    def event_topics(event):
+        return {str(value).lower() for value in (event.get("threat_actor"), event.get("malware_family")) if value}
+
+    alerted_topics = set()
+    for event in events:
+        if event_alerted(event):
+            alerted_topics.update(event_topics(event))
+
+    # 미판정(구 이벤트, enrichment 실패)은 2 — report와 news 사이에 둬서 불이익을 줄인다
+    depth_rank = {"analysis": 0, "report": 1, "news": 3, "opinion": 4}
+
     def insight_sort_key(event):
         weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
+        intel_richness = min(len(event.get("iocs") or []) + len(event.get("attack_techniques") or []), 10)
         return (
             -sum(1 for weight in weights if weight == "high"),
             -len(weights),
+            1 if event_topics(event) & alerted_topics else 0,
             {"high": 0, "medium": 1}.get(event.get("relevance") or "", 2),
+            depth_rank.get(event.get("content_depth") or "", 2),
+            -intel_richness,
             -importance_score(event),
             -published_ts(event),
         )
@@ -301,7 +319,7 @@ def pick_trend_reads(events, exclude_ids):
             candidates.append(event)
     candidates.sort(key=insight_sort_key)
 
-    picked, picked_ids, picked_related = [], set(), set()
+    picked, picked_ids, picked_related, picked_topics = [], set(), set(), set()
     category_counts = Counter()
     covered_pirs = set()
 
@@ -311,15 +329,18 @@ def pick_trend_reads(events, exclude_ids):
         related = set((event.get("cluster") or {}).get("related_ids") or [])
         if event.get("id") in picked_related or related & picked_ids:
             return  # 이미 뽑힌 기사와 같은 사건
+        topics = event_topics(event)
         category = event.get("category") or "기타"
-        if enforce_cap and category_counts[category] >= MAX_TREND_PER_CATEGORY:
-            return
+        if enforce_cap and (category_counts[category] >= MAX_TREND_PER_CATEGORY
+                            or topics & picked_topics):
+            return  # 카테고리 쏠림 / 같은 행위자·멀웨어 주제 반복 방지 (슬롯 남으면 해제)
         new_pirs = set(event.get("pirs") or []) - covered_pirs
         if require_new_pir and not new_pirs:
             return
         picked.append(event)
         picked_ids.add(event.get("id"))
         picked_related.update(related)
+        picked_topics.update(topics)
         category_counts[category] += 1
         covered_pirs.update(new_pirs)
 
@@ -332,8 +353,11 @@ def pick_trend_reads(events, exclude_ids):
 
 
 def trend_bits(event):
-    """동향 기사 한 줄에 붙일 근거 조각들 (PIR, 관련성, 중요도 점수)"""
+    """동향 기사 한 줄에 붙일 근거 조각들 (기사 유형, PIR, 관련성, 중요도 점수)"""
     bits = []
+    depth_label = {"analysis": "심층 분석", "report": "보고서"}.get(event.get("content_depth") or "")
+    if depth_label:
+        bits.append(depth_label)
     if event.get("pirs"):
         bits.append(", ".join(event["pirs"]))
     if event.get("relevance") == "high":

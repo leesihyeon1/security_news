@@ -456,6 +456,9 @@ def main():
                 triage=article.get("triage"),
                 importance=article.get("importance"),
                 cluster=article["cluster"],
+                content_depth=enrichment.get("content_depth") or "",
+                body_chars=len(article.get("body") or ""),
+                recommended_actions=enrichment.get("recommended_actions"),
             )
         )
     common_utils.append_events(unified_events)
