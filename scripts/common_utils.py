@@ -423,7 +423,7 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
 형식:
 {{"summary": "핵심 내용 3문장 이내 요약(한국어)",
   "severity": "critical|high|medium|low|info 중 하나",
-  "category": "취약점|악성코드|침해사고|공격캠페인|정책규제|제품행사|기타 중 하나",
+  "category": "취약점|악성코드|침해사고|개인정보유출|공격캠페인|공급망공격|피싱사기|정책규제|기술동향|제품행사|기타 중 하나",
   "affected_products": ["영향받는 제품·서비스명. 영문 공식 명칭으로 정규화 (예: Fortinet FortiGate, Apache Tomcat)"],
   "threat_actor": "언급된 공격 그룹명(영문 공식 명칭, 예: Lazarus). 없으면 빈 문자열",
   "malware_family": "언급된 악성코드·랜섬웨어 패밀리명(영문). 없으면 빈 문자열",
@@ -434,7 +434,15 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
   "confidence": "위 분석에 대한 확신도: high|medium|low 중 하나 (기사 정보가 모호하면 low)",
   "recommended_actions": ["보안담당자 권고 조치(최대 3개)"]}}
 
-카테고리 기준: 제품 홍보·전시회·수상·인터뷰 기사는 "제품행사"로 분류하라.
+카테고리 기준:
+- 개인정보유출: 개인정보·고객정보 유출이 핵심인 사고 (시스템 침해가 있어도 유출이 본질이면 이쪽)
+- 침해사고: 유출 외의 기업·기관 시스템 침해·해킹 피해
+- 공급망공격: 오픈소스 패키지·벤더·업데이트 경로를 통한 공격
+- 공격캠페인: 조직을 노리는 표적형 캠페인·APT 활동
+- 피싱사기: 일반 소비자 대상 스미싱·보이스피싱·사기 (조직 표적 피싱은 공격캠페인)
+- 기술동향: 신기술 담론·연구 보고서·통계·컨퍼런스 논의 (양자보안, AI 보안 등)
+- 제품행사: 제품 홍보·전시회·수상·인터뷰 기사
+- 정책규제: 법·제도·규제·컴플라이언스
 주의: 기사에 없는 사실을 만들어내지 마라. 해당 정보가 없으면 빈 배열/빈 문자열 또는 "info"를 사용하라.
 {pir_block}
 제목: {title}
@@ -444,7 +452,10 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
 """
 
 ENRICH_SEVERITIES = ("critical", "high", "medium", "low", "info")
-ENRICH_CATEGORIES = ("취약점", "악성코드", "침해사고", "공격캠페인", "정책규제", "제품행사", "기타")
+ENRICH_CATEGORIES = (
+    "취약점", "악성코드", "침해사고", "개인정보유출", "공격캠페인", "공급망공격",
+    "피싱사기", "정책규제", "기술동향", "제품행사", "기타",
+)
 ENRICH_RELEVANCES = ("high", "medium", "low")
 ENRICH_BODY_MAX_CHARS = 4000
 
@@ -725,8 +736,12 @@ IMPORTANCE_FEATURE_LABELS = {
     "category_취약점": "분류 취약점",
     "category_악성코드": "분류 악성코드",
     "category_침해사고": "분류 침해사고",
+    "category_개인정보유출": "분류 개인정보유출",
     "category_공격캠페인": "분류 공격캠페인",
+    "category_공급망공격": "분류 공급망공격",
+    "category_피싱사기": "분류 피싱사기",
     "category_정책규제": "분류 정책규제",
+    "category_기술동향": "분류 기술동향",
     "category_제품행사": "분류 제품행사",
     "has_cve": "CVE 언급",
     "has_actor": "위협 그룹/악성코드 특정",
@@ -845,10 +860,14 @@ def _collect_risk_rules(triage, enrichment, cves):
         add("relevance_medium", "info", "관련성 medium", "LLM 판정")
 
     category = clean_text(enrichment.get("category"))
-    if category in ("취약점", "악성코드", "침해사고", "공격캠페인"):
+    if category == "공급망공격":
+        # 자산 매칭이 구조적으로 안 되는 유형이라 카테고리 자체를 moderate 신호로 취급
+        add("category_supply_chain", "moderate", "분류 공급망공격")
+    elif category in ("취약점", "악성코드", "침해사고", "개인정보유출", "공격캠페인"):
         add("category_threat", "info", "분류 {}".format(category))
-    elif category == "정책규제":
-        add("category_policy", "penalty", "분류 정책규제")
+    elif category in ("정책규제", "피싱사기"):
+        add("category_{}".format("policy" if category == "정책규제" else "consumer_scam"),
+            "penalty", "분류 {}".format(category))
     elif category == "제품행사":
         add("category_product_event", "suppress", "분류 제품행사")
 

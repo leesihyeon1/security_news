@@ -230,7 +230,12 @@ per machine or copy it manually.
 ## News Categorization
 
 The LLM enrichment classifies each article into one of: 취약점, 악성코드,
-침해사고, 공격캠페인, 정책규제, 제품행사, 기타. The category appears as a
+침해사고, 개인정보유출, 공격캠페인, 공급망공격, 피싱사기, 정책규제,
+기술동향, 제품행사, 기타. Threat categories add importance score
+(공급망공격 counts as a moderate signal since asset matching structurally
+misses it); 피싱사기 (consumer scams) and 정책규제 are penalized;
+제품행사 is capped at 20. 기술동향 feeds the report's trend-reads
+curation. The category appears as a
 tag (e.g. `[취약점]`) in email/Slack alerts, and daily/weekly reports include
 a "카테고리별 뉴스" section grouping collected articles by category
 (priority-sorted within each group, capped per category). Events without a

@@ -63,7 +63,7 @@ NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
 # "읽을만한 동향" 큐레이션: 긴급도 점수가 낮아 알림되지 않은 기사 중
 # 인사이트 신호(PIR 매칭, 또는 high 관련성의 위협 분석 기사)가 있는 것을 고른다.
 MAX_TREND_ITEMS = 5
-TREND_CATEGORIES = {"공격캠페인", "침해사고", "악성코드"}
+TREND_CATEGORIES = {"공격캠페인", "침해사고", "개인정보유출", "악성코드", "공급망공격", "기술동향"}
 
 
 def source_label(source):
