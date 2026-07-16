@@ -65,6 +65,11 @@ SOURCE_LABELS = {
     "helpnetsecurity": "Help Net Security",
     "securityaffairs": "Security Affairs",
     "dailysecu": "데일리시큐",
+    "estsecurity_alyac": "알약 블로그",
+    "plainbit": "플레인비트",
+    "inca_isarc": "잉카 ISARC",
+    "s2w": "S2W",
+    "nshc_threatrecon": "NSHC ThreatRecon",
 }
 
 MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15

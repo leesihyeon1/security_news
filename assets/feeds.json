@@ -344,5 +344,62 @@
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
     "enabled": true
+  },
+  {
+    "name": "estsecurity_alyac",
+    "label": "이스트시큐리티 알약 블로그",
+    "reliability": "B",
+    "rss_url": "https://blog.alyac.co.kr/rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "plainbit",
+    "label": "플레인비트",
+    "reliability": "B",
+    "rss_url": "https://blog.plainbit.co.kr/rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "inca_isarc",
+    "label": "잉카인터넷 ISARC",
+    "reliability": "B",
+    "rss_url": "https://isarc.tachyonlab.com/rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "s2w",
+    "label": "S2W",
+    "reliability": "B",
+    "note": "사내망에서 medium.com 차단(2026-07 확인). 표준 Medium 피드 URL이나 미검증 — 집에서 dry-run 후 enabled 전환.",
+    "rss_url": "https://medium.com/feed/s2wblog",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
+  },
+  {
+    "name": "nshc_threatrecon",
+    "label": "NSHC ThreatRecon",
+    "reliability": "B",
+    "note": "사내망에서 SSL 차단(2026-07 확인). 표준 WordPress 피드 URL이나 미검증 — 집에서 dry-run 후 enabled 전환.",
+    "rss_url": "https://threatrecon.nshc.net/feed/",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
   }
 ]
