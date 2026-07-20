@@ -119,16 +119,6 @@ INSIGHT_WEIGHTS = {
     "recency": 5,          # 7일 기준 선형 감쇠 (그 이상 오래되면 0)
 }
 
-# 임베딩 유사도 — CVE 겹침·제목 자카드로 못 잡는 "다른 표현, 같은 사건"을 MMR 다양성 항의
-# 보조 신호로만 쓴다. 고정 임계값으로 "이 이상이면 중복"이라고 하드컷하는 건 시도했으나
-# 실측(nomic-embed-text)에서 뒤집혔다 — 국문 기준 같은 사건(다른 표현) 0.93인데, 같은
-# 행위자명을 공유할 뿐인 완전히 다른 사건이 0.98로 더 높게 나왔다(모델이 다국어·짧은
-# 제목에 덜 최적화됨). 하드컷은 이 경우 진짜 다른 기사를 지워버리므로 절대 쓰지 않는다.
-TREND_EMBEDDING_TIMEOUT = 15
-
-# MMR(Maximal Marginal Relevance) 가중치 — 후보 선정 시 관련성 대 다양성 비중.
-# 높을수록 관련성(기존 정렬 순위) 우선, 낮을수록 이미 뽑힌 것과 다른 주제를 우선.
-TREND_MMR_LAMBDA = 0.7
 
 
 def source_label(source):
@@ -308,6 +298,48 @@ def importance_score(event):
     return ((event.get("importance") or {}).get("score")) or 0
 
 
+def _cluster_representatives(ranked_candidates):
+    """related_ids 관계를 Union-Find로 전이적으로 묶어, 같은 사건 클러스터당
+    1건(대표)만 남긴다.
+
+    이전엔 "이 기사가 이미 뽑힌 기사와 direct하게 related냐"만 체크했는데,
+    A-B, B-C만 related로 기록되고 A-C는 안 기록된 경우(둘 다 B를 통해서만
+    연결) 그 사이 관계를 못 잡았다. 여기서는 연결요소(connected components)를
+    직접 계산해서 그런 전이적 관계까지 하나의 클러스터로 묶는다.
+
+    ranked_candidates는 이미 insight_score 내림차순으로 정렬된 상태를 가정 —
+    클러스터별 대표는 그 안에서 가장 먼저 나오는(=점수가 가장 높은) 이벤트다.
+    """
+    ids = {event.get("id") for event in ranked_candidates}
+    parent = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        root_x, root_y = find(x), find(y)
+        if root_x != root_y:
+            parent[root_x] = root_y
+
+    for event in ranked_candidates:
+        for related_id in (event.get("cluster") or {}).get("related_ids") or []:
+            if related_id in ids:
+                union(event.get("id"), related_id)
+
+    seen_roots = set()
+    representatives = []
+    for event in ranked_candidates:
+        root = find(event.get("id"))
+        if root not in seen_roots:
+            seen_roots.add(root)
+            representatives.append(event)
+    return representatives
+
+
 def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False):
     """알림 문턱을 못 넘었지만 읽을 가치가 있는 동향 기사 큐레이션.
 
@@ -331,12 +363,18 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
     압도적으로 우세한 기사가 무조건 지는 게 부자연스러워서 가중합으로
     바꿨다. 가중치 값은 실측 튜닝 전 추정치 — 피드백이 쌓이면 재조정 대상.
 
+    중복 제거는 _cluster_representatives()로 정렬 후 한 번에 — 같은 사건
+    클러스터당 대표 1건만 후보로 남긴다. 임베딩 코사인 유사도로 유사 기사를
+    소프트하게 페널티 주는 MMR 방식을 먼저 시도했었는데, 실측에서 "같은 사건,
+    다른 표현"(0.93)보다 "다른 사건, 같은 행위자명 공유"(0.98)가 더 높게 나와
+    신뢰할 수 없었다 — 그래서 이미 있던 신뢰할 만한 신호(CVE 겹침·제목 자카드
+    기반 related_ids)를 전이적으로 클러스터링하는 방식으로 대체했다.
+
     선택은 그리디 — PIR 커버리지는 기간 내 알림된 기사가 이미 답한 PIR을
     커버된 것으로 시드해서, 추천이 "알림이 못 채운 정보 요구의 빈틈"을
     메우게 한다. 1차로 미커버 high 가중치 PIR, 2차로 미커버 PIR 전체,
-    3차는 정렬순 충원. 같은 사건(클러스터)·같은 행위자/멀웨어 주제는
-    1건만, 카테고리당 최대 MAX_TREND_PER_CATEGORY건 (슬롯이 남으면
-    상한 해제).
+    3차는 정렬순 충원. 카테고리당 최대 MAX_TREND_PER_CATEGORY건 (슬롯이
+    남으면 상한 해제).
     """
     max_items = max_items or MAX_TREND_ITEMS
     pir_defs = common_utils.load_pirs()
@@ -420,47 +458,15 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         if has_insight:
             candidates.append(event)
     candidates.sort(key=insight_score, reverse=True)
+    candidates = _cluster_representatives(candidates)  # 같은 사건 클러스터당 대표 1건만
 
-    picked, picked_ids, picked_related = [], set(), set()
+    picked, picked_ids = [], set()
     category_counts = Counter()
     covered_pirs = set(alerted_pirs)  # 알림이 이미 답한 PIR은 커버된 것으로 시드
-    rank_index = {event.get("id"): idx for idx, event in enumerate(candidates)}
-
-    embedding_cache = {}
-    embedding_disabled = [False]  # 첫 실패 시 이번 실행 전체에서 재시도하지 않음 (연속 타임아웃 방지)
-
-    def get_embedding(event):
-        if embedding_disabled[0]:
-            return None
-        event_id = event.get("id")
-        if event_id not in embedding_cache:
-            text = " ".join(
-                filter(None, [event.get("title"), event.get("ai_summary") or event.get("summary")])
-            )[:500]
-            embedding = common_utils.llm_embed(text, timeout=TREND_EMBEDDING_TIMEOUT)
-            if embedding is None:
-                embedding_disabled[0] = True
-            embedding_cache[event_id] = embedding
-        return embedding_cache[event_id]
-
-    def relevance_score(event):
-        """정렬 순위를 1(1위)~0(최하위) 스칼라로 환산 — MMR 선형결합의 관련성 항."""
-        total = len(candidates)
-        return 1.0 - (rank_index[event.get("id")] / max(total - 1, 1))
-
-    def redundancy(event):
-        """이미 뽑힌 기사들과의 최대 임베딩 유사도 — MMR 선형결합의 다양성 항 (임베딩 불가 시 0)."""
-        embedding = get_embedding(event)
-        if embedding is None or not picked:
-            return 0.0
-        return max(common_utils.cosine_similarity(embedding, get_embedding(p)) for p in picked)
 
     def eligible(event, require_new_pir, require_high, enforce_cap):
         if event.get("id") in picked_ids:
             return False
-        related = set((event.get("cluster") or {}).get("related_ids") or [])
-        if event.get("id") in picked_related or related & picked_ids:
-            return False  # 이미 뽑힌 기사와 같은 사건
         category = event.get("category") or "기타"
         if enforce_cap and category_counts[category] >= MAX_TREND_PER_CATEGORY:
             return False  # 카테고리 쏠림 방지 (슬롯 남으면 상한 해제)
@@ -472,33 +478,23 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         return True
 
     def commit(event):
-        related = set((event.get("cluster") or {}).get("related_ids") or [])
         new_pirs = set(event.get("pirs") or []) - covered_pirs
         picked.append(event)
         picked_ids.add(event.get("id"))
-        picked_related.update(related)
         category_counts[event.get("category") or "기타"] += 1
         covered_pirs.update(new_pirs)
 
-    # 1차: 미커버 high 가중치 PIR / 2차: 미커버 PIR 전체 / 3차: 정렬순 충원 /
-    # 4차: 슬롯이 남으면 카테고리 상한 해제.
-    # 차수별 하드 필터(PIR 요구조건·카테고리 캡·중복)를 통과한 후보 중에서는 매 스텝
-    # MMR(관련성 순위 λ vs 기픽과의 임베딩 유사도)로 최선을 고른다 — 같은 행위자·주제라도
-    # 하드컷 대신 유사도 페널티만 받으므로, 캡 경계에서 근소하게 밀리는 일이 줄어든다.
+    # 1차: 미커버 high 가중치 PIR / 2차: 미커버 PIR 전체 / 3차: 정렬순 충원(카테고리 캡 유지) /
+    # 4차: 슬롯이 남으면 카테고리 상한 해제. 클러스터 대표만 남은 후보를 정렬 순서대로
+    # 스캔하며 각 차수의 하드 필터를 통과하는 첫 항목을 채운다.
     for require_new_pir, require_high, enforce_cap in (
         (True, True, True), (True, False, True), (False, False, True), (False, False, False)
     ):
-        while len(picked) < max_items:
-            best, best_score = None, None
-            for event in candidates:
-                if not eligible(event, require_new_pir, require_high, enforce_cap):
-                    continue
-                score = TREND_MMR_LAMBDA * relevance_score(event) - (1 - TREND_MMR_LAMBDA) * redundancy(event)
-                if best_score is None or score > best_score:
-                    best, best_score = event, score
-            if best is None:
+        for event in candidates:
+            if len(picked) >= max_items:
                 break
-            commit(best)
+            if eligible(event, require_new_pir, require_high, enforce_cap):
+                commit(event)
 
     return picked
 

@@ -62,10 +62,6 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
 NVIDIA_API_URL = os.environ.get("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
-OLLAMA_EMBED_URL = os.environ.get("OLLAMA_EMBED_URL", OLLAMA_URL.rsplit("/api/", 1)[0] + "/api/embeddings")
-OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-NVIDIA_EMBED_API_URL = os.environ.get("NVIDIA_EMBED_API_URL", "https://integrate.api.nvidia.com/v1/embeddings")
-NVIDIA_EMBED_MODEL = os.environ.get("NVIDIA_EMBED_MODEL", "nvidia/nv-embedqa-e5-v5")
 
 def clean_text(value):
     if value is None:
@@ -462,61 +458,6 @@ def llm_generate(prompt, timeout=120, json_format=False):
         except Exception as error:
             print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
     return None
-
-# ===== 임베딩 (제목·요약 유사도 — 리포트의 읽을만한 동향 후보 중복 판정 보조 신호) =====
-
-def _embed_nvidia(text, timeout):
-    headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
-    payload = {"model": NVIDIA_EMBED_MODEL, "input": [text], "input_type": "passage"}
-    response = requests.post(NVIDIA_EMBED_API_URL, headers=headers, json=payload, timeout=timeout)
-    if response.status_code != 200:
-        raise RuntimeError("HTTP {}".format(response.status_code))
-    data = (response.json() or {}).get("data") or []
-    if not data:
-        raise RuntimeError("빈 data 응답")
-    return data[0].get("embedding")
-
-def _embed_ollama(text, timeout):
-    payload = {"model": OLLAMA_EMBED_MODEL, "prompt": text}
-    response = requests.post(OLLAMA_EMBED_URL, json=payload, timeout=timeout)
-    if response.status_code != 200:
-        raise RuntimeError("HTTP {}".format(response.status_code))
-    embedding = (response.json() or {}).get("embedding")
-    if not embedding:
-        raise RuntimeError("빈 embedding 응답")
-    return embedding
-
-def llm_embed(text, timeout=30):
-    """설정된 프로바이더로 텍스트 임베딩 벡터를 생성한다. 실패 시 None (호출부는 항상 폴백 가능해야 함).
-
-    Ollama는 별도 임베딩 모델이 필요하다 (예: `ollama pull nomic-embed-text`).
-    NVIDIA는 NIM 임베딩 엔드포인트(OLLAMA_EMBED_MODEL과 별개 모델)를 쓴다.
-    """
-    text = (text or "").strip()
-    if not text:
-        return None
-    providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
-    for provider in providers:
-        try:
-            if provider == "nvidia":
-                if not NVIDIA_API_KEY:
-                    raise RuntimeError("NVIDIA_API_KEY 미설정")
-                return _embed_nvidia(text, timeout)
-            return _embed_ollama(text, timeout)
-        except Exception as error:
-            print("[-] 임베딩 생성 실패 ({}): {}".format(provider, error))
-    return None
-
-def cosine_similarity(vec_a, vec_b):
-    """코사인 유사도(-1~1). 차원이 다르거나 벡터가 비어있으면 0."""
-    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
-        return 0.0
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
-    norm_a = math.sqrt(sum(a * a for a in vec_a))
-    norm_b = math.sqrt(sum(b * b for b in vec_b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
 
 # ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
 
