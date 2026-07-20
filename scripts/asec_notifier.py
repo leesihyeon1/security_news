@@ -1,10 +1,16 @@
 import os
 import json
+import sys
 import requests
 from bs4 import BeautifulSoup
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 import common_utils
+
+# Windows 콘솔(cp949)에서 특수문자 출력이 죽지 않도록 UTF-8로 강제
+for stream in (sys.stdout, sys.stderr):
+    if stream and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 # ================= [ 설정 영역 ] =================
 ASEC_RSS_URL = "https://asec.ahnlab.com/ko/feed/"

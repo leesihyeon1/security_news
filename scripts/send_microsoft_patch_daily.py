@@ -2,6 +2,7 @@ import html
 import json
 import os
 import smtplib
+import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -9,6 +10,11 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
+
+# Windows 콘솔(cp949)에서 특수문자 출력이 죽지 않도록 UTF-8로 강제
+for stream in (sys.stdout, sys.stderr):
+    if stream and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
