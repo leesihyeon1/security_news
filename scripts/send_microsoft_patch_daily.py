@@ -135,6 +135,11 @@ def parse_document(document_id, data):
     vulnerabilities = data.get("Vulnerability", [])
     items = []
 
+    # CVRF의 CVE별 ReleaseDate는 MSRC가 채워주지 않는 경우가 많아(ReleaseDateSpecified=False,
+    # 0001-01-01 더미값) 문서 단위 최초 공개일로 대체한다 — CVE별 정밀도는 아니지만
+    # 문서 ID 문자열("2026-Jul")보다는 실제 날짜라 정렬·기간 필터에 쓸 수 있다.
+    published_at = clean_text((data.get("DocumentTracking") or {}).get("InitialReleaseDate"))
+
     for vulnerability in as_list(vulnerabilities):
         if not isinstance(vulnerability, dict):
             continue
@@ -160,6 +165,7 @@ def parse_document(document_id, data):
             {
                 "id": "{}|{}|{}".format(document_id, cve_id, score),
                 "document_id": document_id,
+                "published_at": published_at,
                 "cve_id": cve_id,
                 "title": title,
                 "description": description,
@@ -350,7 +356,7 @@ def main():
                 severity=item["severity"],
                 score=item["score"],
                 cves=[item["cve_id"]],
-                published_at=item["document_id"],
+                published_at=item["published_at"],
                 email_sent=email_sent,
                 slack_sent=slack_sent,
                 triage=item.get("triage"),
