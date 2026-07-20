@@ -60,6 +60,7 @@ run_cve.bat
 github_advisory.bat
 send_kisa.bat
 microsoft_patch.bat
+curator_digest.bat
 ```
 
 `rss_collector.bat` runs all enabled feeds in `assets/feeds.json` (`--all`). For manual testing, run
@@ -100,6 +101,44 @@ period rank lower, LLM confidence (low ranks lower), relevance, novelty
 count), importance score, recency), with one article per story cluster,
 one per actor/malware topic, and at most 2 per category (caps lifted if
 slots remain). Each item carries a hash for `feedback.py` labeling.
+
+### Curator digest (periodic, between reports)
+
+`curator_digest.bat` runs the same trend-read selection
+(`generate_report.pick_trend_reads`) but differs in two ways: scoped to
+whatever was collected since its last run (tracked in
+`state/curator_digest_state.json`, default 4h lookback on first run) instead
+of a full day/week, and `include_alerted=True` — already-alerted events are
+still eligible, since this digest has no separate cards/TOP-N section to
+already show them (unlike the full report, where trend reads deliberately
+exclude alerted events to avoid double-showing within the same report).
+Meant to be scheduled every 3-4 hours, independent of
+`daily_report.bat`/`weekly_report.bat` — the same article can show up in
+both, on purpose (no cross-run dedup). Caps at 3 items (vs. 5 in the full
+report) and posts to `SLACK_WEBHOOK_CURATOR` (falls back to
+`SLACK_WEBHOOK_REPORT`, then `SLACK_WEBHOOK_URL`). Sends nothing if there's
+nothing worth surfacing in that window.
+
+```bat
+python scripts\curator_digest.py --hours 4 --dry-run   # test a window without touching state
+```
+
+### Historical search
+
+Reports only show a snapshot of the collection period. To check whether a
+CVE, actor, or asset match is new or a recurring pattern, query the full
+event log directly:
+
+```bat
+python scripts\search_events.py --actor Lazarus --since 90d
+python scripts\search_events.py --cve CVE-2026-25089
+python scripts\search_events.py --asset Fortinet --level P1 --since 6m
+```
+
+Prints matching events chronologically plus a per-week/per-month count
+histogram. Filters: `--actor`, `--malware`, `--cve`, `--source`, `--category`,
+`--pir`, `--asset`, `--level`, `--keyword`, `--since`/`--until` (`90d`/`12w`/
+`6m`/`1y` or `YYYY-MM-DD`). At least one filter is required.
 
 ## LLM Provider
 
