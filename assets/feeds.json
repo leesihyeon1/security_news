@@ -382,24 +382,60 @@
     "name": "s2w",
     "label": "S2W",
     "reliability": "B",
-    "note": "사내망에서 medium.com 차단(2026-07 확인). 표준 Medium 피드 URL이나 미검증 — 집에서 dry-run 후 enabled 전환.",
+    "note": "사내망에서 medium.com 차단(2026-07 확인) — 집 네트워크에서는 정상 동작 확인(2026-07-20)되어 재활성화. 사내망에서 스케줄이 돌면 다시 403/SSL 오류가 날 수 있으니 최초 실행 로그 확인 권장.",
     "rss_url": "https://medium.com/feed/s2wblog",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "nshc_threatrecon",
     "label": "NSHC ThreatRecon",
     "reliability": "B",
-    "note": "사내망에서 SSL 차단(2026-07 확인). 표준 WordPress 피드 URL이나 미검증 — 집에서 dry-run 후 enabled 전환.",
+    "note": "사내망에서 SSL 차단(2026-07 확인) — 집 네트워크에서는 정상 동작 확인(2026-07-20)되어 재활성화. 사내망에서 스케줄이 돌면 다시 SSL 오류가 날 수 있으니 최초 실행 로그 확인 권장.",
     "rss_url": "https://threatrecon.nshc.net/feed/",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
+  },
+  {
+    "name": "genians",
+    "label": "지니언스 시큐리티 센터",
+    "reliability": "B",
+    "note": "북한 연계 APT 추적 콘텐츠(PIR-6) 포함하나 제품 업데이트 글과 같은 피드에 섞여 있음(전용 RSS 없음, 워드프레스 기본 피드) — 2026-07-20 확인.",
+    "rss_url": "https://www.genians.com/feed/",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "proofpoint",
+    "label": "Proofpoint",
+    "reliability": "C",
+    "note": "Proofpoint 자체 연구 블로그가 아니라 언론에 인용된 Proofpoint 관련 보도를 모은 뉴스 피드(전용 Threat Insight 블로그 RSS는 404) — 2026-07-20 확인.",
+    "rss_url": "https://www.proofpoint.com/us/rss.xml",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "malwarebytes",
+    "label": "Malwarebytes Labs",
+    "reliability": "B",
+    "note": "크랙·모드 위장 게임 악성코드 등 게임업계 인접 위협(PIR-6) 다수 — 2026-07-20 확인.",
+    "rss_url": "https://www.malwarebytes.com/blog/feed/index.xml",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
   }
 ]
