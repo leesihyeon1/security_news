@@ -14,6 +14,7 @@ import argparse
 import html
 import json
 import os
+import re
 import sys
 from collections import Counter
 from datetime import datetime, timedelta
@@ -695,13 +696,40 @@ def build_digest(period_label, stats, events, cards):
     return "\n".join(lines)
 
 
+SUMMARY_MAX_CHARS = 200
+
+
+def _truncate_summary_section(narrative, max_chars=SUMMARY_MAX_CHARS):
+    """[총평]이 길게 나오면 문장 단위로 잘라 모바일 가독성을 보장한다 (LLM이 프롬프트 지침을 어길 때의 안전장치)."""
+    match = re.search(r"(\[총평\]\s*\n?)(.*?)(?=\n\[|\Z)", narrative, re.S)
+    if not match:
+        return narrative
+
+    body = match.group(2).strip()
+    if len(body) <= max_chars:
+        return narrative
+
+    sentences = re.split(r"(?<=[.!?])\s+", body)
+    kept, length = [], 0
+    for sentence in sentences:
+        if kept and length + len(sentence) > max_chars:
+            break
+        kept.append(sentence)
+        length += len(sentence)
+    trimmed = " ".join(kept).strip() or (body[:max_chars].strip() + "…")
+
+    return narrative[:match.start(2)] + trimmed + narrative[match.end(2):]
+
+
 def ai_narrative(period_label, digest):
     prompt = """당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.
 아래는 {period} 동안 수집된 보안 이벤트 요약이다. 이를 바탕으로 보안담당자용 리포트 본문을 한국어로 작성하라.
 
 출력 형식:
 [총평]
-- 2~3문장
+- 가장 중요한 임팩트만 짧게 서술 (분량 제한이 목적이 아니라 핵심만 압축하는 것이 목적)
+- CVE ID, PIR별 세부 수치, MITRE 기법 등 개별 데이터 나열 금지 — 이런 디테일은 아래 다른 섹션과 리포트의 통계 섹션에 이미 있으므로 총평에서 반복하지 말 것
+- 숫자를 쓰더라도 전체 건수 등 꼭 필요한 것 한두 개만, 나열식으로 늘어놓지 말 것
 
 [핵심 위협 TOP 3]
 - 각 항목마다 무엇이 왜 중요한지 1~2문장
@@ -718,7 +746,8 @@ def ai_narrative(period_label, digest):
 {digest}
 """.format(period=period_label, digest=digest)
 
-    return common_utils.llm_generate(prompt, timeout=300) or ""
+    narrative = common_utils.llm_generate(prompt, timeout=300) or ""
+    return _truncate_summary_section(narrative) if narrative else narrative
 
 
 def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
