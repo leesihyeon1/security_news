@@ -53,6 +53,7 @@ Optional API tokens:
 Each `.bat` file can be run from any directory because it resolves paths from its own location.
 
 ```bat
+rss_collector.bat
 asec_notifier.bat
 send_boannews.bat
 run_cve.bat
@@ -60,6 +61,9 @@ github_advisory.bat
 send_kisa.bat
 microsoft_patch.bat
 ```
+
+`rss_collector.bat` runs all enabled feeds in `assets/feeds.json` (`--all`). For manual testing, run
+`python scripts\rss_collector.py --feed <name> --dry-run` directly instead.
 
 ## Reports
 
