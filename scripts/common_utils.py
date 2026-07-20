@@ -527,6 +527,7 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
 {{"summary": "핵심 내용 3문장 이내 요약(한국어)",
   "severity": "critical|high|medium|low|info 중 하나",
   "category": "취약점|악성코드|침해사고|개인정보유출|공격캠페인|공급망공격|피싱사기|정책규제|기술동향|제품행사|기타 중 하나",
+  "category_reason": "이 카테고리를 고른 근거 한 문장(한국어) — 아래 기준 중 어느 것에 해당하는지 명시",
   "affected_products": ["영향받는 제품·서비스명. 영문 공식 명칭으로 정규화 (예: Fortinet FortiGate, Apache Tomcat)"],
   "affected_versions": ["영향받는 버전·버전 범위. 기사에 명시된 것만 (예: 7.2.0~7.2.4, 3.x 전체). 없으면 빈 배열"],
   "threat_actor": "언급된 공격 그룹명(영문 공식 명칭, 예: Lazarus). 없으면 빈 문자열",
@@ -551,6 +552,13 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
 - 기술동향: 신기술 담론·연구 보고서·통계·컨퍼런스 논의 (양자보안, AI 보안 등)
 - 제품행사: 제품 홍보·전시회·수상·인터뷰 기사
 - 정책규제: 법·제도·규제·컴플라이언스
+
+헷갈리기 쉬운 경계 사례 예시:
+- "쇼핑몰 해킹으로 회원 10만 명 개인정보 유출" → 개인정보유출 (시스템 침해가 있었지만 기사의 본질은 유출된 개인정보 그 자체)
+- "쇼핑몰 서버 침해, 관리자 권한 탈취 확인(유출 언급 없음)" → 침해사고 (침해는 있으나 유출이 핵심이 아님)
+- "APT 그룹이 npm 패키지에 악성코드 심어 유포" → 공급망공격 (공격 경로가 오픈소스 패키지)
+- "APT 그룹이 특정 방산업체를 스피어피싱으로 표적 공격" → 공격캠페인 (조직을 노린 표적형 캠페인이 본질, 수단이 피싱이어도)
+- "문자로 택배 미수령 사칭해 개인정보 요구" → 피싱사기 (불특정 소비자 대상 스미싱)
 주의: 기사에 없는 사실을 만들어내지 마라. 해당 정보가 없으면 빈 배열/빈 문자열 또는 "info"를 사용하라.
 {pir_block}
 제목: {title}
@@ -622,6 +630,7 @@ def ai_enrich_article(title, body):
             "fix_available": True if fix_raw == "yes" else (False if fix_raw == "no" else None),
             "patch_info": clean_text(data.get("patch_info"))[:200] or None,
             "category": category if category in ENRICH_CATEGORIES else ("기타" if category else None),
+            "category_reason": clean_text(data.get("category_reason"))[:200] or None,
             "affected_products": _clean_str_list(data.get("affected_products"), 10),
             "affected_versions": _clean_str_list(data.get("affected_versions"), 10),
             "threat_actor": clean_text(data.get("threat_actor")) or None,
@@ -1377,7 +1386,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                references=None, fix_available=None, remediation="", due_date="",
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
                cluster=None, pirs=None, content_depth="", body_chars=None,
-               recommended_actions=None, affected_versions=None, novelty=""):
+               recommended_actions=None, affected_versions=None, novelty="", category_reason=""):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -1401,6 +1410,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "cves": [cve for cve in (cves or []) if cve],
         "matched_assets": matched_assets,
         "category": clean_text(category),
+        "category_reason": clean_text(category_reason),
         "affected_products": [clean_text(p) for p in (affected_products or []) if clean_text(p)],
         "epss": epss,
         "exploitation_status": (triage or {}).get("exploitation") or "none",

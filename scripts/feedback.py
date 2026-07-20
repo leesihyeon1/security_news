@@ -83,6 +83,9 @@ def print_events(events, labels, alerted_only=True, limit=30):
         print("{} {}  [{}] {}".format(
             mark, common_utils.event_ref(event["id"]), event.get("source"), (event.get("title") or "")[:70]
         ))
+        if event.get("category"):
+            reason = event.get("category_reason")
+            print("      └ {}{}".format(event["category"], ": {}".format(reason) if reason else ""))
         shown += 1
         if shown >= limit:
             break
