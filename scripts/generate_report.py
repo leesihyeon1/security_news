@@ -699,6 +699,12 @@ def build_digest(period_label, stats, events, cards):
 SUMMARY_MAX_CHARS = 200
 
 
+def _normalize_tail(narrative, end_pos):
+    """자른 섹션 뒤에 남은 내용과의 빈 줄 구분을 유지한다 (다음 섹션이 있으면 한 줄 띄우고, 없으면 그대로 끝)."""
+    tail = narrative[end_pos:].lstrip("\n")
+    return "\n\n" + tail if tail else tail
+
+
 def _truncate_summary_section(narrative, max_chars=SUMMARY_MAX_CHARS):
     """[총평]이 길게 나오면 문장 단위로 잘라 모바일 가독성을 보장한다 (LLM이 프롬프트 지침을 어길 때의 안전장치)."""
     match = re.search(r"(\[총평\]\s*\n?)(.*?)(?=\n\[|\Z)", narrative, re.S)
@@ -718,7 +724,42 @@ def _truncate_summary_section(narrative, max_chars=SUMMARY_MAX_CHARS):
         length += len(sentence)
     trimmed = " ".join(kept).strip() or (body[:max_chars].strip() + "…")
 
-    return narrative[:match.start(2)] + trimmed + narrative[match.end(2):]
+    return narrative[:match.start(2)] + trimmed + _normalize_tail(narrative, match.end(2))
+
+
+ITEM_MAX_CHARS = 140
+
+
+def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS):
+    """[핵심 위협 TOP 3] 같은 번호 리스트의 항목별 설명이 길면 문장 단위로 잘라 가독성을 보장한다 (LLM이 프롬프트 지침을 어길 때의 안전장치)."""
+    match = re.search(r"(\[{}\]\s*\n?)(.*?)(?=\n\[|\Z)".format(re.escape(header)), narrative, re.S)
+    if not match:
+        return narrative
+
+    items = re.split(r"(?m)^(?=\d+\.\s)", match.group(2).strip())
+    trimmed_items = []
+    for item in items:
+        item = item.rstrip()
+        if not item:
+            continue
+
+        title_match = re.match(r"\d+\.\s*.*?(?:\*\*\s*:|:)\s*", item)
+        title = title_match.group(0) if title_match else ""
+        desc = item[len(title):].strip()
+
+        if len(desc) > max_chars:
+            sentences = re.split(r"(?<=[.!?])\s+", desc)
+            kept, length = [], 0
+            for sentence in sentences:
+                if kept and length + len(sentence) > max_chars:
+                    break
+                kept.append(sentence)
+                length += len(sentence)
+            desc = " ".join(kept).strip() or (desc[:max_chars].strip() + "…")
+
+        trimmed_items.append((title.rstrip() + " " + desc).strip() if title else desc)
+
+    return narrative[:match.start(2)] + "\n".join(trimmed_items) + _normalize_tail(narrative, match.end(2))
 
 
 def ai_narrative(period_label, digest):
@@ -732,7 +773,8 @@ def ai_narrative(period_label, digest):
 - 숫자를 쓰더라도 전체 건수 등 꼭 필요한 것 한두 개만, 나열식으로 늘어놓지 말 것
 
 [핵심 위협 TOP 3]
-- 각 항목마다 무엇이 왜 중요한지 1~2문장
+- 각 항목마다 무엇이 왜 중요한지 1문장
+- EPSS/CVSS 수치, 소스명, 패치 일자 등 세부 데이터 나열 금지 — 이미 [핵심 취약점 TOP N] 카드 섹션에 있으므로 반복하지 말 것. 실무 임팩트(무엇이 뚫리고 왜 위험한지) 중심으로만 쓸 것
 
 [자사 자산 관련]
 - 매칭된 항목이 있으면 조치 우선순위를 제시하고, 없으면 "해당 없음"이라고만 작성
@@ -747,7 +789,11 @@ def ai_narrative(period_label, digest):
 """.format(period=period_label, digest=digest)
 
     narrative = common_utils.llm_generate(prompt, timeout=300) or ""
-    return _truncate_summary_section(narrative) if narrative else narrative
+    if not narrative:
+        return narrative
+    narrative = _truncate_summary_section(narrative)
+    narrative = _truncate_numbered_items(narrative, "핵심 위협 TOP 3")
+    return narrative
 
 
 def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
