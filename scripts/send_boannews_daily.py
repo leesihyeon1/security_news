@@ -377,6 +377,7 @@ def main():
                 severity=enrichment.get("severity") or "",
                 cves=article.get("extracted_cves"),
                 category=enrichment.get("category") or "",
+                category_reason=enrichment.get("category_reason") or "",
                 affected_products=enrichment.get("affected_products"),
                 threat_actor=enrichment.get("threat_actor") or "",
                 malware_family=enrichment.get("malware_family") or "",
