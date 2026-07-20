@@ -91,7 +91,7 @@ def _load_inventory_items(path):
     current = None
     try:
         with path.open("r", encoding="utf-8") as file:
-            for raw_line in file:
+            for line_no, raw_line in enumerate(file, start=1):
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue
@@ -109,6 +109,15 @@ def _load_inventory_items(path):
                     value = line.split(":", 1)[1].strip().strip("'\"").lower()
                     if value in ("high", "low"):
                         current["criticality"] = value
+                elif current is not None:
+                    # 엔트리 진입 후(`- name:` 이후)에는 `aliases:`/`criticality:`만 인식한다.
+                    # 형식이 바뀐 줄이 조용히 버려지면 자산 매칭이 소리 없이 새므로, 눈에 띄게 경고한다.
+                    print(
+                        "[!] {}:{} 인식 못한 형식 — 자산 매칭에서 무시됨: {}".format(
+                            path.name, line_no, line
+                        )
+                    )
+                # current가 None이면(첫 엔트리 이전, 예: 최상위 `products:` 키) 조용히 건너뛴다.
     except OSError:
         return []
     if current and current["name"]:
