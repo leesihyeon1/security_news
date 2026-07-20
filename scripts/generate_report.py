@@ -13,6 +13,7 @@ LLM 호출이 실패해도 통계 리포트는 발송된다.
 import argparse
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -99,6 +100,24 @@ NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
 MAX_TREND_ITEMS = 5
 MAX_TREND_PER_CATEGORY = 2  # 카테고리 쏠림 방지 (슬롯이 남으면 상한 해제)
 TREND_CATEGORIES = {"공격캠페인", "침해사고", "개인정보유출", "악성코드", "공급망공격", "기술동향"}
+
+# insight_score()의 축별 가중치 — 튜플 순서(어순위 축이 하나만 달라도 절대 우위) 대신
+# 가중합으로 바꾼 이유: 예를 들어 relevance가 high 대 medium 한 끗 차이만으로, 신선도·
+# 깊이·인텔풍부도·HN화제성·중요도에서 압도적으로 우세한 기사가 무조건 지는 게 부자연스럽다.
+# 값 자체는 실측 튜닝 전 추정치 — 피드백 데이터가 쌓이면 재조정이 필요하다.
+INSIGHT_WEIGHTS = {
+    "pir_high": 40,       # 고가중치 PIR 매칭 1개당
+    "pir_any": 8,         # PIR 매칭 1개당(고가중치 포함 전체 개수)
+    "topic_repeat": -15,  # 이미 알림된 행위자·멀웨어 재탕
+    "confidence_low": -8,  # LLM 스스로 모호하다고 판정
+    "relevance": 25,      # high=1.0 / medium=0.5 / 미판정=0.0
+    "novelty": 12,        # new=1.0 / update=0.5 / known=0.0 / 미판정=0.3
+    "depth": 10,          # analysis=1.0 / report=0.66 / news=0.33 / opinion=0.0 / 미판정=0.4
+    "intel_richness": 1.5,  # IOC·ATT&CK 1건당 (최대 10건)
+    "hn_buzz": 6,          # log1p(HN 포인트)
+    "importance": 15,     # importance_score / 100
+    "recency": 5,          # 7일 기준 선형 감쇠 (그 이상 오래되면 0)
+}
 
 # 임베딩 유사도 — CVE 겹침·제목 자카드로 못 잡는 "다른 표현, 같은 사건"을 MMR 다양성 항의
 # 보조 신호로만 쓴다. 고정 임계값으로 "이 이상이면 중복"이라고 하드컷하는 건 시도했으나
@@ -304,13 +323,13 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
     발송되는 경우엔 "알림 여부와 무관하게 이 기간 전체에서 읽을 가치가
     있는 것"을 추리는 게 더 맞다.
 
-    정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 주제 반복
-    여부(이미 알림된 행위자·멀웨어 재탕은 후순위) → LLM 확신도(low 후순위)
-    → 관련성 → 신규성(new > update > known) → 콘텐츠 깊이(심층 분석 >
-    보고서 > 단신 > 칼럼) → 인텔 풍부도(IOC·ATT&CK 수) → 중요도 점수 →
-    최신순. 중요도 점수는 긴급도 축 산물이라 동점 처리자로만
-    쓴다(점수 우선으로 두면 "알림 문턱에 가까웠던 기사"가 PIR에 정확히
-    답하는 기사를 항상 밀어낸다).
+    정렬은 insight_score()의 가중합 — PIR 매칭·주제 반복·확신도·관련성·
+    신규성·콘텐츠 깊이·인텔 풍부도(IOC·ATT&CK)·HN 화제성·중요도 점수·
+    최신성을 각각 연속값으로 환산해 INSIGHT_WEIGHTS로 합산한다. 예전엔
+    튜플 순서(앞 축이 조금이라도 다르면 뒤 축은 아예 안 봄)였는데, 이러면
+    relevance가 high/medium 한 끗 차이만으로 신선도·깊이·인텔·HN·중요도가
+    압도적으로 우세한 기사가 무조건 지는 게 부자연스러워서 가중합으로
+    바꿨다. 가중치 값은 실측 튜닝 전 추정치 — 피드백이 쌓이면 재조정 대상.
 
     선택은 그리디 — PIR 커버리지는 기간 내 알림된 기사가 이미 답한 PIR을
     커버된 것으로 시드해서, 추천이 "알림이 못 채운 정보 요구의 빈틈"을
@@ -337,34 +356,47 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             alerted_pirs.update(event.get("pirs") or [])
 
     # 미판정(구 이벤트, enrichment 실패)은 중간값 — 신규 필드가 없는 이벤트가 불이익을 받지 않게
-    depth_rank = {"analysis": 0, "report": 1, "news": 3, "opinion": 4}
-    novelty_rank = {"new": 0, "update": 1, "known": 3}
+    relevance_value = {"high": 1.0, "medium": 0.5}
+    novelty_value = {"new": 1.0, "update": 0.5, "known": 0.0}
+    depth_value = {"analysis": 1.0, "report": 0.66, "news": 0.33, "opinion": 0.0}
+    now_ts = datetime.utcnow().timestamp()
+    hn_disabled = [False]  # 첫 실패 시 이번 실행 전체에서 재시도하지 않음 (후보 수백 건 × 실패 지연 방지)
 
     def hn_points(event):
         """Hacker News 화제성(포인트) — 내부 휴리스틱이 못 잡는 '지금 업계가 주목' 신호 보완.
 
         결과를 이벤트에 캐시해 trend_bits()가 같은 조회를 반복하지 않게 한다.
         """
+        if hn_disabled[0]:
+            return 0
         if "_hn_buzz" not in event:
-            event["_hn_buzz"] = common_utils.check_hn_buzz(event.get("url"))
+            buzz = common_utils.check_hn_buzz(event.get("url"))
+            if buzz is False:  # 조회 자체가 실패 — 이번 실행 전체에서 재시도하지 않음
+                hn_disabled[0] = True
+                buzz = None
+            event["_hn_buzz"] = buzz
         buzz = event["_hn_buzz"]
         return buzz["points"] if buzz else 0
 
-    def insight_sort_key(event):
+    def insight_score(event):
+        """가중합 인사이트 점수(높을수록 우선) — 어느 한 축이 조금 밀려도 나머지 축의
+        압도적 우위로 뒤집을 수 있게 튜플 순서 대신 연속값으로 합산한다."""
         weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
         intel_richness = min(len(event.get("iocs") or []) + len(event.get("attack_techniques") or []), 10)
+        recency_days = (now_ts - published_ts(event)) / 86400 if published_ts(event) else 999
+        w = INSIGHT_WEIGHTS
         return (
-            -sum(1 for weight in weights if weight == "high"),
-            -len(weights),
-            1 if event_topics(event) & alerted_topics else 0,
-            1 if (event.get("confidence") or "") == "low" else 0,  # LLM 스스로 모호하다 한 판정은 후순위
-            {"high": 0, "medium": 1}.get(event.get("relevance") or "", 2),
-            novelty_rank.get(event.get("novelty") or "", 2),
-            depth_rank.get(event.get("content_depth") or "", 2),
-            -intel_richness,
-            -hn_points(event),
-            -importance_score(event),
-            -published_ts(event),
+            w["pir_high"] * sum(1 for weight in weights if weight == "high")
+            + w["pir_any"] * len(weights)
+            + w["topic_repeat"] * (1 if event_topics(event) & alerted_topics else 0)
+            + w["confidence_low"] * (1 if (event.get("confidence") or "") == "low" else 0)
+            + w["relevance"] * relevance_value.get(event.get("relevance") or "", 0.0)
+            + w["novelty"] * novelty_value.get(event.get("novelty") or "", 0.3)
+            + w["depth"] * depth_value.get(event.get("content_depth") or "", 0.4)
+            + w["intel_richness"] * intel_richness
+            + w["hn_buzz"] * math.log1p(hn_points(event))
+            + w["importance"] * (importance_score(event) / 100.0)
+            + w["recency"] * max(0.0, 1.0 - recency_days / 7.0)
         )
 
     candidates = []
@@ -387,7 +419,7 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         )
         if has_insight:
             candidates.append(event)
-    candidates.sort(key=insight_sort_key)
+    candidates.sort(key=insight_score, reverse=True)
 
     picked, picked_ids, picked_related = [], set(), set()
     category_counts = Counter()

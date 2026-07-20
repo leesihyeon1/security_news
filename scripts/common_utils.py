@@ -747,7 +747,8 @@ def check_hn_buzz(url, timeout=10):
     """Hacker News에서 해당 URL이 논의됐는지 조회 — 무료·무인증 공개 API.
 
     내부 휴리스틱만으로는 못 잡는 '지금 업계가 주목하는 것' 신호를 보완한다.
-    실패·미발견 시 None (호출부는 항상 폴백 가능해야 함).
+    반환값 3가지: dict(발견), None(정상 조회했지만 논의 없음), False(조회 자체가
+    실패 — 호출부가 이 경우만 서킷브레이커로 구분해서 반복 실패를 피할 수 있게).
     """
     if not url:
         return None
@@ -770,7 +771,7 @@ def check_hn_buzz(url, timeout=10):
         }
     except Exception as error:
         print("[-] HN 화제성 조회 실패: {}".format(error))
-        return None
+        return False
 
 def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, poc_public=False, epss=None,
                      exclude_assets=None):
