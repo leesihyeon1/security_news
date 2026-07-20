@@ -62,6 +62,10 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
 NVIDIA_API_URL = os.environ.get("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+OLLAMA_EMBED_URL = os.environ.get("OLLAMA_EMBED_URL", OLLAMA_URL.rsplit("/api/", 1)[0] + "/api/embeddings")
+OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+NVIDIA_EMBED_API_URL = os.environ.get("NVIDIA_EMBED_API_URL", "https://integrate.api.nvidia.com/v1/embeddings")
+NVIDIA_EMBED_MODEL = os.environ.get("NVIDIA_EMBED_MODEL", "nvidia/nv-embedqa-e5-v5")
 
 def clean_text(value):
     if value is None:
@@ -459,6 +463,61 @@ def llm_generate(prompt, timeout=120, json_format=False):
             print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
     return None
 
+# ===== 임베딩 (제목·요약 유사도 — 리포트의 읽을만한 동향 후보 중복 판정 보조 신호) =====
+
+def _embed_nvidia(text, timeout):
+    headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
+    payload = {"model": NVIDIA_EMBED_MODEL, "input": [text], "input_type": "passage"}
+    response = requests.post(NVIDIA_EMBED_API_URL, headers=headers, json=payload, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError("HTTP {}".format(response.status_code))
+    data = (response.json() or {}).get("data") or []
+    if not data:
+        raise RuntimeError("빈 data 응답")
+    return data[0].get("embedding")
+
+def _embed_ollama(text, timeout):
+    payload = {"model": OLLAMA_EMBED_MODEL, "prompt": text}
+    response = requests.post(OLLAMA_EMBED_URL, json=payload, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError("HTTP {}".format(response.status_code))
+    embedding = (response.json() or {}).get("embedding")
+    if not embedding:
+        raise RuntimeError("빈 embedding 응답")
+    return embedding
+
+def llm_embed(text, timeout=30):
+    """설정된 프로바이더로 텍스트 임베딩 벡터를 생성한다. 실패 시 None (호출부는 항상 폴백 가능해야 함).
+
+    Ollama는 별도 임베딩 모델이 필요하다 (예: `ollama pull nomic-embed-text`).
+    NVIDIA는 NIM 임베딩 엔드포인트(OLLAMA_EMBED_MODEL과 별개 모델)를 쓴다.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
+    for provider in providers:
+        try:
+            if provider == "nvidia":
+                if not NVIDIA_API_KEY:
+                    raise RuntimeError("NVIDIA_API_KEY 미설정")
+                return _embed_nvidia(text, timeout)
+            return _embed_ollama(text, timeout)
+        except Exception as error:
+            print("[-] 임베딩 생성 실패 ({}): {}".format(provider, error))
+    return None
+
+def cosine_similarity(vec_a, vec_b):
+    """코사인 유사도(-1~1). 차원이 다르거나 벡터가 비어있으면 0."""
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
 # ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
 
 ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 분석가이다.
@@ -634,6 +693,75 @@ def fetch_epss_scores(cve_ids, timeout=20):
         except Exception as error:
             print("[-] EPSS 조회 실패({}건): {}".format(len(batch), error))
     return scores
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_SEARCH_REPOS_URL = "https://api.github.com/search/repositories"
+
+def check_github_poc(cve_id, timeout=15):
+    """GitHub 저장소 검색으로 해당 CVE의 PoC/exploit 리포짓 공개 여부를 확인한다.
+
+    MSRC 등 일부 소스만 갖고 있던 'PoC 공개' 신호를 소스 불문 모든 CVE로 확장한다.
+    실패 시 None(호출부는 항상 폴백 가능해야 함). GITHUB_TOKEN 있으면 인증 사용(레이트리밋 완화),
+    없어도 동작(비인증 검색 API 분당 10회 제한 — 카드 상위 몇 건에만 쓰는 용도라 충분).
+    """
+    if not cve_id:
+        return None
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = "Bearer {}".format(GITHUB_TOKEN)
+    # 따옴표로 구문 검색 강제 — 안 그러면 GitHub가 토큰 단위로 느슨하게 매칭해서
+    # 존재하지 않는 CVE에도 무관한 저장소가 잡히는 오탐이 난다.
+    params = {"q": '"{}"'.format(cve_id), "sort": "updated", "order": "desc", "per_page": 5}
+    try:
+        response = requests.get(GITHUB_SEARCH_REPOS_URL, headers=headers, params=params, timeout=timeout)
+        if response.status_code != 200:
+            raise RuntimeError("HTTP {}".format(response.status_code))
+        items = (response.json() or {}).get("items") or []
+        if not items:
+            return {"count": 0, "latest_url": "", "latest_created_at": ""}
+        latest = items[0]
+        return {
+            "count": len(items),
+            "latest_url": latest.get("html_url") or "",
+            "latest_created_at": (latest.get("created_at") or "")[:10],
+        }
+    except Exception as error:
+        print("[-] GitHub PoC 검색 실패 ({}): {}".format(cve_id, error))
+        return None
+
+HN_ALGOLIA_SEARCH_URL = "https://hn.algolia.com/api/v1/search"
+
+def check_hn_buzz(url, timeout=10):
+    """Hacker News에서 해당 URL이 논의됐는지 조회 — 무료·무인증 공개 API.
+
+    내부 휴리스틱만으로는 못 잡는 '지금 업계가 주목하는 것' 신호를 보완한다.
+    실패·미발견 시 None (호출부는 항상 폴백 가능해야 함).
+    """
+    if not url:
+        return None
+    try:
+        response = requests.get(
+            HN_ALGOLIA_SEARCH_URL,
+            params={"query": url, "restrictSearchableAttributes": "url", "tags": "story"},
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            raise RuntimeError("HTTP {}".format(response.status_code))
+        hits = (response.json() or {}).get("hits") or []
+        if not hits:
+            return None
+        top = max(hits, key=lambda hit: hit.get("points") or 0)
+        return {
+            "points": top.get("points") or 0,
+            "num_comments": top.get("num_comments") or 0,
+            "hn_url": "https://news.ycombinator.com/item?id={}".format(top.get("objectID")),
+        }
+    except Exception as error:
+        print("[-] HN 화제성 조회 실패: {}".format(error))
+        return None
 
 def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, poc_public=False, epss=None,
                      exclude_assets=None):
