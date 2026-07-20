@@ -71,13 +71,24 @@ SOURCE_LABELS = {
     "inca_isarc": "잉카 ISARC",
     "s2w": "S2W",
     "nshc_threatrecon": "NSHC ThreatRecon",
+    "genians": "지니언스 시큐리티 센터",
+    "proofpoint": "Proofpoint",
+    "malwarebytes": "Malwarebytes Labs",
 }
 
 MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15
 MAX_TOP_ITEMS_IN_REPORT = 10
 MAX_CVE_CARDS = 5
-MAX_ITEMS_PER_CATEGORY = 8
 MAX_ITEMS_PER_PIR = 5
+
+# CVE 카드 필드별 길이 상한 — 소비처마다 예산이 달라 값이 다르다:
+# 요약·영향은 전 채널 공통(카드 생성 시 한 번만 자르면 됨), 조치문은 LLM
+# 프롬프트(토큰 절약) < Slack(블록 길이 제한) < 이메일/텍스트(가장 여유) 순.
+CARD_SUMMARY_CHARS = 200
+CARD_PRODUCTS_MAX = 5
+CARD_REMEDIATION_CHARS_DIGEST = 100
+CARD_REMEDIATION_CHARS_SLACK = 120
+CARD_REMEDIATION_CHARS = 150
 
 # 주요 뉴스 TOP에서 제외할 비뉴스 소스 — API·공지형 항목은 CVSS 점수로 목록을
 # 도배하기 쉽고, CVE 카드·소스별 전용 알림이 이미 다루므로 뉴스만 노출한다.
@@ -88,6 +99,17 @@ NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
 MAX_TREND_ITEMS = 5
 MAX_TREND_PER_CATEGORY = 2  # 카테고리 쏠림 방지 (슬롯이 남으면 상한 해제)
 TREND_CATEGORIES = {"공격캠페인", "침해사고", "개인정보유출", "악성코드", "공급망공격", "기술동향"}
+
+# 임베딩 유사도 — CVE 겹침·제목 자카드로 못 잡는 "다른 표현, 같은 사건"을 MMR 다양성 항의
+# 보조 신호로만 쓴다. 고정 임계값으로 "이 이상이면 중복"이라고 하드컷하는 건 시도했으나
+# 실측(nomic-embed-text)에서 뒤집혔다 — 국문 기준 같은 사건(다른 표현) 0.93인데, 같은
+# 행위자명을 공유할 뿐인 완전히 다른 사건이 0.98로 더 높게 나왔다(모델이 다국어·짧은
+# 제목에 덜 최적화됨). 하드컷은 이 경우 진짜 다른 기사를 지워버리므로 절대 쓰지 않는다.
+TREND_EMBEDDING_TIMEOUT = 15
+
+# MMR(Maximal Marginal Relevance) 가중치 — 후보 선정 시 관련성 대 다양성 비중.
+# 높을수록 관련성(기존 정렬 순위) 우선, 낮을수록 이미 뽑힌 것과 다른 주제를 우선.
+TREND_MMR_LAMBDA = 0.7
 
 
 def source_label(source):
@@ -267,7 +289,7 @@ def importance_score(event):
     return ((event.get("importance") or {}).get("score")) or 0
 
 
-def pick_trend_reads(events, exclude_ids):
+def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False):
     """알림 문턱을 못 넘었지만 읽을 가치가 있는 동향 기사 큐레이션.
 
     긴급도(악용·자산) 축과 별개로 '읽을 가치' 축을 보완한다.
@@ -275,6 +297,12 @@ def pick_trend_reads(events, exclude_ids):
     후보: 미알림·미노출 뉴스 중 ①PIR에 답하거나 ②관련성 high인 위협/동향
     기사 ③신뢰도 B(자체 텔레메트리 벤더 리서치) 소스의 관련성 medium 분석.
     이미 다른 소스로 알림된 사건의 재보도와 noise로 라벨된 이벤트는 제외.
+
+    include_alerted=True면 이미 알림된 이벤트도 후보에 포함한다 — 일간/주간
+    리포트는 별도 섹션(카드·TOP N)이 알림 건을 이미 보여주니 여기선 그걸
+    보완해야 의미가 있지만, curator_digest.py처럼 그런 별도 섹션 없이 단독
+    발송되는 경우엔 "알림 여부와 무관하게 이 기간 전체에서 읽을 가치가
+    있는 것"을 추리는 게 더 맞다.
 
     정렬은 인사이트 축 우선 — PIR high 매칭 수 → PIR 매칭 수 → 주제 반복
     여부(이미 알림된 행위자·멀웨어 재탕은 후순위) → LLM 확신도(low 후순위)
@@ -291,6 +319,7 @@ def pick_trend_reads(events, exclude_ids):
     1건만, 카테고리당 최대 MAX_TREND_PER_CATEGORY건 (슬롯이 남으면
     상한 해제).
     """
+    max_items = max_items or MAX_TREND_ITEMS
     pir_defs = common_utils.load_pirs()
     feedback = common_utils.load_feedback()
 
@@ -311,6 +340,16 @@ def pick_trend_reads(events, exclude_ids):
     depth_rank = {"analysis": 0, "report": 1, "news": 3, "opinion": 4}
     novelty_rank = {"new": 0, "update": 1, "known": 3}
 
+    def hn_points(event):
+        """Hacker News 화제성(포인트) — 내부 휴리스틱이 못 잡는 '지금 업계가 주목' 신호 보완.
+
+        결과를 이벤트에 캐시해 trend_bits()가 같은 조회를 반복하지 않게 한다.
+        """
+        if "_hn_buzz" not in event:
+            event["_hn_buzz"] = common_utils.check_hn_buzz(event.get("url"))
+        buzz = event["_hn_buzz"]
+        return buzz["points"] if buzz else 0
+
     def insight_sort_key(event):
         weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
         intel_richness = min(len(event.get("iocs") or []) + len(event.get("attack_techniques") or []), 10)
@@ -323,6 +362,7 @@ def pick_trend_reads(events, exclude_ids):
             novelty_rank.get(event.get("novelty") or "", 2),
             depth_rank.get(event.get("content_depth") or "", 2),
             -intel_richness,
+            -hn_points(event),
             -importance_score(event),
             -published_ts(event),
         )
@@ -333,9 +373,9 @@ def pick_trend_reads(events, exclude_ids):
             continue
         if (event.get("source") or "") in NON_NEWS_SOURCES:
             continue
-        if event_alerted(event):
+        if not include_alerted and event_alerted(event):
             continue
-        if (event.get("cluster") or {}).get("already_alerted"):
+        if not include_alerted and (event.get("cluster") or {}).get("already_alerted"):
             continue  # 다른 소스로 이미 알림된 사건의 재보도
         if (feedback.get(event.get("id")) or {}).get("label") == "noise":
             continue
@@ -349,40 +389,84 @@ def pick_trend_reads(events, exclude_ids):
             candidates.append(event)
     candidates.sort(key=insight_sort_key)
 
-    picked, picked_ids, picked_related, picked_topics = [], set(), set(), set()
+    picked, picked_ids, picked_related = [], set(), set()
     category_counts = Counter()
     covered_pirs = set(alerted_pirs)  # 알림이 이미 답한 PIR은 커버된 것으로 시드
+    rank_index = {event.get("id"): idx for idx, event in enumerate(candidates)}
 
-    def try_pick(event, require_new_pir, require_high, enforce_cap):
-        if len(picked) >= MAX_TREND_ITEMS or event.get("id") in picked_ids:
-            return
+    embedding_cache = {}
+    embedding_disabled = [False]  # 첫 실패 시 이번 실행 전체에서 재시도하지 않음 (연속 타임아웃 방지)
+
+    def get_embedding(event):
+        if embedding_disabled[0]:
+            return None
+        event_id = event.get("id")
+        if event_id not in embedding_cache:
+            text = " ".join(
+                filter(None, [event.get("title"), event.get("ai_summary") or event.get("summary")])
+            )[:500]
+            embedding = common_utils.llm_embed(text, timeout=TREND_EMBEDDING_TIMEOUT)
+            if embedding is None:
+                embedding_disabled[0] = True
+            embedding_cache[event_id] = embedding
+        return embedding_cache[event_id]
+
+    def relevance_score(event):
+        """정렬 순위를 1(1위)~0(최하위) 스칼라로 환산 — MMR 선형결합의 관련성 항."""
+        total = len(candidates)
+        return 1.0 - (rank_index[event.get("id")] / max(total - 1, 1))
+
+    def redundancy(event):
+        """이미 뽑힌 기사들과의 최대 임베딩 유사도 — MMR 선형결합의 다양성 항 (임베딩 불가 시 0)."""
+        embedding = get_embedding(event)
+        if embedding is None or not picked:
+            return 0.0
+        return max(common_utils.cosine_similarity(embedding, get_embedding(p)) for p in picked)
+
+    def eligible(event, require_new_pir, require_high, enforce_cap):
+        if event.get("id") in picked_ids:
+            return False
         related = set((event.get("cluster") or {}).get("related_ids") or [])
         if event.get("id") in picked_related or related & picked_ids:
-            return  # 이미 뽑힌 기사와 같은 사건
-        topics = event_topics(event)
+            return False  # 이미 뽑힌 기사와 같은 사건
         category = event.get("category") or "기타"
-        if enforce_cap and (category_counts[category] >= MAX_TREND_PER_CATEGORY
-                            or topics & picked_topics):
-            return  # 카테고리 쏠림 / 같은 행위자·멀웨어 주제 반복 방지 (슬롯 남으면 해제)
+        if enforce_cap and category_counts[category] >= MAX_TREND_PER_CATEGORY:
+            return False  # 카테고리 쏠림 방지 (슬롯 남으면 상한 해제)
         new_pirs = set(event.get("pirs") or []) - covered_pirs
         if require_new_pir and not new_pirs:
-            return
+            return False
         if require_high and not any((pir_defs.get(pid) or {}).get("weight") == "high" for pid in new_pirs):
-            return
+            return False
+        return True
+
+    def commit(event):
+        related = set((event.get("cluster") or {}).get("related_ids") or [])
+        new_pirs = set(event.get("pirs") or []) - covered_pirs
         picked.append(event)
         picked_ids.add(event.get("id"))
         picked_related.update(related)
-        picked_topics.update(topics)
-        category_counts[category] += 1
+        category_counts[event.get("category") or "기타"] += 1
         covered_pirs.update(new_pirs)
 
     # 1차: 미커버 high 가중치 PIR / 2차: 미커버 PIR 전체 / 3차: 정렬순 충원 /
-    # 4차: 슬롯이 남으면 카테고리·주제 상한 해제
+    # 4차: 슬롯이 남으면 카테고리 상한 해제.
+    # 차수별 하드 필터(PIR 요구조건·카테고리 캡·중복)를 통과한 후보 중에서는 매 스텝
+    # MMR(관련성 순위 λ vs 기픽과의 임베딩 유사도)로 최선을 고른다 — 같은 행위자·주제라도
+    # 하드컷 대신 유사도 페널티만 받으므로, 캡 경계에서 근소하게 밀리는 일이 줄어든다.
     for require_new_pir, require_high, enforce_cap in (
         (True, True, True), (True, False, True), (False, False, True), (False, False, False)
     ):
-        for event in candidates:
-            try_pick(event, require_new_pir, require_high, enforce_cap)
+        while len(picked) < max_items:
+            best, best_score = None, None
+            for event in candidates:
+                if not eligible(event, require_new_pir, require_high, enforce_cap):
+                    continue
+                score = TREND_MMR_LAMBDA * relevance_score(event) - (1 - TREND_MMR_LAMBDA) * redundancy(event)
+                if best_score is None or score > best_score:
+                    best, best_score = event, score
+            if best is None:
+                break
+            commit(best)
 
     return picked
 
@@ -401,6 +485,9 @@ def trend_bits(event):
         bits.append("관련성 high")
     if importance_score(event):
         bits.append("{}점".format(importance_score(event)))
+    hn_buzz = event.get("_hn_buzz")
+    if hn_buzz:
+        bits.append("HN {}점·댓글 {}".format(hn_buzz["points"], hn_buzz["num_comments"]))
     return bits
 
 
@@ -425,27 +512,6 @@ def unanswered_pirs(pir_groups):
     return [(pid, pir_defs[pid]["question"]) for pid in sorted(pir_defs) if pid not in matched]
 
 
-def group_by_category(events):
-    """LLM 분류(category)가 있는 이벤트를 카테고리별로 묶어 (카테고리, 이벤트 목록) 반환.
-
-    뉴스형 소스(보안뉴스·ASEC·RSS 피드) 전용 뷰 — API 소스(NVD 등)는 category가
-    비어 있어 제외된다. 카테고리 순서는 ENRICH_CATEGORIES 정의 순, 그룹 내부는
-    우선순위 순 정렬.
-    """
-    grouped = {}
-    for event in events:
-        category = common_utils.clean_text(event.get("category"))
-        if not category:
-            continue
-        grouped.setdefault(category, []).append(event)
-
-    order = {category: idx for idx, category in enumerate(common_utils.ENRICH_CATEGORIES)}
-    return [
-        (category, sorted(grouped[category], key=event_sort_key))
-        for category in sorted(grouped, key=lambda c: (order.get(c, len(order)), c))
-    ]
-
-
 def _union(group, field):
     """그룹 내 이벤트들의 리스트 필드를 순서 보존하며 합집합"""
     seen = set()
@@ -459,11 +525,13 @@ def _union(group, field):
     return merged
 
 
-def build_cve_card(cve, group, sources):
-    """같은 CVE를 다루는 여러 소스의 이벤트를 카드 하나로 병합.
+def build_cve_card(cve_label, cve_ids, group, sources):
+    """같은 CVE(들)를 다루는 여러 소스의 이벤트를 카드 하나로 병합.
 
     소스마다 가진 정보가 달라(NVD=점수·참조, KEV=악용·기한, 뉴스·ASEC=국내 맥락)
-    합치면 취약점 하나의 완성된 그림이 된다.
+    합치면 취약점 하나의 완성된 그림이 된다. cve_label은 단일 CVE ID이거나,
+    같은 사건을 다루는 CVE 여러 개를 합친 " / " 구분 문자열일 수 있다. cve_ids는
+    그 개별 CVE ID 리스트 — GitHub PoC 조회 등 CVE 단위 후속 처리에 쓴다.
     """
     level_rank = {"P1": 0, "P2": 1}
     exploitation_rank = {"active": 0, "poc": 1, "none": 2}
@@ -486,7 +554,9 @@ def build_cve_card(cve, group, sources):
             break
 
     return {
-        "cve": cve,
+        "cve": cve_label,
+        "cve_ids": cve_ids,
+        "github_poc": None,  # main()에서 상위 카드만 골라 채운다 (API 호출 비용 제한)
         "sources": sources,
         "level": min(levels, key=lambda l: level_rank[l]) if levels else "",
         "score": max((event_score(event) for event in group), default=0.0),
@@ -500,7 +570,7 @@ def build_cve_card(cve, group, sources):
         "fix_available": any(event.get("fix_available") for event in group) or None,
         "due_date": next((event["due_date"] for event in group if event.get("due_date")), ""),
         "remediation": remediation,
-        "summary": summary[:300],
+        "summary": summary[:CARD_SUMMARY_CHARS],
         "products": _union(group, "affected_products"),
         "assets": _union(group, "matched_assets"),
         "actors": [event["threat_actor"] for event in group if event.get("threat_actor")],
@@ -517,18 +587,29 @@ def correlate_by_cve(events):
 
     복수 소스 동시 등장 자체가 가장 강한 중요도 신호다:
     NVD 단독 = 배경 소음, +KEV = 실제 악용, +국내 뉴스·ASEC = 국내에서 문제되는 위협.
+
+    완전히 같은 이벤트 집합(동일한 기사들이 여러 CVE를 함께 보도)에 걸린 CVE는
+    같은 취약점 체인·공지의 일부이므로 카드 하나로 합쳐 반복 노출을 없앤다.
     """
     groups = {}
     for event in events:
         for cve in event.get("cves") or []:
             groups.setdefault(cve, []).append(event)
 
-    cards = []
+    clusters = {}
     for cve, group in groups.items():
         sources = sorted({event.get("source") or "unknown" for event in group})
         if len(sources) < 2:
             continue
-        cards.append(build_cve_card(cve, group, sources))
+        key = frozenset(event.get("id") for event in group)
+        cluster = clusters.setdefault(key, {"cves": [], "group": group, "sources": sources})
+        cluster["cves"].append(cve)
+
+    cards = []
+    for cluster in clusters.values():
+        cve_ids = sorted(cluster["cves"])
+        cve_label = " / ".join(cve_ids)
+        cards.append(build_cve_card(cve_label, cve_ids, cluster["group"], cluster["sources"]))
 
     level_rank = {"P1": 0, "P2": 1, "": 2}
     cards.sort(
@@ -564,7 +645,22 @@ def card_severity_bits(card):
         bits.append("랜섬웨어 연계")
     if card["assets"]:
         bits.append("자산매칭: {}".format(", ".join(card["assets"])))
+    if (card.get("github_poc") or {}).get("count"):
+        bits.append("GitHub PoC 저장소 {}개".format(card["github_poc"]["count"]))
     return bits
+
+
+MAX_GITHUB_POC_CVES_PER_CARD = 3  # 병합 카드에 CVE가 여러 개면 상위 몇 개까지만 조회 (API 호출 제한)
+
+
+def enrich_cards_with_github_poc(cards):
+    """카드 목록(리포트에 실제 노출되는 상위 N개만 넘길 것)에 GitHub PoC 공개 여부를 붙인다."""
+    for card in cards:
+        for cve_id in card["cve_ids"][:MAX_GITHUB_POC_CVES_PER_CARD]:
+            result = common_utils.check_github_poc(cve_id)
+            if result and result["count"] > 0:
+                card["github_poc"] = result
+                break
 
 
 def event_line(event):
@@ -661,8 +757,10 @@ def build_digest(period_label, stats, events, cards):
 
     if cards:
         lines.append("")
-        lines.append("[크로스소스 상관관계 — 복수 소스에 동시 등장한 CVE (신뢰도 높은 핵심 위협)]")
-        for card in cards[:MAX_CVE_CARDS]:
+        lines.append(
+            "[크로스소스 상관관계 — 복수 소스에 동시 등장한 CVE (신뢰도 높은 핵심 위협, 우선순위 순으로 이미 정렬됨)]"
+        )
+        for idx, card in enumerate(cards[:MAX_CVE_CARDS], start=1):
             parts = [
                 "{} (소스 {}개: {})".format(
                     card["cve"], len(card["sources"]),
@@ -671,14 +769,14 @@ def build_digest(period_label, stats, events, cards):
             ]
             parts.extend(card_severity_bits(card))
             if card["products"]:
-                parts.append("영향: {}".format(", ".join(card["products"][:5])))
+                parts.append("영향: {}".format(", ".join(card["products"][:CARD_PRODUCTS_MAX])))
             if card["remediation"]:
-                parts.append("조치: {}".format(card["remediation"][:100]))
+                parts.append("조치: {}".format(card["remediation"][:CARD_REMEDIATION_CHARS_DIGEST]))
             if card["due_date"]:
                 parts.append("조치기한 {}".format(card["due_date"]))
-            lines.append("- " + " | ".join(parts))
+            lines.append("{}. ".format(idx) + " | ".join(parts))
             if card["summary"]:
-                lines.append("  요약: {}".format(card["summary"][:200]))
+                lines.append("  요약: {}".format(card["summary"]))
 
     grouped = {}
     for event in events:
@@ -730,20 +828,20 @@ def _truncate_summary_section(narrative, max_chars=SUMMARY_MAX_CHARS):
 ITEM_MAX_CHARS = 140
 
 
-def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS):
-    """[핵심 위협 TOP 3] 같은 번호 리스트의 항목별 설명이 길면 문장 단위로 잘라 가독성을 보장한다 (LLM이 프롬프트 지침을 어길 때의 안전장치)."""
+def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_items=None):
+    """[핵심 위협 TOP 3]/[자사 자산 관련]/[권고 조치] 같은 번호·불릿 리스트의 항목별 설명이 길면 문장 단위로 자르고,
+    max_items가 있으면 LLM이 개수 지침을 어겨도 코드가 항목 수 자체를 강제한다 (안전장치)."""
     match = re.search(r"(\[{}\]\s*\n?)(.*?)(?=\n\[|\Z)".format(re.escape(header)), narrative, re.S)
     if not match:
         return narrative
 
-    items = re.split(r"(?m)^(?=\d+\.\s)", match.group(2).strip())
+    items = [item.rstrip() for item in re.split(r"(?m)^(?=\d+\.\s|-\s)", match.group(2).strip()) if item.strip()]
+    if max_items is not None:
+        items = items[:max_items]
+
     trimmed_items = []
     for item in items:
-        item = item.rstrip()
-        if not item:
-            continue
-
-        title_match = re.match(r"\d+\.\s*.*?(?:\*\*\s*:|:)\s*", item)
+        title_match = re.match(r"(?:\d+\.|-)\s*.*?(?:\*\*\s*:|:)\s*", item)
         title = title_match.group(0) if title_match else ""
         desc = item[len(title):].strip()
 
@@ -773,14 +871,18 @@ def ai_narrative(period_label, digest):
 - 숫자를 쓰더라도 전체 건수 등 꼭 필요한 것 한두 개만, 나열식으로 늘어놓지 말 것
 
 [핵심 위협 TOP 3]
+- 데이터의 [크로스소스 상관관계] 목록은 이미 우선순위 순으로 정렬돼 있다. 그 목록의 1번·2번·3번 항목을 그 순서 그대로 다뤄라 (목록에 없는 CVE·위협을 임의로 추가하거나 순서를 바꾸지 말 것)
+- 목록 항목이 3개 미만이면 있는 개수만큼만 쓰고, 목록이 비어 있으면 전체 데이터에서 가장 중요한 것 최대 3건을 골라 써라
 - 각 항목마다 무엇이 왜 중요한지 1문장
 - EPSS/CVSS 수치, 소스명, 패치 일자 등 세부 데이터 나열 금지 — 이미 [핵심 취약점 TOP N] 카드 섹션에 있으므로 반복하지 말 것. 실무 임팩트(무엇이 뚫리고 왜 위험한지) 중심으로만 쓸 것
 
 [자사 자산 관련]
 - 매칭된 항목이 있으면 조치 우선순위를 제시하고, 없으면 "해당 없음"이라고만 작성
+- CVE ID, EPSS/CVSS 수치, KEV 등재 여부 등 세부 데이터 나열 금지 — 이미 다른 섹션에 있으므로 반복하지 말 것. 자산별로 뭘 먼저 조치해야 하는지 1문장만
 
 [권고 조치]
-- 3개 이내
+- 정확히 3개 이내, 각 항목은 무엇을 해야 하는지 행동 중심으로 1문장
+- CVE ID, CVSS 수치, PIR 번호, 공격 그룹명 등 세부 데이터 나열 금지 — 이미 다른 섹션에 있으므로 반복하지 말 것
 
 주의: 제공된 데이터에 없는 사실을 만들어내지 마라. 건수와 수치는 데이터에 있는 그대로 사용하라.
 
@@ -793,10 +895,12 @@ def ai_narrative(period_label, digest):
         return narrative
     narrative = _truncate_summary_section(narrative)
     narrative = _truncate_numbered_items(narrative, "핵심 위협 TOP 3")
+    narrative = _truncate_numbered_items(narrative, "자사 자산 관련")
+    narrative = _truncate_numbered_items(narrative, "권고 조치", max_items=3)
     return narrative
 
 
-def build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
+def build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups,
                       trend_reads):
     lines = [
         title,
@@ -856,12 +960,16 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
             if bits:
                 lines.append("   심각도: {}".format(" / ".join(bits)))
             if card["products"]:
-                lines.append("   영향: {}".format(", ".join(card["products"][:5])))
+                lines.append("   영향: {}".format(", ".join(card["products"][:CARD_PRODUCTS_MAX])))
             if card["remediation"]:
                 due = " (기한 {})".format(card["due_date"]) if card["due_date"] else ""
-                lines.append("   조치: {}{}".format(card["remediation"][:150], due))
+                lines.append("   조치: {}{}".format(card["remediation"][:CARD_REMEDIATION_CHARS], due))
+            if (card.get("github_poc") or {}).get("count"):
+                lines.append("   GitHub PoC: {} ({} 등록)".format(
+                    card["github_poc"]["latest_url"], card["github_poc"]["latest_created_at"]
+                ))
             if card["summary"]:
-                lines.append("   요약: {}".format(card["summary"][:200]))
+                lines.append("   요약: {}".format(card["summary"]))
             for source, item_title, item_url in card["items"]:
                 lines.append("   - [{}] {} {}".format(source_label(source), item_title, item_url))
 
@@ -881,19 +989,6 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
             lines.append("- [{}] {}{}".format(source_label(event.get("source")), event.get("title"), suffix))
             lines.append("  {}".format(event.get("url") or ""))
 
-    if categorized:
-        lines.append("")
-        lines.append("[카테고리별 뉴스]")
-        for category, group in categorized:
-            lines.append("")
-            lines.append("■ {} ({}건)".format(category, len(group)))
-            for event in group[:MAX_ITEMS_PER_CATEGORY]:
-                level_prefix = "[{}] ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
-                lines.append("- {}[{}] {}".format(level_prefix, source_label(event.get("source")), event.get("title")))
-                lines.append("  {}".format(event.get("url") or ""))
-            if len(group) > MAX_ITEMS_PER_CATEGORY:
-                lines.append("- ...외 {}건".format(len(group) - MAX_ITEMS_PER_CATEGORY))
-
     if stats["iocs"]:
         lines.append("")
         lines.append("[부록: 수집된 IOC {}건]".format(len(stats["iocs"])))
@@ -905,7 +1000,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
     return "\n".join(lines)
 
 
-def build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
+def build_html_report(title, period_label, stats, narrative, highlights, cards, pir_groups,
                       trend_reads):
     parts = [
         "<html><body>",
@@ -974,12 +1069,18 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             if bits:
                 card_parts.append("심각도: {}".format(html.escape(" / ".join(bits))))
             if card["products"]:
-                card_parts.append("영향: {}".format(html.escape(", ".join(card["products"][:5]))))
+                card_parts.append("영향: {}".format(html.escape(", ".join(card["products"][:CARD_PRODUCTS_MAX]))))
             if card["remediation"]:
                 due = " (기한 {})".format(card["due_date"]) if card["due_date"] else ""
-                card_parts.append("조치: {}{}".format(html.escape(card["remediation"][:150]), html.escape(due)))
+                card_parts.append("조치: {}{}".format(html.escape(card["remediation"][:CARD_REMEDIATION_CHARS]), html.escape(due)))
+            if (card.get("github_poc") or {}).get("count"):
+                card_parts.append('GitHub PoC: <a href="{}">{}</a> ({} 등록)'.format(
+                    html.escape(card["github_poc"]["latest_url"]),
+                    html.escape(card["github_poc"]["latest_url"]),
+                    html.escape(card["github_poc"]["latest_created_at"]),
+                ))
             if card["summary"]:
-                card_parts.append(html.escape(card["summary"][:200]))
+                card_parts.append(html.escape(card["summary"]))
             card_parts.append(
                 " · ".join(
                     '<a href="{}">{}</a>'.format(html.escape(item_url or "#"), html.escape(source_label(source)))
@@ -1027,23 +1128,6 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             ))
         parts.append("</ul>")
 
-    if categorized:
-        parts.append("<h3>카테고리별 뉴스</h3>")
-        for category, group in categorized:
-            parts.append("<h4>{} ({}건)</h4>".format(html.escape(category), len(group)))
-            parts.append("<ul>")
-            for event in group[:MAX_ITEMS_PER_CATEGORY]:
-                level_prefix = "<b>{}</b> ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
-                parts.append('<li>{}[{}] <a href="{}">{}</a></li>'.format(
-                    level_prefix,
-                    html.escape(source_label(event.get("source"))),
-                    html.escape(event.get("url") or "#"),
-                    html.escape(event.get("title") or "(제목 없음)"),
-                ))
-            if len(group) > MAX_ITEMS_PER_CATEGORY:
-                parts.append("<li>...외 {}건</li>".format(len(group) - MAX_ITEMS_PER_CATEGORY))
-            parts.append("</ul>")
-
     if stats["iocs"]:
         parts.append("<h3>부록: 수집된 IOC {}건</h3>".format(len(stats["iocs"])))
         parts.append("<ul>")
@@ -1059,7 +1143,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
     return "".join(parts)
 
 
-def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups,
+def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, pir_groups,
                        trend_reads):
     stat_text = (
         "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`\n".format(
@@ -1133,7 +1217,7 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
                 line += "\n> {}".format(" / ".join(bits))
             if card["remediation"]:
                 due = " (기한 {})".format(card["due_date"]) if card["due_date"] else ""
-                line += "\n> 조치: {}{}".format(card["remediation"][:120], due)
+                line += "\n> 조치: {}{}".format(card["remediation"][:CARD_REMEDIATION_CHARS_SLACK], due)
             card_lines.append(line)
         blocks.append({"type": "divider"})
         blocks.append({
@@ -1193,29 +1277,6 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
             }],
         })
 
-    if categorized:
-        blocks.append({"type": "divider"})
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🗂️ *카테고리별 뉴스*"}})
-        for category, group in categorized:
-            category_lines = []
-            for event in group[:MAX_ITEMS_PER_CATEGORY]:
-                level = event_level(event)
-                marker = "🚨" if level == "P1" else ("⚠️" if level == "P2" else "•")
-                category_lines.append(
-                    "{} [{}] <{}|{}>".format(
-                        marker,
-                        source_label(event.get("source")),
-                        event.get("url") or "#",
-                        (event.get("title") or "(제목 없음)")[:100],
-                    )
-                )
-            if len(group) > MAX_ITEMS_PER_CATEGORY:
-                category_lines.append("...외 {}건".format(len(group) - MAX_ITEMS_PER_CATEGORY))
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "*{}* ({}건)\n{}".format(category, len(group), "\n".join(category_lines))},
-            })
-
     return blocks
 
 
@@ -1247,6 +1308,7 @@ def main():
     # CVE 크로스소스 상관관계: 복수 소스 등장 CVE는 카드로 병합하고,
     # 카드에 포함된 이벤트는 개별 TOP 목록에서 제외해 중복 표시를 막는다
     cards = correlate_by_cve(events)
+    enrich_cards_with_github_poc(cards[:MAX_CVE_CARDS])  # 실제 노출되는 카드에만 API 호출
     shown_card_event_ids = set()
     for card in cards[:MAX_CVE_CARDS]:
         shown_card_event_ids.update(card["event_ids"])
@@ -1255,23 +1317,21 @@ def main():
         if event.get("id") not in shown_card_event_ids
         and (event.get("source") or "") not in NON_NEWS_SOURCES
     ])
-    categorized = group_by_category(events)
     pir_groups = group_by_pir(events)
-    trend_reads = pick_trend_reads(
-        events, shown_card_event_ids | {event.get("id") for event in highlights},
-    )
+    highlight_ids = {event.get("id") for event in highlights}
+    trend_reads = pick_trend_reads(events, shown_card_event_ids | highlight_ids)
 
-    print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, 뉴스 카테고리 {}종, PIR {}종). AI 해석 생성 중...".format(
-        stats["total"], len(cards), len(categorized), len(pir_groups)
+    print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, PIR {}종). AI 해석 생성 중...".format(
+        stats["total"], len(cards), len(pir_groups)
     ))
     digest = build_digest(period_label, stats, events, cards)
     narrative = ai_narrative(period_label, digest)
     if not narrative:
         narrative = "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"
 
-    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups, trend_reads)
-    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups, trend_reads)
-    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, categorized, pir_groups, trend_reads)
+    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
+    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
+    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
 
     if args.dry_run:
         print("===== DRY RUN: 발송 생략 =====")
