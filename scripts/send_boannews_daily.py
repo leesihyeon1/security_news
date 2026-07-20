@@ -1,9 +1,8 @@
 import html
-import hashlib
-import json
 import os
 import re
 import smtplib
+import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 import requests
@@ -14,6 +13,11 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
+
+# Windows 콘솔(cp949)에서 특수문자 출력이 죽지 않도록 UTF-8로 강제
+for stream in (sys.stdout, sys.stderr):
+    if stream and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -28,8 +32,6 @@ SMTP_PORT = common_utils.SMTP_PORT
 BOANNEWS_RELIABILITY = "C"
 
 STATE_FILE = common_utils.STATE_DIR / "boannews_sent_state.json"
-DATA_DIR = PROJECT_ROOT / "data"
-EVENTS_FILE = DATA_DIR / "boannews_events.jsonl"
 MAX_STORED_SENT_IDS = 200
 XML_DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>", re.IGNORECASE)
 
@@ -41,10 +43,6 @@ def clean_text(text):
     return common_utils.clean_text(text)
 
 
-def utc_now_iso():
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
-
 def parse_rss_datetime(value):
     if not value:
         return None
@@ -53,11 +51,6 @@ def parse_rss_datetime(value):
         return parsedate_to_datetime(value).isoformat()
     except (TypeError, ValueError, IndexError):
         return None
-
-
-def event_id(source, source_id):
-    digest = hashlib.sha256(source_id.encode("utf-8")).hexdigest()[:16]
-    return "{}:{}".format(source, digest)
 
 
 def fetch_article_body(url):
@@ -99,56 +92,6 @@ def fetch_article_body(url):
         )
 
     return clean_text(body)[:ARTICLE_BODY_MAX_CHARS], published_at
-
-
-def normalize_boannews_event(news, fetched_at, email_sent=False, slack_sent=False):
-    source_id = news["id"]
-    enrichment = news.get("enrichment") or {}
-
-    return {
-        "id": event_id("boannews", source_id),
-        "source": "boannews",
-        "source_type": "rss",
-        "title": news["title"],
-        "url": news["link"],
-        "summary": news["summary"],
-        "published_at": parse_rss_datetime(news["pub_date"]) or news.get("article_published_at"),
-        "fetched_at": fetched_at,
-        "raw": {
-            "source_id": source_id,
-            "pub_date": news["pub_date"],
-            "rss_url": RSS_URL,
-        },
-        "analysis": {
-            "severity": enrichment.get("severity"),
-            "category": enrichment.get("category"),
-            "affected_products": enrichment.get("affected_products") or [],
-            "threat_actor": enrichment.get("threat_actor"),
-            "malware_family": enrichment.get("malware_family"),
-            "relevance": enrichment.get("relevance"),
-            "confidence": enrichment.get("confidence"),
-            "recommended_actions": enrichment.get("recommended_actions") or [],
-            "iocs": news.get("iocs") or [],
-            "attack_techniques": news.get("attack_techniques") or [],
-            "cves": news.get("extracted_cves") or [],
-            "llm_summary": enrichment.get("summary"),
-        },
-        "delivery": {
-            "email_sent": email_sent,
-            "slack_sent": slack_sent,
-        },
-    }
-
-
-def append_events(events):
-    if not events:
-        return
-
-    DATA_DIR.mkdir(exist_ok=True)
-
-    with EVENTS_FILE.open("a", encoding="utf-8") as file:
-        for event in events:
-            file.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def load_state():
@@ -408,7 +351,6 @@ def main():
 
     alert_articles = [news for news in new_articles if news["alert"]]
 
-    fetched_at = utc_now_iso()
     if alert_articles:
         slack_sent = send_to_slack(alert_articles)
         email_sent = send_email(alert_articles)
@@ -420,17 +362,6 @@ def main():
     else:
         slack_sent = email_sent = False
         print("[*] 신규 기사 {}건 모두 알림 기준 미달 또는 중복 억제 — 이벤트만 적재합니다.".format(len(new_articles)))
-
-    new_events = [
-        normalize_boannews_event(
-            article,
-            fetched_at,
-            email_sent=email_sent and article["alert"],
-            slack_sent=slack_sent and article["alert"],
-        )
-        for article in new_articles
-    ]
-    append_events(new_events)
 
     # 일간/주간 리포트용 통합 이벤트 로그 적재
     unified_events = []
