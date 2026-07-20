@@ -3,6 +3,7 @@ import json
 import os
 import re
 import smtplib
+import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 import requests
@@ -12,6 +13,11 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
+
+# Windows 콘솔(cp949)에서 특수문자 출력이 죽지 않도록 UTF-8로 강제
+for stream in (sys.stdout, sys.stderr):
+    if stream and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -289,8 +295,18 @@ def send_to_slack(items):
                 content
              )
 
+            # Slack 알림 문구(ai_result)와는 별도로, 리포트용 통합 enrichment(category/
+            # severity/pirs 등)를 채워 이벤트 로그에 저장한다 — 없으면 이 소스 기사는
+            # 카테고리별/PIR 집계에서 빠지게 된다.
+            item["enrichment"] = common_utils.ai_enrich_article(item["title"], content) or {}
+            item["iocs"] = common_utils.extract_iocs(content)
+            item["attack_techniques"] = common_utils.extract_attack_techniques(item["title"], content)
+
         else:
              ai_result = "본문을 가져오지 못했습니다."
+             item["enrichment"] = {}
+             item["iocs"] = []
+             item["attack_techniques"] = []
 
         triage = item.get("triage")
         blocks.append({
@@ -350,24 +366,37 @@ def main():
 
     save_state(state["sent_ids"] + [item["id"] for item in new_items])
 
-    # 일간/주간 리포트용 통합 이벤트 로그 적재
-    common_utils.append_events(
-        [
+    # 일간/주간 리포트용 통합 이벤트 로그 적재 — send_to_slack()에서 채운 enrichment를
+    # category/severity/pirs 등 공통 스키마 필드로 반영한다 (asec_notifier.py와 동일 패턴)
+    events_to_append = []
+    for item in new_items:
+        enrichment = item.get("enrichment") or {}
+        events_to_append.append(
             common_utils.make_event(
                 "kisa",
                 item["id"],
                 item["title"],
                 url=item["link"],
                 summary=item["summary"],
+                severity=enrichment.get("severity") or "",
                 cves=item.get("extracted_cves"),
+                category=enrichment.get("category") or "",
+                affected_products=enrichment.get("affected_products"),
+                threat_actor=enrichment.get("threat_actor") or "",
+                malware_family=enrichment.get("malware_family") or "",
+                relevance=enrichment.get("relevance") or "",
+                confidence=enrichment.get("confidence") or "",
+                iocs=item.get("iocs"),
+                attack_techniques=item.get("attack_techniques"),
+                pirs=enrichment.get("pirs"),
                 published_at=item["published"],
+                ai_summary=enrichment.get("summary"),
                 email_sent=email_sent,
                 slack_sent=slack_sent,
                 triage=item.get("triage"),
             )
-            for item in new_items
-        ]
-    )
+        )
+    common_utils.append_events(events_to_append)
     print("Sent: KISA/KrCERT items {}".format(len(new_items)))
 
 
