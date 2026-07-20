@@ -301,12 +301,14 @@ def send_to_slack(items):
             item["enrichment"] = common_utils.ai_enrich_article(item["title"], content) or {}
             item["iocs"] = common_utils.extract_iocs(content)
             item["attack_techniques"] = common_utils.extract_attack_techniques(item["title"], content)
+            item["body_chars"] = len(content)
 
         else:
              ai_result = "본문을 가져오지 못했습니다."
              item["enrichment"] = {}
              item["iocs"] = []
              item["attack_techniques"] = []
+             item["body_chars"] = 0
 
         triage = item.get("triage")
         blocks.append({
@@ -371,6 +373,15 @@ def main():
     events_to_append = []
     for item in new_items:
         enrichment = item.get("enrichment") or {}
+        # KISA/KrCERT는 정부기관 1차 공지 — feeds.json 기준 "A: 당국·당사자 1차 소스"와 동일 등급
+        related = common_utils.find_related_events(
+            item.get("extracted_cves"), item["title"], exclude_source="kisa",
+        )
+        cluster = common_utils.build_cluster_context(related, triage=item.get("triage"))
+        importance = common_utils.score_importance(
+            triage=item.get("triage"), enrichment=enrichment,
+            cves=item.get("extracted_cves"), reliability="A",
+        )
         events_to_append.append(
             common_utils.make_event(
                 "kisa",
@@ -381,6 +392,7 @@ def main():
                 severity=enrichment.get("severity") or "",
                 cves=item.get("extracted_cves"),
                 category=enrichment.get("category") or "",
+                category_reason=enrichment.get("category_reason") or "",
                 affected_products=enrichment.get("affected_products"),
                 threat_actor=enrichment.get("threat_actor") or "",
                 malware_family=enrichment.get("malware_family") or "",
@@ -394,6 +406,15 @@ def main():
                 email_sent=email_sent,
                 slack_sent=slack_sent,
                 triage=item.get("triage"),
+                importance=importance,
+                cluster=cluster,
+                content_depth=enrichment.get("content_depth") or "",
+                novelty=enrichment.get("novelty") or "",
+                body_chars=item.get("body_chars"),
+                recommended_actions=enrichment.get("recommended_actions"),
+                affected_versions=enrichment.get("affected_versions"),
+                fix_available=enrichment.get("fix_available"),
+                remediation=enrichment.get("patch_info") or "",
             )
         )
     common_utils.append_events(events_to_append)

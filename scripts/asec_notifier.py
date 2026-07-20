@@ -245,6 +245,10 @@ def main():
             # LLM enrichment는 발송 후 수행 — 알림에는 쓰지 않고 리포트용 이벤트 필드만 채운다
             print(f"AI 분석중: {title}")
             enrichment = common_utils.ai_enrich_article(title, content_text) or {}
+            # ASEC은 자체 텔레메트리 기반 1차 리서치 소스 — feeds.json의 벤더 리서치 블로그와 동일 등급
+            importance = common_utils.score_importance(
+                triage=triage, enrichment=enrichment, cves=extracted_cves, reliability="B",
+            )
 
             # 일간/주간 리포트용 통합 이벤트 로그 적재
             common_utils.append_events(
@@ -258,6 +262,7 @@ def main():
                         severity=enrichment.get("severity") or "",
                         cves=extracted_cves,
                         category=enrichment.get("category") or "",
+                        category_reason=enrichment.get("category_reason") or "",
                         affected_products=enrichment.get("affected_products"),
                         threat_actor=enrichment.get("threat_actor") or "",
                         malware_family=enrichment.get("malware_family") or "",
@@ -271,7 +276,15 @@ def main():
                         email_sent=bool(email_sent),
                         slack_sent=bool(slack_sent),
                         triage=triage,
+                        importance=importance,
                         cluster=cluster,
+                        content_depth=enrichment.get("content_depth") or "",
+                        novelty=enrichment.get("novelty") or "",
+                        body_chars=len(content_text or ""),
+                        recommended_actions=enrichment.get("recommended_actions"),
+                        affected_versions=enrichment.get("affected_versions"),
+                        fix_available=enrichment.get("fix_available"),
+                        remediation=enrichment.get("patch_info") or "",
                     )
                 ]
             )
