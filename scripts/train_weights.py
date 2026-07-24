@@ -16,8 +16,9 @@ score_importance()가 규칙 기반 대신 '유용 확률 x100'을 점수로 사
 import argparse
 import json
 import math
+import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import common_utils
 
@@ -30,6 +31,37 @@ MIN_CLASS_LABELS = 10
 EPOCHS = 3000
 LEARNING_RATE = 0.1
 L2 = 0.01
+
+REMINDER_COOLDOWN_DAYS = 3  # 라벨 부족 알림 최소 간격 — 매일 밤 도는 배치라 이게 없으면 매일 스팸됨
+REMINDER_STATE_FILE = common_utils.STATE_DIR / "feedback_reminder_state.json"
+
+
+def maybe_remind_slack(total, useful, noise):
+    """라벨이 아직 부족할 때 슬랙으로 능동 알림 — 로그 파일에만 찍히면 아무도 안 봄.
+    쿨다운 동안은 조용히 넘어가고, 학습 가능해지면(충분해지면) 더 이상 호출 안 됨."""
+    state = common_utils.load_json_state(REMINDER_STATE_FILE, lambda: {})
+    last = state.get("last_reminded_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            last_dt = None
+        if last_dt and datetime.utcnow() - last_dt < timedelta(days=REMINDER_COOLDOWN_DAYS):
+            return
+
+    need_useful = max(0, MIN_CLASS_LABELS - useful)
+    need_noise = max(0, MIN_CLASS_LABELS - noise)
+    class_note = ", useful {}건/noise {}건 부족".format(need_useful, need_noise) if (need_useful or need_noise) else ""
+    text = (
+        "\U0001F3F7️ *피드백 라벨링 부족* — 현재 {}건(useful {} / noise {}), "
+        "학습에는 총 30건 + 클래스별 10건 필요{}\n"
+        "> `python scripts\\feedback.py --list` 로 최근 알림 확인 후 --useful/--noise로 라벨링해주세요."
+    ).format(total, useful, noise, class_note)
+
+    webhook_url = os.environ.get("SLACK_WEBHOOK_REPORT") or common_utils.SLACK_WEBHOOK_URL
+    if common_utils.send_slack_webhook({"text": text}, webhook_url):
+        state["last_reminded_at"] = common_utils.utc_now_iso()
+        common_utils.save_json_state(REMINDER_STATE_FILE, state)
 
 
 def features_from_event(event):
@@ -128,6 +160,8 @@ def main():
         print("[-] 학습 최소치 미달 (총 {}건, 클래스별 {}건 필요). 라벨을 더 모아주세요.".format(
             MIN_TOTAL_LABELS, MIN_CLASS_LABELS
         ))
+        if not args.dry_run:
+            maybe_remind_slack(len(dataset), useful, noise)
         sys.exit(1)
 
     feature_names = list(common_utils.IMPORTANCE_FEATURE_LABELS)

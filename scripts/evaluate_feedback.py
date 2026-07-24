@@ -79,6 +79,27 @@ def print_breakdown(pairs, key_fn, section_name):
         print("  {}: {:.0%} ({}/{}){}".format(key, useful / total if total else 0, useful, total, note))
 
 
+def print_alerted_noise_mismatches(pairs, limit=10):
+    """알림까지 나갔는데 noise로 라벨된 사례 — 모델이 확신했는데 틀린, 가장 정보량 큰 오답.
+    라벨 1건보다 이런 불일치 사례가 스코어링 개선에 훨씬 유용하다."""
+    mismatches = [event for label, event in pairs if label == "noise" and gr.event_alerted(event)]
+    if not mismatches:
+        return
+
+    mismatches.sort(key=gr.importance_score, reverse=True)
+    print()
+    print("[알림됐지만 noise로 라벨된 사례 — 우선 검토 대상 {}건]".format(len(mismatches)))
+    for event in mismatches[:limit]:
+        print("  {} 점수{} [{}] {}".format(
+            common_utils.event_ref(event.get("id") or ""),
+            gr.importance_score(event),
+            gr.source_label(event.get("source")),
+            (event.get("title") or "")[:70],
+        ))
+    if len(mismatches) > limit:
+        print("  ...외 {}건".format(len(mismatches) - limit))
+
+
 def main():
     pairs = load_labeled_events()
     if not pairs:
@@ -108,6 +129,7 @@ def main():
     print_breakdown(pairs, lambda e: gr.source_label(e.get("source")), "소스")
     print_breakdown(pairs, lambda e: e.get("category") or "미분류", "카테고리")
     print_breakdown(pairs, lambda e: gr.event_level(e) or "P3", "트리아지 레벨")
+    print_alerted_noise_mismatches(pairs)
 
 
 if __name__ == "__main__":
