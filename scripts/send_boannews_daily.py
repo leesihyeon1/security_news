@@ -85,11 +85,8 @@ def fetch_article_body(url):
     if container is not None:
         body = container.get_text(" ", strip=True)
     else:
-        # 본문 컨테이너를 못 찾으면 문단 텍스트를 이어붙여 대체
-        body = " ".join(
-            text for el in soup.find_all("p")
-            if len(text := el.get_text(" ", strip=True)) > 30
-        )
+        print("[-] 본문 컨테이너를 찾지 못했습니다: {}".format(url))
+        body = ""
 
     return clean_text(body)[:ARTICLE_BODY_MAX_CHARS], published_at
 

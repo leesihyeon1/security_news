@@ -156,12 +156,8 @@ def fetch_article_body(feed, url):
     if container is not None:
         return common_utils.clean_text(container.get_text(" ", strip=True))[:BODY_MAX_CHARS]
 
-    # 최후 수단: 문단 텍스트 이어붙이기
-    text = " ".join(
-        paragraph for el in soup.find_all("p")
-        if len(paragraph := el.get_text(" ", strip=True)) > 30
-    )
-    return common_utils.clean_text(text)[:BODY_MAX_CHARS]
+    print("[-] 본문 컨테이너를 찾지 못해 RSS 내용으로 대체합니다: {}".format(url))
+    return ""
 
 
 def resolve_body(feed, article):

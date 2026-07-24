@@ -121,9 +121,9 @@ def fetch_post_body(url):
     container = (
         soup.find("div", class_="entry-content")
         or soup.find("article")
-        or soup.body
     )
     if container is None:
+        print(f"[-] 본문 컨테이너를 찾지 못해 피드 요약으로 대체합니다: {url}")
         return ""
     return common_utils.clean_text(container.get_text(" ", strip=True))[:POST_BODY_MAX_CHARS]
 
