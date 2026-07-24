@@ -52,7 +52,8 @@ def build_slack_payload(picks, period_label):
         suffix = " ({})".format(" | ".join(bits)) if bits else ""
         lines.append(
             "{}. [{}] <{}|{}>{}".format(
-                idx, gr.source_label(event.get("source")), event.get("url") or "#",
+                idx, gr.source_label(event.get("source")),
+                common_utils.tracking_url(event.get("id"), event.get("url")) or "#",
                 event.get("title") or "(제목 없음)", suffix,
             )
         )

@@ -7,6 +7,33 @@ import pytest
 import common_utils
 
 
+# ===== tracking_url =====
+
+def test_tracking_url_passthrough_when_not_configured(monkeypatch):
+    monkeypatch.setattr(common_utils, "CLICK_TRACK_BASE_URL", "")
+    assert common_utils.tracking_url("asec:1", "http://example.com/a") == "http://example.com/a"
+
+
+def test_tracking_url_passthrough_when_url_missing(monkeypatch):
+    monkeypatch.setattr(common_utils, "CLICK_TRACK_BASE_URL", "https://tracker.example.com")
+    assert common_utils.tracking_url("asec:1", "") == ""
+    assert common_utils.tracking_url("asec:1", None) is None
+
+
+def test_tracking_url_wraps_with_ref_and_encoded_url(monkeypatch):
+    monkeypatch.setattr(common_utils, "CLICK_TRACK_BASE_URL", "https://tracker.example.com")
+    result = common_utils.tracking_url("asec:1", "http://example.com/a?x=1&y=2")
+    expected_ref = common_utils.event_ref("asec:1")
+    assert result.startswith("https://tracker.example.com/api/click?ref={}&url=".format(expected_ref))
+    assert "example.com" not in result.split("url=", 1)[1][:20]  # URL이 인코딩돼 원문 그대로 노출되지 않음
+
+
+def test_tracking_url_strips_trailing_slash_from_base(monkeypatch):
+    monkeypatch.setattr(common_utils, "CLICK_TRACK_BASE_URL", "https://tracker.example.com/")
+    result = common_utils.tracking_url("asec:1", "http://example.com/a")
+    assert "//api/click" not in result
+
+
 # ===== iter_lines_reverse =====
 
 def test_iter_lines_reverse_basic_order(tmp_path):

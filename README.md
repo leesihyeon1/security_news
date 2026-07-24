@@ -291,6 +291,20 @@ judgments instead of hand-tuned points.
   👍). Requires `SLACK_BOT_TOKEN` + `SLACK_FEEDBACK_CHANNELS`; a reaction
   on a multi-article message labels every article in it — use the CLI
   for per-article control.
+- Auto (KEV): `kev_feedback_labeler.py` (runs nightly via
+  `slack_feedback.bat`) scans events whose CVE later appeared in CISA
+  KEV — proof the alert/recommendation was actually right, independent
+  of anyone's opinion — and labels them `useful` (`via: auto_kev`).
+  Only `useful` is ever auto-generated; a CVE never reaching KEV isn't
+  evidence of `noise`, so that side still needs a human call. Never
+  overwrites an event that already has a label.
+- Auto (clicks, optional): if `CLICK_TRACK_BASE_URL` is set, report/alert
+  links get rewritten through a small Vercel redirect function (see
+  `click-tracker/README.md` for deployment) that logs the click to
+  Upstash Redis. `click_feedback_puller.py` (also nightly) pulls that
+  log and labels the clicked event `useful` (`via: click`). Unset by
+  default — `tracking_url()` returns the original URL unchanged, no
+  behavior change unless you deploy the tracker.
 
 **Training**: once you have 30+ labels (10+ per class):
 

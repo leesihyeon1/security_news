@@ -928,6 +928,22 @@ def event_ref(event_id):
     """이벤트 ID의 10자리 참조 해시. 슬랙 메시지·CLI에서 긴 ID 대신 사용한다."""
     return hashlib.sha1(str(event_id).encode("utf-8")).hexdigest()[:10]
 
+CLICK_TRACK_BASE_URL = os.environ.get("CLICK_TRACK_BASE_URL", "").rstrip("/")
+
+def tracking_url(event_id, url):
+    """리포트/알림 링크를 클릭 추적 서버(Vercel) 경유 URL로 변환.
+
+    CLICK_TRACK_BASE_URL이 설정 안 돼 있으면(기본값) 원본 URL을 그대로 반환 —
+    추적 인프라 없이도 항상 정상 동작한다. click_feedback_puller.py가 나중에
+    이 ref로 클릭 로그를 이벤트에 역매핑해 useful 라벨을 자동 기록한다.
+    """
+    if not CLICK_TRACK_BASE_URL or not url:
+        return url
+    ref = event_ref(event_id) if event_id else ""
+    return "{}/api/click?ref={}&url={}".format(
+        CLICK_TRACK_BASE_URL.rstrip("/"), ref, urllib.parse.quote(url, safe=""),
+    )
+
 def load_feedback(feedback_file=None):
     """피드백 라벨을 {event_id: 최신 레코드}로 반환 (같은 이벤트는 마지막 라벨 우선)"""
     path = Path(feedback_file) if feedback_file else FEEDBACK_FILE

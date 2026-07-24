@@ -638,7 +638,7 @@ def build_cve_card(cve_label, cve_ids, group, sources):
         "assets": _union(group, "matched_assets"),
         "actors": [event["threat_actor"] for event in group if event.get("threat_actor")],
         "items": [
-            (event.get("source"), event.get("title") or "", event.get("url") or "")
+            (event.get("source"), event.get("title") or "", event.get("url") or "", event.get("id"))
             for event in group
         ],
         "event_ids": {event.get("id") for event in group},
@@ -998,7 +998,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
             for event in group[:MAX_ITEMS_PER_PIR]:
                 level_prefix = "[{}] ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
                 lines.append("- {}[{}] {}".format(level_prefix, source_label(event.get("source")), event.get("title")))
-                lines.append("  {}".format(event.get("url") or ""))
+                lines.append("  {}".format(common_utils.tracking_url(event.get("id"), event.get("url")) or ""))
             if len(group) > MAX_ITEMS_PER_PIR:
                 lines.append("- ...외 {}건".format(len(group) - MAX_ITEMS_PER_PIR))
         if pir_gaps:
@@ -1029,15 +1029,16 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
                 ))
             if card["summary"]:
                 lines.append("   요약: {}".format(card["summary"]))
-            for source, item_title, item_url in card["items"]:
-                lines.append("   - [{}] {} {}".format(source_label(source), item_title, item_url))
+            for source, item_title, item_url, item_id in card["items"]:
+                tracked_url = common_utils.tracking_url(item_id, item_url)
+                lines.append("   - [{}] {} {}".format(source_label(source), item_title, tracked_url))
 
     lines.append("")
     lines.append("[주요 뉴스 TOP {}]".format(len(highlights)))
     for idx, event in enumerate(highlights, start=1):
         level_prefix = "[{}] ".format(event_level(event)) if event_level(event) in ("P1", "P2") else ""
         lines.append("{}. {}[{}] {}".format(idx, level_prefix, source_label(event.get("source")), event.get("title")))
-        lines.append("   {}".format(event.get("url") or ""))
+        lines.append("   {}".format(common_utils.tracking_url(event.get("id"), event.get("url")) or ""))
 
     if trend_reads:
         lines.append("")
@@ -1046,7 +1047,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
             bits = trend_bits(event)
             suffix = " ({})".format(" | ".join(bits)) if bits else ""
             lines.append("- [{}] {}{}".format(source_label(event.get("source")), event.get("title"), suffix))
-            lines.append("  {}".format(event.get("url") or ""))
+            lines.append("  {}".format(common_utils.tracking_url(event.get("id"), event.get("url")) or ""))
 
     if stats["iocs"]:
         lines.append("")
@@ -1102,7 +1103,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
                 parts.append('<li>{}[{}] <a href="{}">{}</a></li>'.format(
                     level_prefix,
                     html.escape(source_label(event.get("source"))),
-                    html.escape(event.get("url") or "#"),
+                    html.escape(common_utils.tracking_url(event.get("id"), event.get("url")) or "#"),
                     html.escape(event.get("title") or "(제목 없음)"),
                 ))
             if len(group) > MAX_ITEMS_PER_PIR:
@@ -1143,8 +1144,11 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
                 card_parts.append(html.escape(card["summary"]))
             card_parts.append(
                 " · ".join(
-                    '<a href="{}">{}</a>'.format(html.escape(item_url or "#"), html.escape(source_label(source)))
-                    for source, _, item_url in card["items"]
+                    '<a href="{}">{}</a>'.format(
+                        html.escape(common_utils.tracking_url(item_id, item_url) or "#"),
+                        html.escape(source_label(source)),
+                    )
+                    for source, _, item_url, item_id in card["items"]
                 )
             )
             parts.append("<li>{}</li>".format("<br>".join(card_parts)))
@@ -1167,7 +1171,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
         parts.append(
             '<li>[{}] <a href="{}">{}</a>{}</li>'.format(
                 html.escape(source_label(event.get("source"))),
-                html.escape(event.get("url") or "#"),
+                html.escape(common_utils.tracking_url(event.get("id"), event.get("url")) or "#"),
                 html.escape(event.get("title") or "(제목 없음)"),
                 suffix,
             )
@@ -1182,7 +1186,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             suffix = " ({})".format(html.escape(" | ".join(bits))) if bits else ""
             parts.append('<li>[{}] <a href="{}">{}</a>{}</li>'.format(
                 html.escape(source_label(event.get("source"))),
-                html.escape(event.get("url") or "#"),
+                html.escape(common_utils.tracking_url(event.get("id"), event.get("url")) or "#"),
                 html.escape(event.get("title") or "(제목 없음)"),
                 suffix,
             ))
@@ -1241,7 +1245,7 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
                 marker = "🚨" if level == "P1" else ("⚠️" if level == "P2" else "•")
                 pir_lines.append("{} [{}] <{}|{}>".format(
                     marker, source_label(event.get("source")),
-                    event.get("url") or "#",
+                    common_utils.tracking_url(event.get("id"), event.get("url")) or "#",
                     (event.get("title") or "(제목 없음)")[:100],
                 ))
             if len(group) > 3:
@@ -1302,7 +1306,7 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
                     marker,
                     idx,
                     source_label(event.get("source")),
-                    event.get("url") or "#",
+                    common_utils.tracking_url(event.get("id"), event.get("url")) or "#",
                     (event.get("title") or "(제목 없음)")[:120],
                 )
             )
@@ -1318,7 +1322,7 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
             # 하나가 트렌드 기사 전체에 동일 라벨로 번지는 오염을 막는다.
             trend_lines.append("• [{}] <{}|{}>{} `{}`".format(
                 source_label(event.get("source")),
-                event.get("url") or "#",
+                common_utils.tracking_url(event.get("id"), event.get("url")) or "#",
                 (event.get("title") or "(제목 없음)")[:100],
                 suffix,
                 common_utils.event_ref(event.get("id") or ""),
