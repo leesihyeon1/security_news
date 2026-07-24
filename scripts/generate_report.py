@@ -75,6 +75,11 @@ SOURCE_LABELS = {
     "genians": "지니언스 시큐리티 센터",
     "proofpoint": "Proofpoint",
     "malwarebytes": "Malwarebytes Labs",
+    "reddit_netsec": "Reddit r/netsec",
+    "reddit_cybersecurity": "Reddit r/cybersecurity",
+    "reddit_reverseengineering": "Reddit r/ReverseEngineering",
+    "reddit_asknetsec": "Reddit r/AskNetsec",
+    "exploit_db": "Exploit-DB",
 }
 
 MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15
@@ -93,7 +98,7 @@ CARD_REMEDIATION_CHARS = 150
 
 # 주요 뉴스 TOP에서 제외할 비뉴스 소스 — API·공지형 항목은 CVSS 점수로 목록을
 # 도배하기 쉽고, CVE 카드·소스별 전용 알림이 이미 다루므로 뉴스만 노출한다.
-NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa"}
+NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa", "exploit_db"}
 
 # "읽을만한 동향" 큐레이션: 긴급도 점수가 낮아 알림되지 않은 기사 중
 # 인사이트 신호(PIR 매칭, 또는 high 관련성의 위협 분석 기사)가 있는 것을 고른다.

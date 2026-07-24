@@ -437,5 +437,65 @@
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
     "enabled": true
+  },
+  {
+    "name": "reddit_netsec",
+    "label": "Reddit r/netsec",
+    "reliability": "C",
+    "note": "커뮤니티 게시물이라 출처가 다양(원문 기사 링크·자체 분석·질문 등 혼재) — RSS 정상 확인(2026-07-25). 사내망에서 SSL 인증서 검증 실패, 집 환경에서 enabled로 전환.",
+    "rss_url": "https://www.reddit.com/r/netsec/.rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
+  },
+  {
+    "name": "reddit_cybersecurity",
+    "label": "Reddit r/cybersecurity",
+    "reliability": "C",
+    "note": "커뮤니티 게시물이라 출처가 다양 — RSS 정상 확인(2026-07-25). 사내망에서 SSL 인증서 검증 실패, 집 환경에서 enabled로 전환.",
+    "rss_url": "https://www.reddit.com/r/cybersecurity/.rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
+  },
+  {
+    "name": "reddit_reverseengineering",
+    "label": "Reddit r/ReverseEngineering",
+    "reliability": "C",
+    "note": "커뮤니티 게시물, 리버싱·악성코드 분석 위주. r/netsec·r/cybersecurity와 URL 형식 동일해 정상 동작 예상되나 테스트 중 Reddit 자체 레이트리밋(429)에 걸려 개별 확인은 못함(2026-07-25). 사내망 SSL 문제 동일 — 집 환경에서 enabled로 전환.",
+    "rss_url": "https://www.reddit.com/r/ReverseEngineering/.rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
+  },
+  {
+    "name": "reddit_asknetsec",
+    "label": "Reddit r/AskNetsec",
+    "reliability": "C",
+    "note": "커뮤니티 Q&A 위주라 뉴스성은 낮음. r/netsec·r/cybersecurity와 URL 형식 동일해 정상 동작 예상되나 테스트 중 Reddit 자체 레이트리밋(429)에 걸려 개별 확인은 못함(2026-07-25). 사내망 SSL 문제 동일 — 집 환경에서 enabled로 전환.",
+    "rss_url": "https://www.reddit.com/r/AskNetsec/.rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
+  },
+  {
+    "name": "exploit_db",
+    "label": "Exploit-DB",
+    "reliability": "C",
+    "note": "PoC/익스플로잇 카탈로그 — 서사형 보도가 아니라 취약점 카탈로그형 소스로 분류(generate_report.NON_NEWS_SOURCES·common_utils.CATALOG_SOURCES에 추가). RSS 정상 확인(2026-07-25). 사내망에서 SSL 인증서 검증 실패, 집 환경에서 enabled로 전환.",
+    "rss_url": "https://www.exploit-db.com/rss.xml",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": false
   }
 ]

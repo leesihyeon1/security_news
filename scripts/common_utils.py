@@ -1267,7 +1267,7 @@ CORROBORATION_CAP = 20
 
 # 취약점 카탈로그형 소스는 "보도"가 아니므로 클러스터링에서 제외
 # (NVD는 모든 CVE를 수록하므로 교차 확인 신호가 아니고, 뉴스 알림을 억제해서도 안 된다)
-CATALOG_SOURCES = {"nvd", "github_advisory"}
+CATALOG_SOURCES = {"nvd", "github_advisory", "exploit_db"}
 
 # events.jsonl에 importance.reliability가 없는 소스의 신뢰도 폴백 (교차 보도 가점용)
 SOURCE_RELIABILITY_FALLBACK = {
