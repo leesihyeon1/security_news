@@ -66,6 +66,17 @@ curator_digest.bat
 `rss_collector.bat` runs all enabled feeds in `assets/feeds.json` (`--all`). For manual testing, run
 `python scripts\rss_collector.py --feed <name> --dry-run` directly instead.
 
+## Tests
+
+```bat
+pip install -r requirements.txt
+python -m pytest
+```
+
+Covers the pure-logic pieces (tail-read log parsing, trend-read quality gates,
+analyst-review rubric parsing, HN buzz caching, Slack feedback ref-mapping) with
+temp files and mocked network calls — no real `data/` files or credentials needed.
+
 ## Reports
 
 All collector scripts append normalized events to `data/events.jsonl`.
