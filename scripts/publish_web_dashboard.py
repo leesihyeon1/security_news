@@ -1,10 +1,12 @@
 """boannews_vercel 정적 사이트로 일간/주간 리포트 JSON을 발행한다.
 
 WEB_DASHBOARD_REPO_PATH(.env)가 boannews_vercel 저장소의 **로컬 클론 경로**를
-가리켜야 한다. generate_report.py가 리포트를 만든 직후 이미 계산된 데이터로
-data/<period>-latest.json(최신본)과 data/<period>-<날짜>.json(히스토리)을 쓰고,
-그 클론에서 git add/commit/push까지 수행한다 — 새 토큰·API 연동 없이 이 기기에
-이미 설정된 git 자격증명(Credential Manager)을 그대로 쓴다.
+가리켜야 한다. 이 저장소는 dashboard/·click-tracker/ 두 하위 프로젝트를 담고 있고,
+각각 별도 Vercel 프로젝트(Root Directory 설정)로 배포된다 — 데이터는 그중
+dashboard/ 쪽에 쓴다. generate_report.py가 리포트를 만든 직후 이미 계산된 데이터로
+dashboard/data/<period>-latest.json(최신본)과 dashboard/data/<period>-<날짜>.json
+(히스토리)을 쓰고, 그 클론에서 git add/commit/push까지 수행한다 — 새 토큰·API 연동
+없이 이 기기에 이미 설정된 git 자격증명(Credential Manager)을 그대로 쓴다.
 
 실패해도(경로 미설정, git 오류, push 실패 등) 예외를 절대 밖으로 던지지 않는다 —
 대시보드 발행은 부가 기능이라 이것 때문에 메인 리포트 발송이 막히면 안 된다.
@@ -51,7 +53,7 @@ def publish(payload, repo_path=None):
     period = payload.get("period") or "daily"
     date_stamp = (payload.get("generated_at") or "")[:10] or "unknown"
 
-    data_dir = repo / "data"
+    data_dir = repo / "dashboard" / "data"
 
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +63,7 @@ def publish(payload, repo_path=None):
             with path.open("w", encoding="utf-8") as file:
                 json.dump(payload, file, ensure_ascii=False, indent=2)
 
-        _run_git(["add", "data"], cwd=repo)
+        _run_git(["add", "dashboard/data"], cwd=repo)
         status = _run_git(["status", "--porcelain"], cwd=repo)
         if not status.strip():
             print("[*] 변경사항 없음 — 커밋 생략")

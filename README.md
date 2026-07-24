@@ -153,11 +153,14 @@ histogram. Filters: `--actor`, `--malware`, `--cve`, `--source`, `--category`,
 
 ## Web Dashboard (optional)
 
-A static site (`boannews_vercel/`) shows the daily/weekly report split into
-domestic/overseas tabs, deployed separately on Vercel. `generate_report.py`
-publishes to it via `scripts/publish_web_dashboard.py` when
-`WEB_DASHBOARD_REPO_PATH` is set — see `boannews_vercel/README.md` for the
-site's structure and deployment steps, and the "Web Dashboard" env var above.
+`boannews_vercel/` is a separate repo/deploy target with two sibling
+sub-projects, each its own Vercel project (Root Directory setting):
+`boannews_vercel/dashboard/` (a static site showing the daily/weekly report
+split into domestic/overseas tabs) and `boannews_vercel/click-tracker/`
+(the click-tracking redirect, see below). `generate_report.py` publishes to
+`dashboard/data/` via `scripts/publish_web_dashboard.py` when
+`WEB_DASHBOARD_REPO_PATH` is set — see `boannews_vercel/README.md` and
+`boannews_vercel/dashboard/README.md` for structure and deployment steps.
 Unset by default; the main report send is unaffected either way (publish
 failures are logged, never raised).
 
@@ -310,8 +313,8 @@ judgments instead of hand-tuned points.
   overwrites an event that already has a label.
 - Auto (clicks, optional): if `CLICK_TRACK_BASE_URL` is set, report/alert
   links get rewritten through a small Vercel redirect function (see
-  `click-tracker/README.md` for deployment) that logs the click to
-  Upstash Redis. `click_feedback_puller.py` (also nightly) pulls that
+  `boannews_vercel/click-tracker/README.md` for deployment) that logs the
+  click to Upstash Redis. `click_feedback_puller.py` (also nightly) pulls that
   log and labels the clicked event `useful` (`via: click`). Unset by
   default — `tracking_url()` returns the original URL unchanged, no
   behavior change unless you deploy the tracker.

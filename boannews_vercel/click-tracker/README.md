@@ -4,8 +4,10 @@ boannews_mail 리포트/알림 링크의 클릭을 기록하는 Vercel 서버리
 Upstash Redis에 쌓이고, 메인 프로젝트의 `scripts/click_feedback_puller.py`가 주기적으로
 읽어가 `data/feedback.jsonl`에 `useful` 라벨로 기록한다.
 
-이 디렉토리는 메인 프로젝트(boannews_mail)와 독립된 별도 배포 단위다 — Python 프로젝트와
-같이 배포되지 않고, 별도로 Vercel에 배포한다.
+`boannews_vercel` 저장소 안의 하위 프로젝트 중 하나다(다른 하나는 `../dashboard/`).
+같은 저장소를 공유하지만 **완전히 별도의 Vercel 프로젝트**로 배포한다(Root Directory
+설정으로 구분) — 환경변수도 프로젝트별로 분리되므로 여기 등록한 Upstash 자격증명이
+dashboard 쪽에 노출되지 않는다. 저장소 최상위 구조는 `../README.md` 참고.
 
 ## 배포 순서
 
@@ -14,9 +16,8 @@ Upstash Redis에 쌓이고, 메인 프로젝트의 `scripts/click_feedback_pulle
 
 2. **Vercel 계정 생성** — https://vercel.com
 
-3. **이 디렉토리를 Vercel에 배포**:
-   - Vercel CLI 사용 시: `npm i -g vercel` 설치 후 이 디렉토리(`click-tracker/`)에서 `vercel deploy`
-   - 또는 Vercel 대시보드에서 이 저장소를 Import하고 "Root Directory"를 `click-tracker`로 지정
+3. **`boannews_vercel` 저장소를 Vercel에 (dashboard와는 별개로 한 번 더) Import**하고
+   프로젝트 설정에서 **Root Directory = `click-tracker`** 지정
 
 4. **Vercel 프로젝트의 Environment Variables**에 Upstash 값 등록:
    - `UPSTASH_REDIS_REST_URL`

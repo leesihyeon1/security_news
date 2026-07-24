@@ -122,8 +122,8 @@ def test_publish_writes_json_and_commits(tmp_path, monkeypatch):
     result = pwd.publish(payload, repo_path=str(repo))
     assert result is True
 
-    latest = json.loads((repo / "data" / "daily-latest.json").read_text(encoding="utf-8"))
-    history = json.loads((repo / "data" / "daily-2026-01-02.json").read_text(encoding="utf-8"))
+    latest = json.loads((repo / "dashboard" / "data" / "daily-latest.json").read_text(encoding="utf-8"))
+    history = json.loads((repo / "dashboard" / "data" / "daily-2026-01-02.json").read_text(encoding="utf-8"))
     assert latest == payload
     assert history == payload
 
