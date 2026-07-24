@@ -722,6 +722,32 @@ def check_github_poc(cve_id, timeout=15):
         return None
 
 HN_ALGOLIA_SEARCH_URL = "https://hn.algolia.com/api/v1/search"
+HN_BUZZ_CACHE_FILE = DATA_DIR / "hn_buzz_cache.json"
+HN_BUZZ_CACHE_TTL_DAYS = 3  # 이 기간 내 재조회분은 캐시로 대체. 실패(False)는 캐싱하지 않고 다음 실행에서 재시도
+HN_BUZZ_CACHE_RETENTION_DAYS = 14  # 이보다 오래된 항목은 캐시에서도 삭제 — 주간 리포트가 보는
+                                    # 최대 집계 기간(7일)보다 오래된 기사는 다시 후보가 될 일이
+                                    # 없어 캐시에 남겨둘 이유가 없다(sent_ids류 리스트 트리밍과
+                                    # 달리 URL 키 딕셔너리라 개수가 아닌 나이 기준으로 정리)
+
+def _hn_buzz_cache():
+    """실행(run) 간 영속 캐시 — 프로세스 내에서는 1회만 로드해 재사용."""
+    if "_hn_buzz_cache" not in _intel_cache:
+        _intel_cache["_hn_buzz_cache"] = load_json_state(HN_BUZZ_CACHE_FILE)
+    return _intel_cache["_hn_buzz_cache"]
+
+def _prune_hn_buzz_cache(cache):
+    cutoff = datetime.utcnow() - timedelta(days=HN_BUZZ_CACHE_RETENTION_DAYS)
+    stale_urls = []
+    for url, entry in cache.items():
+        try:
+            checked_at = datetime.fromisoformat(str(entry.get("checked_at")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            stale_urls.append(url)
+            continue
+        if checked_at < cutoff:
+            stale_urls.append(url)
+    for url in stale_urls:
+        del cache[url]
 
 def check_hn_buzz(url, timeout=10):
     """Hacker News에서 해당 URL이 논의됐는지 조회 — 무료·무인증 공개 API.
@@ -729,9 +755,23 @@ def check_hn_buzz(url, timeout=10):
     내부 휴리스틱만으로는 못 잡는 '지금 업계가 주목하는 것' 신호를 보완한다.
     반환값 3가지: dict(발견), None(정상 조회했지만 논의 없음), False(조회 자체가
     실패 — 호출부가 이 경우만 서킷브레이커로 구분해서 반복 실패를 피할 수 있게).
+
+    curator(4시간마다)·일간·주간 리포트가 같은 이벤트를 반복해서 후보로 보는
+    경우가 많아, 조회 결과를 파일에 캐싱해 HN_BUZZ_CACHE_TTL_DAYS 동안 재사용한다.
     """
     if not url:
         return None
+
+    cache = _hn_buzz_cache()
+    cached = cache.get(url)
+    if cached:
+        try:
+            checked_at = datetime.fromisoformat(str(cached.get("checked_at")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            checked_at = None
+        if checked_at and datetime.utcnow() - checked_at < timedelta(days=HN_BUZZ_CACHE_TTL_DAYS):
+            return cached.get("result")
+
     try:
         response = requests.get(
             HN_ALGOLIA_SEARCH_URL,
@@ -742,16 +782,22 @@ def check_hn_buzz(url, timeout=10):
             raise RuntimeError("HTTP {}".format(response.status_code))
         hits = (response.json() or {}).get("hits") or []
         if not hits:
-            return None
-        top = max(hits, key=lambda hit: hit.get("points") or 0)
-        return {
-            "points": top.get("points") or 0,
-            "num_comments": top.get("num_comments") or 0,
-            "hn_url": "https://news.ycombinator.com/item?id={}".format(top.get("objectID")),
-        }
+            result = None
+        else:
+            top = max(hits, key=lambda hit: hit.get("points") or 0)
+            result = {
+                "points": top.get("points") or 0,
+                "num_comments": top.get("num_comments") or 0,
+                "hn_url": "https://news.ycombinator.com/item?id={}".format(top.get("objectID")),
+            }
     except Exception as error:
         print("[-] HN 화제성 조회 실패: {}".format(error))
         return False
+
+    cache[url] = {"result": result, "checked_at": utc_now_iso()}
+    _prune_hn_buzz_cache(cache)
+    save_json_state(HN_BUZZ_CACHE_FILE, cache)
+    return result
 
 def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, poc_public=False, epss=None,
                      exclude_assets=None):
