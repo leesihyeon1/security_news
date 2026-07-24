@@ -942,10 +942,6 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
             len(stats["asset_hits"])
         ),
     ]
-    lines.append("- 소스: {}".format(
-        ", ".join("{} {}건".format(source_label(source), count) for source, count in stats["by_source"].most_common())
-    ))
-
     category_counts = [(c, n) for c, n in stats["by_category"].most_common() if c != "미분류"]
     if category_counts:
         lines.append("- 카테고리: {}".format(
@@ -1025,6 +1021,11 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
         if len(stats["iocs"]) > 30:
             lines.append("- ...외 {}건".format(len(stats["iocs"]) - 30))
 
+    lines.append("")
+    lines.append("[소스별 건수]")
+    for source, count in stats["by_source"].most_common():
+        lines.append("- {}: {}건".format(source_label(source), count))
+
     return "\n".join(lines)
 
 
@@ -1050,10 +1051,6 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             ", ".join("{} {}건".format(category, count) for category, count in category_counts)
         )))
     parts.append("</ul>")
-    parts.append("<details><summary>소스별 건수 ({}개 소스)</summary><ul>".format(len(stats["by_source"])))
-    for source, count in stats["by_source"].most_common():
-        parts.append("<li>{}: {}건</li>".format(html.escape(source_label(source)), count))
-    parts.append("</ul></details>")
 
     if narrative:
         parts.append("<h3>AI 분석</h3>")
@@ -1167,22 +1164,21 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             parts.append("<li>...외 {}건</li>".format(len(stats["iocs"]) - 30))
         parts.append("</ul>")
 
+    parts.append("<details><summary>소스별 건수 ({}개 소스)</summary><ul>".format(len(stats["by_source"])))
+    for source, count in stats["by_source"].most_common():
+        parts.append("<li>{}: {}건</li>".format(html.escape(source_label(source)), count))
+    parts.append("</ul></details>")
+
     parts.append("</body></html>")
     return "".join(parts)
 
 
 def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, pir_groups,
                        trend_reads):
-    stat_text = (
-        "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`\n".format(
-            stats["total"], len(stats["p1"]), len(stats["p2"]),
-            len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
-            len(stats["asset_hits"])
-        )
-        + "> " + ", ".join(
-            "{} {}건".format(source_label(source), count)
-            for source, count in stats["by_source"].most_common()
-        )
+    stat_text = "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`".format(
+        stats["total"], len(stats["p1"]), len(stats["p2"]),
+        len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
+        len(stats["asset_hits"])
     )
 
     blocks = [
@@ -1304,6 +1300,18 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
                 "text": "추천이 유용/노이즈였는지 `python scripts\\feedback.py --useful(--noise) <해시>`로 라벨링하면 큐레이션·중요도 학습에 반영됩니다.",
             }],
         })
+
+    blocks.append({"type": "divider"})
+    blocks.append({
+        "type": "context",
+        "elements": [{
+            "type": "mrkdwn",
+            "text": "*소스별 건수* — " + ", ".join(
+                "{} {}건".format(source_label(source), count)
+                for source, count in stats["by_source"].most_common()
+            ),
+        }],
+    })
 
     return blocks
 
