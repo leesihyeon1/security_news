@@ -115,7 +115,10 @@ INSIGHT_WEIGHTS = {
     "depth": 10,          # analysis=1.0 / report=0.66 / news=0.33 / opinion=0.0 / 미판정=0.4
     "intel_richness": 1.5,  # IOC·ATT&CK 1건당 (최대 10건)
     "hn_buzz": 6,          # log1p(HN 포인트)
-    "importance": 15,     # importance_score / 100
+    "importance": 7,      # importance_score / 100 — importance_score 자체가 pir_high/relevance/
+                           # confidence_low를 이미 피처로 쓰고 있어 그 3개와 중복 계산됨. 겹치는
+                           # 비중을 감안해 절반 수준으로 낮춤(악용상태·심각도·자산매칭·신뢰도 등
+                           # 나머지 고유 정보는 이 가중치로 계속 반영).
     "recency": 5,          # 7일 기준 선형 감쇠 (그 이상 오래되면 0)
 }
 
@@ -451,7 +454,11 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             continue
         relevance = event.get("relevance") or ""
         reliability = (event.get("importance") or {}).get("reliability") or ""
-        has_insight = bool(event.get("pirs")) or (
+        has_insight = (
+            bool(event.get("pirs"))
+            and relevance != "low"
+            and (event.get("confidence") or "") != "low"
+        ) or (
             (event.get("category") or "") in TREND_CATEGORIES
             and (relevance == "high" or (relevance == "medium" and reliability == "B"))
         )

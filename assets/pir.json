@@ -14,7 +14,7 @@
     {
       "id": "PIR-3",
       "question": "AI 관련 공격 동향 — AI를 악용한 공격, AI 시스템·서비스(LLM 등) 대상 공격, 프롬프트 인젝션",
-      "weight": "medium"
+      "weight": "high"
     },
     {
       "id": "PIR-4",
