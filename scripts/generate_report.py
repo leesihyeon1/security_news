@@ -112,8 +112,10 @@ INSIGHT_WEIGHTS = {
     "confidence_low": -8,  # LLM 스스로 모호하다고 판정
     "relevance": 25,      # high=1.0 / medium=0.5 / 미판정=0.0
     "novelty": 12,        # new=1.0 / update=0.5 / known=0.0 / 미판정=0.3
-    "depth": 10,          # analysis=1.0 / report=0.66 / news=0.33 / opinion=0.0 / 미판정=0.4
-    "intel_richness": 1.5,  # IOC·ATT&CK 1건당 (최대 10건)
+    "depth": 10,          # analyst_review rubric(기술적실체+실행가능성+신뢰성, 0~8)/8 — rubric
+                          # 없는 이벤트는 하위호환으로 content_depth 근사값(analysis=1.0/.../미판정=0.4) 사용.
+                          # IOC·ATT&CK 풍부도는 rubric의 technical_substance 채점 근거에 이미 포함되므로
+                          # 별도 intel_richness 축(구 버전에 있었음)은 제거 — 같은 사실의 이중계산 방지.
     "hn_buzz": 6,          # log1p(HN 포인트)
     "importance": 7,      # importance_score / 100 — importance_score 자체가 pir_high/relevance/
                            # confidence_low를 이미 피처로 쓰고 있어 그 3개와 중복 계산됨. 겹치는
@@ -359,8 +361,8 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
     있는 것"을 추리는 게 더 맞다.
 
     정렬은 insight_score()의 가중합 — PIR 매칭·주제 반복·확신도·관련성·
-    신규성·콘텐츠 깊이·인텔 풍부도(IOC·ATT&CK)·HN 화제성·중요도 점수·
-    최신성을 각각 연속값으로 환산해 INSIGHT_WEIGHTS로 합산한다. 예전엔
+    신규성·분석가 rubric 품질(기술적실체·실행가능성·신뢰성)·HN 화제성·
+    중요도 점수·최신성을 각각 연속값으로 환산해 INSIGHT_WEIGHTS로 합산한다. 예전엔
     튜플 순서(앞 축이 조금이라도 다르면 뒤 축은 아예 안 봄)였는데, 이러면
     relevance가 high/medium 한 끗 차이만으로 신선도·깊이·인텔·HN·중요도가
     압도적으로 우세한 기사가 무조건 지는 게 부자연스러워서 가중합으로
@@ -401,6 +403,21 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
     novelty_value = {"new": 1.0, "update": 0.5, "known": 0.0}
     depth_value = {"analysis": 1.0, "report": 0.66, "news": 0.33, "opinion": 0.0}
     now_ts = datetime.utcnow().timestamp()
+
+    def analyst_quality_value(event):
+        """사람 분석가의 검토를 흉내낸 rubric(기술적 실체+실행가능성+신뢰성, 0~8)을 0~1로 정규화.
+
+        analyst_review가 없는 이벤트(rubric 도입 전 수집분·enrichment 실패)는 예전
+        content_depth 카테고리 근사값으로 대체해 하위호환을 유지한다."""
+        review = event.get("analyst_review") or {}
+        scores = (
+            review.get("technical_substance"),
+            review.get("actionability"),
+            review.get("credibility"),
+        )
+        if all(isinstance(s, (int, float)) for s in scores):
+            return sum(scores) / 8.0
+        return depth_value.get(event.get("content_depth") or "", 0.4)
     hn_disabled = [False]  # 첫 실패 시 이번 실행 전체에서 재시도하지 않음 (후보 수백 건 × 실패 지연 방지)
 
     def hn_points(event):
@@ -423,7 +440,6 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         """가중합 인사이트 점수(높을수록 우선) — 어느 한 축이 조금 밀려도 나머지 축의
         압도적 우위로 뒤집을 수 있게 튜플 순서 대신 연속값으로 합산한다."""
         weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
-        intel_richness = min(len(event.get("iocs") or []) + len(event.get("attack_techniques") or []), 10)
         recency_days = (now_ts - published_ts(event)) / 86400 if published_ts(event) else 999
         w = INSIGHT_WEIGHTS
         return (
@@ -433,8 +449,7 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             + w["confidence_low"] * (1 if (event.get("confidence") or "") == "low" else 0)
             + w["relevance"] * relevance_value.get(event.get("relevance") or "", 0.0)
             + w["novelty"] * novelty_value.get(event.get("novelty") or "", 0.3)
-            + w["depth"] * depth_value.get(event.get("content_depth") or "", 0.4)
-            + w["intel_richness"] * intel_richness
+            + w["depth"] * analyst_quality_value(event)
             + w["hn_buzz"] * math.log1p(hn_points(event))
             + w["importance"] * (importance_score(event) / 100.0)
             + w["recency"] * max(0.0, 1.0 - recency_days / 7.0)

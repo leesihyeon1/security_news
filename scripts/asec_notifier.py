@@ -279,6 +279,7 @@ def main():
                         importance=importance,
                         cluster=cluster,
                         content_depth=enrichment.get("content_depth") or "",
+                        analyst_review=enrichment.get("analyst_review"),
                         novelty=enrichment.get("novelty") or "",
                         body_chars=len(content_text or ""),
                         recommended_actions=enrichment.get("recommended_actions"),

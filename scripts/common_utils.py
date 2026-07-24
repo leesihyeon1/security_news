@@ -481,6 +481,12 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
 {pir_field}
   "relevance": "국내 IT·게임 기업 보안팀 관점의 중요도: high|medium|low 중 하나",
   "content_depth": "기사 유형: analysis(자체 조사·기술 분석을 담은 심층 분석)|report(보고서·통계·조사 결과 전달)|news(사건·발표 단신)|opinion(칼럼·의견) 중 하나",
+  "analyst_review": {{"technical_detail": "이 기사가 제공하는 구체적 기술 정보(공격 경로, 사용된 기법, 설정값, IOC 등)를 서술. 사실 전달뿐이면 '기술적 디테일 없음'이라고 명시",
+    "technical_substance": "위 서술에 근거해 0~3점: 0=사실 전달만(기술 디테일 없음) / 1=기술 용어는 있으나 피상적 / 2=구체적 공격경로·기법 명시 / 3=IOC·설정값·재현절차 등 검증 가능한 상세 분석",
+    "actionable_guidance": "보안담당자가 이 기사만 보고 실제로 취할 수 있는 조치를 서술. 막연하면 '막연함'이라고 명시",
+    "actionability": "위 서술에 근거해 0~3점: 0=조치사항 없음/막연 / 1=일반적 권고(버전 등 명시 없음) / 2=구체적 조치(특정 버전·설정·차단할 IOC 명시) / 3=즉시 실행 가능한 상세 가이드(탐지룰·정확한 패치경로 등)",
+    "credibility_note": "출처의 신뢰성 근거(1차 소스 인용, 벤더·당국 확인, 복수 소스 교차확인 여부 등)를 서술",
+    "credibility": "위 서술에 근거해 0~2점: 0=출처 불명/익명 / 1=단일 소스의 자체 주장(교차확인 없음) / 2=공식 확인 또는 복수 소스 교차확인"}},
   "confidence": "위 분석에 대한 확신도: high|medium|low 중 하나 (기사 정보가 모호하면 low)",
   "recommended_actions": ["보안담당자 권고 조치(최대 3개)"]}}
 
@@ -539,6 +545,38 @@ def _build_enrich_prompt(title, body):
         pir_field=pir_field, pir_block=pir_block,
     )
 
+def _clamp_rubric_score(value, max_value):
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        return None
+    return score if 0 <= score <= max_value else None
+
+def _parse_analyst_review(raw):
+    """사람 분석가의 검토 과정을 흉내낸 rubric(기술적 실체·실행가능성·신뢰성) 파싱.
+
+    각 점수는 근거 서술(reasoning)에서 도출되게 강제해 LLM이 근거 없이 바로
+    라벨부터 뱉는 것을 막는다. 세 점수 중 하나라도 유효하면 반환하고, 근거
+    텍스트는 사람이 나중에 라벨링할 때 "왜 이 점수인지" 확인할 수 있게 남긴다.
+    """
+    if not isinstance(raw, dict):
+        return None
+    technical_substance = _clamp_rubric_score(raw.get("technical_substance"), 3)
+    actionability = _clamp_rubric_score(raw.get("actionability"), 3)
+    credibility = _clamp_rubric_score(raw.get("credibility"), 2)
+    if technical_substance is None and actionability is None and credibility is None:
+        return None
+    return {
+        "technical_substance": technical_substance,
+        "actionability": actionability,
+        "credibility": credibility,
+        "reasoning": {
+            "technical_detail": clean_text(raw.get("technical_detail"))[:300] or None,
+            "actionable_guidance": clean_text(raw.get("actionable_guidance"))[:300] or None,
+            "credibility_note": clean_text(raw.get("credibility_note"))[:200] or None,
+        },
+    }
+
 def ai_enrich_article(title, body):
     """기사 본문을 LLM으로 분석해 구조화된 enrichment를 반환. 실패 시 None."""
     if not body:
@@ -568,6 +606,7 @@ def ai_enrich_article(title, body):
             "exploitation": exploitation if exploitation in ("active", "poc", "none") else None,
             "content_depth": content_depth if content_depth in ENRICH_DEPTHS else None,
             "novelty": novelty if novelty in ENRICH_NOVELTIES else None,
+            "analyst_review": _parse_analyst_review(data.get("analyst_review")),
             "fix_available": True if fix_raw == "yes" else (False if fix_raw == "no" else None),
             "patch_info": clean_text(data.get("patch_info"))[:200] or None,
             "category": category if category in ENRICH_CATEGORIES else ("기타" if category else None),
@@ -1328,7 +1367,8 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                references=None, fix_available=None, remediation="", due_date="",
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
                cluster=None, pirs=None, content_depth="", body_chars=None,
-               recommended_actions=None, affected_versions=None, novelty="", category_reason=""):
+               recommended_actions=None, affected_versions=None, novelty="", category_reason="",
+               analyst_review=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -1368,6 +1408,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "novelty": clean_text(novelty).lower(),
         "affected_versions": _clean_str_list(affected_versions or [], 10),
         "body_chars": body_chars,
+        "analyst_review": analyst_review or None,
         "recommended_actions": _clean_str_list(recommended_actions or [], 3),
         "references": [r for r in (references or []) if r],
         "fix_available": fix_available,

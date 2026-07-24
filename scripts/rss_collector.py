@@ -435,6 +435,7 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
                 importance=article["importance"],
                 cluster=article["cluster"],
                 content_depth=enrichment.get("content_depth") or "",
+                analyst_review=enrichment.get("analyst_review"),
                 novelty=enrichment.get("novelty") or "",
                 body_chars=len(article["body"] or ""),
                 recommended_actions=enrichment.get("recommended_actions"),
