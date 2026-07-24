@@ -1,0 +1,207 @@
+{
+  "title": "주간 보안 인텔리전스 리포트",
+  "period": "weekly",
+  "period_label": "2026-07-18 09:00 ~ 2026-07-25 09:00 (UTC)",
+  "generated_at": "2026-07-24T23:03:04Z",
+  "narrative": "AI 총평(주간): 한 주간 취약점 공개와 공급망 공격 시도가 두드러졌습니다.",
+  "stats": {
+    "total": 142,
+    "p1": 1,
+    "p2": 2,
+    "critical": 1,
+    "kev": 1,
+    "ransomware": 1,
+    "asset_hits": 1,
+    "by_source": {
+      "asec": 5,
+      "boannews": 4,
+      "krebsonsecurity": 3,
+      "thehackernews": 3,
+      "dailysecu": 2,
+      "unit42": 2,
+      "kisa": 2,
+      "securityweek": 2,
+      "talos": 1
+    }
+  },
+  "cards": [
+    {
+      "cve": "CVE-2026-1234",
+      "level": "P1",
+      "sources": [
+        "안랩 ASEC",
+        "Krebs on Security",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "CVSS 9.8",
+        "EPSS 72%",
+        "실제 악용 확인(KEV)",
+        "자산매칭: FortiGate"
+      ],
+      "products": [
+        "FortiGate",
+        "FortiOS"
+      ],
+      "remediation": "7.2.5로 업데이트",
+      "due_date": "2026-08-01",
+      "summary": "인증 우회를 통한 원격 코드실행 취약점. 실제 악용 정황 확인됨.",
+      "items": [
+        {
+          "source_label": "안랩 ASEC",
+          "title": "국내 기업 대상 FortiGate 취약점 악용 확인",
+          "url": "https://example.com/1"
+        },
+        {
+          "source_label": "Krebs on Security",
+          "title": "Critical RCE Vulnerability Found in Popular VPN Appliance",
+          "url": "https://example.com/2"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "FortiGate Zero-Day Actively Exploited",
+          "url": "https://example.com/7"
+        }
+      ]
+    }
+  ],
+  "domestic": {
+    "highlights": [
+      {
+        "title": "국내 기업 대상 신종 랜섬웨어 유포 정황 포착",
+        "url": "https://example.com/1",
+        "source": "asec",
+        "source_label": "안랩 ASEC",
+        "level": "",
+        "category": "랜섬웨어",
+        "matched_assets": [
+          "FortiGate"
+        ],
+        "published_at": "2026-07-25T02:00:00Z",
+        "summary": "요약 텍스트가 들어갑니다."
+      },
+      {
+        "title": "개인정보 유출 사고, 이용자 10만명 영향",
+        "url": "https://example.com/3",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "",
+        "category": "개인정보유출",
+        "matched_assets": [],
+        "published_at": "2026-07-25T02:00:00Z",
+        "summary": "요약 텍스트가 들어갑니다."
+      }
+    ],
+    "trend_reads": [
+      {
+        "title": "AI 프롬프트 인젝션 공격 동향 분석",
+        "url": "https://example.com/6",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "",
+        "category": "기술동향",
+        "matched_assets": [],
+        "published_at": "2026-07-25T02:00:00Z",
+        "summary": "요약 텍스트가 들어갑니다."
+      }
+    ]
+  },
+  "overseas": {
+    "highlights": [
+      {
+        "title": "Critical RCE Vulnerability Found in Popular VPN Appliance",
+        "url": "https://example.com/2",
+        "source": "krebsonsecurity",
+        "source_label": "Krebs on Security",
+        "level": "",
+        "category": "취약점",
+        "matched_assets": [],
+        "published_at": "2026-07-25T02:00:00Z",
+        "summary": "요약 텍스트가 들어갑니다."
+      },
+      {
+        "title": "New Supply Chain Attack Targets npm Packages",
+        "url": "https://example.com/4",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "",
+        "category": "공급망공격",
+        "matched_assets": [],
+        "published_at": "2026-07-25T02:00:00Z",
+        "summary": "요약 텍스트가 들어갑니다."
+      }
+    ],
+    "trend_reads": [
+      {
+        "title": "Deep Dive: Lazarus Group New TTPs Against Gaming Industry",
+        "url": "https://example.com/5",
+        "source": "unit42",
+        "source_label": "Unit 42",
+        "level": "",
+        "category": "공격캠페인",
+        "matched_assets": [],
+        "published_at": "2026-07-25T02:00:00Z",
+        "summary": "요약 텍스트가 들어갑니다."
+      }
+    ]
+  },
+  "pir_groups": [
+    {
+      "id": "PIR-1",
+      "question": "자사 인프라 제품군을 노리는 취약점 악용·공격 활동",
+      "count": 1,
+      "items": [
+        {
+          "title": "국내 기업 대상 신종 랜섬웨어 유포 정황 포착",
+          "url": "https://example.com/1",
+          "source": "asec",
+          "source_label": "안랩 ASEC",
+          "level": "",
+          "category": "랜섬웨어",
+          "matched_assets": [
+            "FortiGate"
+          ],
+          "published_at": "2026-07-25T02:00:00Z",
+          "summary": "요약 텍스트가 들어갑니다."
+        }
+      ]
+    },
+    {
+      "id": "PIR-6",
+      "question": "게임 산업 표적 위협 — 게임사 대상 APT, 게임 클라이언트 위장 악성코드",
+      "count": 1,
+      "items": [
+        {
+          "title": "Deep Dive: Lazarus Group New TTPs Against Gaming Industry",
+          "url": "https://example.com/5",
+          "source": "unit42",
+          "source_label": "Unit 42",
+          "level": "",
+          "category": "공격캠페인",
+          "matched_assets": [],
+          "published_at": "2026-07-25T02:00:00Z",
+          "summary": "요약 텍스트가 들어갑니다."
+        }
+      ]
+    }
+  ],
+  "pir_gaps": [
+    {
+      "id": "PIR-2",
+      "question": "국내(한국) 기업·기관 대상 랜섬웨어 공격·협박 동향"
+    },
+    {
+      "id": "PIR-3",
+      "question": "AI 관련 공격 동향 — AI를 악용한 공격, AI 시스템·서비스(LLM 등) 대상 공격, 프롬프트 인젝션"
+    },
+    {
+      "id": "PIR-4",
+      "question": "ClickFix·InstallFix·피싱 등 엔드포인트(임직원 단말) 초기 침투 공격 동향"
+    },
+    {
+      "id": "PIR-5",
+      "question": "소프트웨어 공급망 공격 — 오픈소스 패키지(npm·PyPI 등)·벤더·업데이트 경로를 통한 공격 (국내외 불문)"
+    }
+  ]
+}

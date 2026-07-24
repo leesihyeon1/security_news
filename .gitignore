@@ -2,9 +2,9 @@ __pycache__/
 *.pyc
 .env
 *.log
-logs/
-state/
-data/
+/logs/
+/state/
+/data/
 .venv/
 venv/
 env/

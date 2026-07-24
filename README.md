@@ -151,6 +151,16 @@ histogram. Filters: `--actor`, `--malware`, `--cve`, `--source`, `--category`,
 `--pir`, `--asset`, `--level`, `--keyword`, `--since`/`--until` (`90d`/`12w`/
 `6m`/`1y` or `YYYY-MM-DD`). At least one filter is required.
 
+## Web Dashboard (optional)
+
+A static site (`boannews_vercel/`) shows the daily/weekly report split into
+domestic/overseas tabs, deployed separately on Vercel. `generate_report.py`
+publishes to it via `scripts/publish_web_dashboard.py` when
+`WEB_DASHBOARD_REPO_PATH` is set — see `boannews_vercel/README.md` for the
+site's structure and deployment steps, and the "Web Dashboard" env var above.
+Unset by default; the main report send is unaffected either way (publish
+failures are logged, never raised).
+
 ## LLM Provider
 
 All LLM calls (article enrichment, summaries, report narrative) go through

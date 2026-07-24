@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보안 인텔리전스 대시보드</title>
+<meta name="description" content="일간/주간 보안 뉴스 동향 — 국내/해외">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+</head>
+<body>
+<div class="page">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon">🛡️</span>
+      <span class="brand-name">보안 인텔리전스 대시보드</span>
+    </div>
+    <div class="topbar-controls">
+      <div class="segmented" id="period-switch" role="tablist" aria-label="기간 선택">
+        <button type="button" class="segmented-btn is-active" data-period="daily" role="tab" aria-selected="true">일간</button>
+        <button type="button" class="segmented-btn" data-period="weekly" role="tab" aria-selected="false">주간</button>
+      </div>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="테마 전환" title="테마 전환">🌓</button>
+    </div>
+  </header>
+
+  <main id="app" class="content">
+    <div class="loading" id="loading">불러오는 중…</div>
+  </main>
+
+  <footer class="footer">
+    <span id="generated-at"></span>
+  </footer>
+</div>
+
+<template id="tpl-error">
+  <div class="empty-state">
+    <p>⚠️ 데이터를 불러오지 못했습니다.</p>
+    <p class="empty-state-detail"></p>
+  </div>
+</template>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

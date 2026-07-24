@@ -21,6 +21,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 
 import common_utils
+import publish_web_dashboard
 
 # Windows 콘솔(cp949)에서 특수문자 출력이 깨지지 않도록 UTF-8로 강제
 for stream in (sys.stdout, sys.stderr):
@@ -81,6 +82,16 @@ SOURCE_LABELS = {
     "reddit_asknetsec": "Reddit r/AskNetsec",
     "exploit_db": "Exploit-DB",
 }
+
+# 웹 대시보드(boannews_vercel)의 국내/해외 탭 분류 — 한국어 매체·국내 벤더 리서치만
+# "domestic", 나머지(해외 매체·글로벌 벤더·카탈로그형 소스 포함)는 전부 "overseas".
+DOMESTIC_SOURCES = {
+    "kisa", "asec", "boannews", "dailysecu", "estsecurity_alyac",
+    "plainbit", "inca_isarc", "s2w", "nshc_threatrecon", "genians",
+}
+
+def source_region(source):
+    return "domestic" if source in DOMESTIC_SOURCES else "overseas"
 
 MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15
 MAX_TOP_ITEMS_IN_REPORT = 10
@@ -1355,6 +1366,90 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
     return blocks
 
 
+def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, pir_groups,
+                            trend_reads):
+    """boannews_vercel 웹 대시보드용 JSON 페이로드.
+
+    하이라이트·읽을만한 동향은 소스 하나에 붙으니 국내/해외로 나눌 수 있지만,
+    CVE 카드·PIR은 여러 소스를 가로지르는 집계라 지역 구분 없이 그대로 담는다
+    (카드 하나에 국내·해외 소스가 섞여 있을 수 있어 나누는 게 의미 없음).
+    """
+    def serialize_event(event):
+        return {
+            "title": event.get("title") or "(제목 없음)",
+            "url": common_utils.tracking_url(event.get("id"), event.get("url") or "") or "",
+            "source": event.get("source") or "",
+            "source_label": source_label(event.get("source")),
+            "level": event_level(event),
+            "category": event.get("category") or "",
+            "matched_assets": event.get("matched_assets") or [],
+            "published_at": event.get("published_at") or "",
+            "summary": (event.get("ai_summary") or event.get("summary") or "")[:300],
+        }
+
+    def split_by_region(events):
+        domestic, overseas = [], []
+        for event in events:
+            bucket = domestic if source_region(event.get("source")) == "domestic" else overseas
+            bucket.append(serialize_event(event))
+        return domestic, overseas
+
+    def serialize_card(card):
+        return {
+            "cve": card["cve"],
+            "level": card.get("level") or "",
+            "sources": [source_label(s) for s in card["sources"]],
+            "severity_bits": card_severity_bits(card),
+            "products": card["products"][:CARD_PRODUCTS_MAX],
+            "remediation": card["remediation"][:CARD_REMEDIATION_CHARS] if card["remediation"] else "",
+            "due_date": card.get("due_date") or "",
+            "summary": card["summary"],
+            "items": [
+                {
+                    "source_label": source_label(source),
+                    "title": item_title,
+                    "url": common_utils.tracking_url(item_id, item_url) or "",
+                }
+                for source, item_title, item_url, item_id in card["items"]
+            ],
+        }
+
+    def serialize_pir_group(pid, question, group):
+        return {
+            "id": pid,
+            "question": question,
+            "count": len(group),
+            "items": [serialize_event(event) for event in group[:MAX_ITEMS_PER_PIR]],
+        }
+
+    highlight_domestic, highlight_overseas = split_by_region(highlights)
+    trend_domestic, trend_overseas = split_by_region(trend_reads)
+    pir_gaps = unanswered_pirs(pir_groups)
+
+    return {
+        "title": title,
+        "period": period,
+        "period_label": period_label,
+        "generated_at": common_utils.utc_now_iso(),
+        "narrative": narrative or "",
+        "stats": {
+            "total": stats["total"],
+            "p1": len(stats["p1"]),
+            "p2": len(stats["p2"]),
+            "critical": len(stats["critical"]),
+            "kev": len(stats["kev"]),
+            "ransomware": len(stats["ransomware"]),
+            "asset_hits": len(stats["asset_hits"]),
+            "by_source": dict(stats["by_source"].most_common()),
+        },
+        "cards": [serialize_card(card) for card in cards[:MAX_CVE_CARDS]],
+        "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
+        "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
+        "pir_groups": [serialize_pir_group(pid, question, group) for pid, question, group in pir_groups],
+        "pir_gaps": [{"id": pid, "question": question} for pid, question in pir_gaps],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="일간/주간 보안 인텔리전스 리포트 생성")
     parser.add_argument("--period", choices=["daily", "weekly"], default="daily")
@@ -1421,6 +1516,11 @@ def main():
     slack_sent = common_utils.send_slack_webhook(payload, webhook_url)
 
     print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
+
+    dashboard_payload = build_dashboard_payload(
+        title, args.period, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+    )
+    publish_web_dashboard.publish(dashboard_payload)
 
 
 if __name__ == "__main__":
