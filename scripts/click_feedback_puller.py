@@ -1,10 +1,10 @@
-"""Vercel 클릭 추적 서버(Upstash Redis)에 쌓인 클릭 로그를 피드백 라벨로 가져온다.
+"""Vercel 클릭 추적 서버(Redis)에 쌓인 클릭 로그를 피드백 라벨로 가져온다.
 
 리포트/알림의 링크는 (CLICK_TRACK_BASE_URL이 설정돼 있으면) common_utils.tracking_url()을
-거쳐 나가는데, 그 추적 서버(vercel-click-tracker/)가 클릭마다 {"ref", "url", "ts"}를
-Upstash Redis 리스트("clicks")에 RPUSH로 쌓아둔다. 이 스크립트가 그걸 읽어서(LRANGE)
-이벤트로 역매핑하고 useful 라벨을 기록한 "다음에만" 리스트에서 지운다(LTRIM) — 라벨
-기록에 실패하면 다음 실행에서 그대로 재시도되어 유실되지 않는다.
+거쳐 나가는데, 그 추적 서버(boannews_vercel/click-tracker/)가 클릭마다 {"ref", "url", "ts"}를
+Redis 리스트("clicks")에 RPUSH로 쌓아둔다. 이 스크립트가 그걸 읽어서(LRANGE) 이벤트로
+역매핑하고 useful 라벨을 기록한 "다음에만" 리스트에서 지운다(LTRIM) — 라벨 기록에 실패하면
+다음 실행에서 그대로 재시도되어 유실되지 않는다.
 
 클릭 = 실제로 읽고 싶어서 눌렀다는 의미 있는 신호라 useful로만 취급한다(noise는
 자동화하지 않음 — 안 누른 것이 "별로였다"는 증거는 아니므로).
@@ -12,8 +12,7 @@ Upstash Redis 리스트("clicks")에 RPUSH로 쌓아둔다. 이 스크립트가 
 이미 라벨(수동/자동 불문)이 있는 이벤트는 건드리지 않는다.
 
 필요 설정(.env):
-    UPSTASH_REDIS_REST_URL=...
-    UPSTASH_REDIS_REST_TOKEN=...
+    REDIS_URL=redis://default:<password>@<host>:<port>   (Vercel Storage에서 발급)
 
 사용법:
     python scripts/click_feedback_puller.py
@@ -25,7 +24,7 @@ import json
 import os
 import sys
 
-import requests
+import redis
 
 import common_utils
 
@@ -33,35 +32,33 @@ for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
-UPSTASH_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
-UPSTASH_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+REDIS_URL = os.environ.get("REDIS_URL", "")
 CLICKS_KEY = "clicks"
 MAX_PULL = 500  # 한 번 실행에 처리할 최대 클릭 로그 수
 
 
-def _upstash_command(command):
-    if not UPSTASH_REST_URL or not UPSTASH_REST_TOKEN:
+def _connect():
+    if not REDIS_URL:
         return None
     try:
-        resp = requests.post(
-            UPSTASH_REST_URL,
-            headers={"Authorization": "Bearer {}".format(UPSTASH_REST_TOKEN)},
-            json=command,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return (resp.json() or {}).get("result")
+        client = redis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=10, socket_timeout=10)
+        client.ping()
+        return client
     except Exception as error:
-        print("[-] Upstash 요청 실패({}): {}".format(command[0] if command else "?", error))
+        print("[-] Redis 연결 실패: {}".format(error))
         return None
 
 
-def peek_click_records(limit=MAX_PULL):
+def peek_click_records(client, limit=MAX_PULL):
     """클릭 로그를 비파괴적으로 조회(LRANGE) — 처리 완료 후에만 trim_processed()로 제거한다."""
-    if not UPSTASH_REST_URL or not UPSTASH_REST_TOKEN:
-        print("[-] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN이 설정되지 않아 건너뜁니다.")
+    if client is None:
+        print("[-] REDIS_URL이 설정되지 않았거나 연결할 수 없어 건너뜁니다.")
         return []
-    raw_items = _upstash_command(["LRANGE", CLICKS_KEY, 0, limit - 1]) or []
+    try:
+        raw_items = client.lrange(CLICKS_KEY, 0, limit - 1)
+    except Exception as error:
+        print("[-] Redis 조회 실패: {}".format(error))
+        return []
     records = []
     for raw in raw_items:
         try:
@@ -71,13 +68,14 @@ def peek_click_records(limit=MAX_PULL):
     return records
 
 
-def trim_processed(count):
+def trim_processed(client, count):
     """처리 완료된 앞의 count개를 리스트에서 제거. 실패해도 다음 실행에서 중복 처리될 뿐 데이터 유실은 없다."""
-    if count <= 0:
+    if client is None or count <= 0:
         return
-    result = _upstash_command(["LTRIM", CLICKS_KEY, count, -1])
-    if result is None:
-        print("[-] Upstash 정리 실패 — 다음 실행에서 같은 클릭이 다시 보일 수 있습니다(라벨은 중복 기록 안 됨).")
+    try:
+        client.ltrim(CLICKS_KEY, count, -1)
+    except Exception as error:
+        print("[-] Redis 정리 실패 — 다음 실행에서 같은 클릭이 다시 보일 수 있습니다(라벨은 중복 기록 안 됨): {}".format(error))
 
 
 def build_ref_map():
@@ -101,7 +99,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="라벨 저장·리스트 정리 없이 대상만 출력")
     args = parser.parse_args()
 
-    click_records = peek_click_records()
+    client = _connect()
+    click_records = peek_click_records(client)
     if not click_records:
         print("[*] 새로 가져올 클릭 로그가 없습니다.")
         return
@@ -138,7 +137,7 @@ def main():
         common_utils.append_feedback(records)
         print("[+] {}건 자동 라벨링 완료".format(len(records)))
 
-    trim_processed(len(click_records))
+    trim_processed(client, len(click_records))
 
 
 if __name__ == "__main__":

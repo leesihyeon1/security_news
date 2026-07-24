@@ -314,7 +314,7 @@ judgments instead of hand-tuned points.
 - Auto (clicks, optional): if `CLICK_TRACK_BASE_URL` is set, report/alert
   links get rewritten through a small Vercel redirect function (see
   `boannews_vercel/click-tracker/README.md` for deployment) that logs the
-  click to Upstash Redis. `click_feedback_puller.py` (also nightly) pulls that
+  click to Redis (`REDIS_URL`, e.g. from Vercel Storage). `click_feedback_puller.py` (also nightly) pulls that
   log and labels the clicked event `useful` (`via: click`). Unset by
   default — `tracking_url()` returns the original URL unchanged, no
   behavior change unless you deploy the tracker.

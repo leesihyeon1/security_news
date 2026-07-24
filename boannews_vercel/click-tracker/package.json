@@ -2,5 +2,8 @@
   "name": "boannews-click-tracker",
   "version": "1.0.0",
   "private": true,
-  "description": "Click-tracking redirect for boannews_mail report links (Vercel serverless function + Upstash Redis)."
+  "description": "Click-tracking redirect for boannews_mail report links (Vercel serverless function + Redis).",
+  "dependencies": {
+    "ioredis": "^5.4.1"
+  }
 }

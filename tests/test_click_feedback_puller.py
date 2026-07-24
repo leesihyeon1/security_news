@@ -1,5 +1,4 @@
 import json
-from unittest import mock
 
 import click_feedback_puller as cfp
 import common_utils
@@ -9,47 +8,62 @@ def _make_event(event_id, source="asec"):
     return {"id": "{}:{}".format(source, event_id), "source": source, "title": "t{}".format(event_id)}
 
 
-def _fake_upstash_response(result):
-    class Response:
-        status_code = 200
+class FakeRedis:
+    """실제 Redis 리스트 동작(LRANGE/LTRIM)을 흉내내는 가짜 클라이언트."""
 
-        def raise_for_status(self):
-            pass
+    def __init__(self, items=None):
+        self._items = list(items or [])
+        self.ltrim_calls = []
 
-        def json(self):
-            return {"result": result}
-    return Response()
+    def lrange(self, key, start, end):
+        if end == -1:
+            return self._items[start:]
+        return self._items[start:end + 1]
+
+    def ltrim(self, key, start, end):
+        self.ltrim_calls.append((start, end))
+        if end == -1:
+            self._items = self._items[start:]
+        else:
+            self._items = self._items[start:end + 1]
+
+    def ping(self):
+        return True
 
 
-def test_peek_click_records_parses_json_entries(monkeypatch):
-    monkeypatch.setattr(cfp, "UPSTASH_REST_URL", "https://fake-upstash")
-    monkeypatch.setattr(cfp, "UPSTASH_REST_TOKEN", "token")
-
+def test_peek_click_records_parses_json_entries():
     raw = [json.dumps({"ref": "abc123", "url": "http://x", "ts": "2026-01-01T00:00:00Z"})]
-    with mock.patch.object(cfp.requests, "post", return_value=_fake_upstash_response(raw)):
-        records = cfp.peek_click_records()
-
+    client = FakeRedis(raw)
+    records = cfp.peek_click_records(client)
     assert records == [{"ref": "abc123", "url": "http://x", "ts": "2026-01-01T00:00:00Z"}]
 
 
-def test_peek_click_records_returns_empty_when_not_configured(monkeypatch):
-    monkeypatch.setattr(cfp, "UPSTASH_REST_URL", "")
-    monkeypatch.setattr(cfp, "UPSTASH_REST_TOKEN", "")
-    assert cfp.peek_click_records() == []
+def test_peek_click_records_returns_empty_when_client_is_none():
+    assert cfp.peek_click_records(None) == []
 
 
-def test_peek_click_records_skips_malformed_entries(monkeypatch):
-    monkeypatch.setattr(cfp, "UPSTASH_REST_URL", "https://fake-upstash")
-    monkeypatch.setattr(cfp, "UPSTASH_REST_TOKEN", "token")
-
+def test_peek_click_records_skips_malformed_entries():
     raw = ["not json", json.dumps({"ref": "abc123", "url": "http://x"})]
-    with mock.patch.object(cfp.requests, "post", return_value=_fake_upstash_response(raw)):
-        records = cfp.peek_click_records()
-
+    client = FakeRedis(raw)
+    records = cfp.peek_click_records(client)
     assert records == [{"ref": "abc123", "url": "http://x"}]
 
 
-def test_main_labels_matched_clicks_and_trims_after_success(tmp_path, monkeypatch, capsys):
+def test_trim_processed_removes_leading_n_items():
+    client = FakeRedis(["a", "b", "c"])
+    cfp.trim_processed(client, 2)
+    assert client.ltrim_calls == [(2, -1)]
+    assert client.lrange("clicks", 0, -1) == ["c"]
+
+
+def test_trim_processed_noop_when_client_none_or_count_zero():
+    client = FakeRedis(["a"])
+    cfp.trim_processed(None, 5)  # client 없으면 조용히 무시
+    cfp.trim_processed(client, 0)  # count 0이면 무시
+    assert client.ltrim_calls == []
+
+
+def test_main_labels_matched_clicks_and_trims_after_success(tmp_path, monkeypatch):
     events_file = tmp_path / "events.jsonl"
     event = _make_event(1)
     with events_file.open("w", encoding="utf-8") as f:
@@ -59,24 +73,11 @@ def test_main_labels_matched_clicks_and_trims_after_success(tmp_path, monkeypatc
 
     ref = common_utils.event_ref(event["id"])
     click_log = [json.dumps({"ref": ref, "url": "http://x", "ts": "2026-01-01T00:00:00Z"})]
-
-    monkeypatch.setattr(cfp, "UPSTASH_REST_URL", "https://fake-upstash")
-    monkeypatch.setattr(cfp, "UPSTASH_REST_TOKEN", "token")
+    fake_client = FakeRedis(click_log)
+    monkeypatch.setattr(cfp, "_connect", lambda: fake_client)
 
     written = []
     monkeypatch.setattr(common_utils, "append_feedback", lambda records: written.extend(records))
-
-    trimmed = {}
-
-    def fake_post(url, headers=None, json=None, timeout=None):
-        if json[0] == "LRANGE":
-            return _fake_upstash_response(click_log)
-        if json[0] == "LTRIM":
-            trimmed["count"] = json[2]
-            return _fake_upstash_response("OK")
-        raise AssertionError("unexpected command {}".format(json))
-
-    monkeypatch.setattr(cfp.requests, "post", fake_post)
     monkeypatch.setattr(cfp.sys, "argv", ["click_feedback_puller.py"])
 
     cfp.main()
@@ -85,10 +86,10 @@ def test_main_labels_matched_clicks_and_trims_after_success(tmp_path, monkeypatc
     assert written[0]["event_id"] == event["id"]
     assert written[0]["label"] == "useful"
     assert written[0]["via"] == "click"
-    assert trimmed["count"] == 1  # 처리된 1건만큼 리스트에서 제거 요청됨
+    assert fake_client.ltrim_calls == [(1, -1)]  # 처리된 1건만큼 리스트에서 제거됨
 
 
-def test_main_dry_run_skips_write_and_trim(tmp_path, monkeypatch, capsys):
+def test_main_dry_run_skips_write_and_trim(tmp_path, monkeypatch):
     events_file = tmp_path / "events.jsonl"
     event = _make_event(1)
     with events_file.open("w", encoding="utf-8") as f:
@@ -98,24 +99,17 @@ def test_main_dry_run_skips_write_and_trim(tmp_path, monkeypatch, capsys):
 
     ref = common_utils.event_ref(event["id"])
     click_log = [json.dumps({"ref": ref, "url": "http://x"})]
-
-    monkeypatch.setattr(cfp, "UPSTASH_REST_URL", "https://fake-upstash")
-    monkeypatch.setattr(cfp, "UPSTASH_REST_TOKEN", "token")
+    fake_client = FakeRedis(click_log)
+    monkeypatch.setattr(cfp, "_connect", lambda: fake_client)
 
     calls = []
     monkeypatch.setattr(common_utils, "append_feedback", lambda records: calls.append("write"))
-
-    def fake_post(url, headers=None, json=None, timeout=None):
-        calls.append(json[0])
-        return _fake_upstash_response(click_log if json[0] == "LRANGE" else "OK")
-
-    monkeypatch.setattr(cfp.requests, "post", fake_post)
     monkeypatch.setattr(cfp.sys, "argv", ["click_feedback_puller.py", "--dry-run"])
 
     cfp.main()
 
     assert "write" not in calls
-    assert "LTRIM" not in calls
+    assert fake_client.ltrim_calls == []
 
 
 def test_main_skips_already_labeled_events(tmp_path, monkeypatch):
@@ -128,17 +122,11 @@ def test_main_skips_already_labeled_events(tmp_path, monkeypatch):
 
     ref = common_utils.event_ref(event["id"])
     click_log = [json.dumps({"ref": ref, "url": "http://x"})]
-
-    monkeypatch.setattr(cfp, "UPSTASH_REST_URL", "https://fake-upstash")
-    monkeypatch.setattr(cfp, "UPSTASH_REST_TOKEN", "token")
+    fake_client = FakeRedis(click_log)
+    monkeypatch.setattr(cfp, "_connect", lambda: fake_client)
 
     written = []
     monkeypatch.setattr(common_utils, "append_feedback", lambda records: written.extend(records))
-
-    def fake_post(url, headers=None, json=None, timeout=None):
-        return _fake_upstash_response(click_log if json[0] == "LRANGE" else "OK")
-
-    monkeypatch.setattr(cfp.requests, "post", fake_post)
     monkeypatch.setattr(cfp.sys, "argv", ["click_feedback_puller.py"])
 
     cfp.main()
