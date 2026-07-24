@@ -45,12 +45,18 @@ vercel.json        /data/*.json 캐시 무효화 헤더
   "stats": { "total": 24, "p1": 1, "p2": 2, "critical": 1, "kev": 1, "ransomware": 1, "asset_hits": 1, "by_source": {"asec": 5, ...} },
   "cards": [ /* CVE 상관관계 카드 — 국내/해외 구분 없음(카드 하나에 여러 소스 섞여 있을 수 있어서) */ ],
   "domestic": { "highlights": [...], "trend_reads": [...] },
-  "overseas": { "highlights": [...], "trend_reads": [...] },
-  "pir_groups": [ /* PIR별 매칭 기사 — 국내/해외 구분 없음(조직 우선순위 축이라 지역과 무관) */ ],
-  "pir_gaps": [ /* 기간 내 매칭 기사 없는 PIR */ ]
+  "overseas": { "highlights": [...], "trend_reads": [...] }
 }
 ```
 
-기사 항목(`highlights`/`trend_reads`/PIR 내 items) 공통 필드: `title`, `url`(설정된 경우
-클릭추적 서버 경유), `source`, `source_label`, `level`("P1"/"P2"/""), `category`,
-`matched_assets`, `published_at`, `summary`.
+기사 항목(`highlights`/`trend_reads`) 공통 필드: `title`, `url`(설정된 경우 클릭추적
+서버 경유), `source`, `source_label`, `level`("P1"/"P2"/""), `category`, `published_at`,
+`summary`.
+
+**의도적으로 빼는 정보** — 둘 다 조직 내부 정보라 이 공개 가능 사이트에는 안 담는다
+(이메일/슬랙/텍스트 리포트는 내부용이라 그대로 보여줌. 매칭 로직 자체는 전혀 안 바뀜,
+여기서 직렬화만 안 함):
+- `matched_assets`(자사 보유 자산·제품 매칭 결과) — 어떤 제품을 보유하는지 노출 방지.
+  CVE 카드의 `severity_bits`도 자산매칭 문구를 뺀 버전
+- `pir_groups`/`pir_gaps`(우선 정보 요구사항 매칭) — 조직이 무엇을 우선순위로 보는지
+  (예: 특정 산업 표적 위협 추적 여부) 노출 방지

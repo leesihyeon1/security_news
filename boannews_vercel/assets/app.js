@@ -82,9 +82,6 @@
     const metaBits = [];
     if (event.category) metaBits.push(esc(event.category));
     if (event.published_at) metaBits.push(esc(fmtDate(event.published_at)));
-    if (event.matched_assets && event.matched_assets.length) {
-      metaBits.push('<span class="asset-tag">자산매칭: ' + esc(event.matched_assets.join(", ")) + "</span>");
-    }
     const href = event.url ? esc(event.url) : "#";
     return (
       '<div class="item">' +
@@ -124,24 +121,6 @@
       (links ? '<div class="cve-card-links">' + links + "</div>" : "") +
       "</div>"
     );
-  }
-
-  function renderPir(payload) {
-    let html = "";
-    (payload.pir_groups || []).forEach((group) => {
-      html +=
-        '<div class="pir-group">' +
-        '<div class="pir-head">' + esc(group.id) + ' — <span class="pir-question">' + esc(group.question) + "</span> (" + esc(group.count) + "건)</div>" +
-        renderItemList(group.items) +
-        "</div>";
-    });
-    if (payload.pir_gaps && payload.pir_gaps.length) {
-      html +=
-        '<div class="pir-gap-list">무응답 PIR — 기간 내 매칭 기사 없음: ' +
-        payload.pir_gaps.map((g) => esc(g.id)).join(", ") +
-        "</div>";
-    }
-    return html || '<div class="empty-state">PIR 데이터 없음</div>';
   }
 
   function regionData(payload) {
@@ -188,10 +167,6 @@
       '<div class="section"><div class="section-title">📖 읽을만한 동향 <span class="count">' + (region.trend_reads || []).length + "건</span></div>" +
       renderItemList(region.trend_reads) +
       "</div>";
-
-    if (payload.pir_groups && payload.pir_groups.length || (payload.pir_gaps && payload.pir_gaps.length)) {
-      html += '<div class="section"><div class="section-title">🧭 PIR 현황 — 우선 정보 요구사항</div>' + renderPir(payload) + "</div>";
-    }
 
     $app.innerHTML = html;
 

@@ -283,11 +283,6 @@ html, body {
   line-height: 1.5;
 }
 
-.asset-tag {
-  color: var(--p2);
-  font-weight: 600;
-}
-
 /* ===== CVE cards ===== */
 .cve-card {
   background: var(--bg-elevated);
@@ -322,19 +317,6 @@ html, body {
 .cve-card-links { margin-top: 8px; display: flex; gap: 10px; flex-wrap: wrap; }
 .cve-card-links a { font-size: 0.8rem; color: var(--accent); text-decoration: none; }
 .cve-card-links a:hover { text-decoration: underline; }
-
-/* ===== PIR ===== */
-.pir-group { margin-bottom: 14px; }
-.pir-head { font-size: 0.86rem; font-weight: 700; margin-bottom: 6px; }
-.pir-question { color: var(--text-muted); font-weight: 500; }
-.pir-gap-list {
-  font-size: 0.82rem;
-  color: var(--text-faint);
-  background: var(--bg-elevated);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-}
 
 /* ===== Misc states ===== */
 .loading, .empty-state {

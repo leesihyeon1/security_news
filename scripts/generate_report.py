@@ -700,8 +700,12 @@ def correlate_by_cve(events):
     return cards
 
 
-def card_severity_bits(card):
-    """카드의 심각도 요약 문자열 조각들"""
+def card_severity_bits(card, include_assets=True):
+    """카드의 심각도 요약 문자열 조각들.
+
+    include_assets=False면 자산매칭 문구를 뺀다 — 공개 웹 대시보드(build_dashboard_payload)처럼
+    자사가 어떤 제품·자산을 보유하는지 외부에 노출되면 안 되는 곳에서 쓴다.
+    """
     bits = []
     if card["level"]:
         bits.append(card["level"])
@@ -717,7 +721,7 @@ def card_severity_bits(card):
         bits.append("PoC 공개")
     if card["ransomware"]:
         bits.append("랜섬웨어 연계")
-    if card["assets"]:
+    if include_assets and card["assets"]:
         bits.append("자산매칭: {}".format(", ".join(card["assets"])))
     if (card.get("github_poc") or {}).get("count"):
         bits.append("GitHub PoC 저장소 {}개".format(card["github_poc"]["count"]))
@@ -1366,15 +1370,22 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
     return blocks
 
 
-def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, pir_groups,
-                            trend_reads):
+def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
 
-    하이라이트·읽을만한 동향은 소스 하나에 붙으니 국내/해외로 나눌 수 있지만,
-    CVE 카드·PIR은 여러 소스를 가로지르는 집계라 지역 구분 없이 그대로 담는다
-    (카드 하나에 국내·해외 소스가 섞여 있을 수 있어 나누는 게 의미 없음).
+    하이라이트·읽을만한 동향은 소스 하나에 붙으니 국내/해외로 나눌 수 있다. CVE 카드는
+    여러 소스를 가로지르는 집계라 지역 구분 없이 그대로 담는다(카드 하나에 국내·해외
+    소스가 섞여 있을 수 있어 나누는 게 의미 없음).
+
+    PIR(우선 정보 요구사항)과 자산매칭 정보는 의도적으로 담지 않는다 — 조직이 무엇을
+    우선순위로 보는지, 어떤 자산·제품을 보유하는지가 공개될 수 있는 이 사이트에 노출되면
+    안 되기 때문(내부용인 이메일/슬랙/텍스트 리포트는 그대로 보여줌). PIR 매칭·자산매칭
+    로직 자체(insight_score, classify_urgency 등)는 전혀 바뀌지 않았다 — 여기서 결과를
+    직렬화하지 않을 뿐이다.
     """
     def serialize_event(event):
+        # matched_assets는 의도적으로 뺀다 — 공개 웹 대시보드에 자사 보유 자산/제품명이
+        # 노출되면 안 되므로(이메일/슬랙 리포트는 내부용이라 그대로 유지, 여기만 예외).
         return {
             "title": event.get("title") or "(제목 없음)",
             "url": common_utils.tracking_url(event.get("id"), event.get("url") or "") or "",
@@ -1382,7 +1393,6 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "source_label": source_label(event.get("source")),
             "level": event_level(event),
             "category": event.get("category") or "",
-            "matched_assets": event.get("matched_assets") or [],
             "published_at": event.get("published_at") or "",
             "summary": (event.get("ai_summary") or event.get("summary") or "")[:300],
         }
@@ -1399,7 +1409,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "cve": card["cve"],
             "level": card.get("level") or "",
             "sources": [source_label(s) for s in card["sources"]],
-            "severity_bits": card_severity_bits(card),
+            "severity_bits": card_severity_bits(card, include_assets=False),
             "products": card["products"][:CARD_PRODUCTS_MAX],
             "remediation": card["remediation"][:CARD_REMEDIATION_CHARS] if card["remediation"] else "",
             "due_date": card.get("due_date") or "",
@@ -1414,17 +1424,13 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             ],
         }
 
-    def serialize_pir_group(pid, question, group):
-        return {
-            "id": pid,
-            "question": question,
-            "count": len(group),
-            "items": [serialize_event(event) for event in group[:MAX_ITEMS_PER_PIR]],
-        }
+    # PIR(우선 정보 요구사항) 구분·문항은 대시보드에서 뺀다 — 조직이 무엇을 우선순위로
+    # 보는지(예: 특정 산업 표적 위협) 노출되면 자산매칭과 같은 종류의 정보 유출이라
+    # pir_groups 인자는 매칭 로직·리포트 계산에는 여전히 쓰이지만(다른 곳은 그대로),
+    # 이 함수의 출력에는 반영하지 않는다.
 
     highlight_domestic, highlight_overseas = split_by_region(highlights)
     trend_domestic, trend_overseas = split_by_region(trend_reads)
-    pir_gaps = unanswered_pirs(pir_groups)
 
     return {
         "title": title,
@@ -1445,8 +1451,6 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         "cards": [serialize_card(card) for card in cards[:MAX_CVE_CARDS]],
         "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
         "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
-        "pir_groups": [serialize_pir_group(pid, question, group) for pid, question, group in pir_groups],
-        "pir_gaps": [{"id": pid, "question": question} for pid, question in pir_gaps],
     }
 
 
@@ -1518,7 +1522,7 @@ def main():
     print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
 
     dashboard_payload = build_dashboard_payload(
-        title, args.period, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+        title, args.period, period_label, stats, narrative, highlights, cards, trend_reads,
     )
     publish_web_dashboard.publish(dashboard_payload)
 
