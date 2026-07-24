@@ -283,11 +283,14 @@ judgments instead of hand-tuned points.
 
 - CLI: `python scripts\feedback.py --list` shows recent alerts with a
   10-char `ref` hash; `--useful <ref>` / `--noise <ref>` records a label.
-- Slack: react 👍/👎 to alert messages (each article shows its `ref:` in
-  a context line) and run `slack_feedback.bat` (schedule daily). Requires
-  `SLACK_BOT_TOKEN` + `SLACK_FEEDBACK_CHANNELS`; a reaction on a
-  multi-article message labels every article in it — use the CLI for
-  per-article control.
+- Slack: react to alert messages (each article shows its `ref:` in a
+  context line) and run `slack_feedback.bat` (schedule daily). Useful:
+  👍 🔥 📌 ⭐ 💯 — noise: 👎 🚫 💤 (still a binary useful/noise label
+  underneath; the wider emoji choice just gives reactions more natural
+  nuance than forcing every "this matters, bookmark it" into a plain
+  👍). Requires `SLACK_BOT_TOKEN` + `SLACK_FEEDBACK_CHANNELS`; a reaction
+  on a multi-article message labels every article in it — use the CLI
+  for per-article control.
 
 **Training**: once you have 30+ labels (10+ per class):
 

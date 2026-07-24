@@ -37,7 +37,20 @@ def test_message_verdict_useful_and_noise():
     assert sfp.message_verdict({"reactions": [{"name": "-1"}]}) == "noise"
 
 
+def test_message_verdict_recognizes_expanded_reaction_vocabulary():
+    for name in ("fire", "pushpin", "star", "100"):
+        assert sfp.message_verdict({"reactions": [{"name": name}]}) == "useful"
+    for name in ("no_entry", "zzz"):
+        assert sfp.message_verdict({"reactions": [{"name": name}]}) == "noise"
+
+
 def test_message_verdict_ignores_conflicting_or_missing_reactions():
     assert sfp.message_verdict({"reactions": []}) is None
     assert sfp.message_verdict({"reactions": [{"name": "+1"}, {"name": "-1"}]}) is None
+    assert sfp.message_verdict({"reactions": [{"name": "fire"}, {"name": "no_entry"}]}) is None
     assert sfp.message_verdict({}) is None
+
+
+def test_message_verdict_ignores_unmapped_reactions():
+    """👀(eyes) 같은 '봤지만 판단 없음' 반응은 useful/noise 어느 쪽도 아니므로 무시된다."""
+    assert sfp.message_verdict({"reactions": [{"name": "eyes"}]}) is None

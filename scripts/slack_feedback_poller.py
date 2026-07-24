@@ -1,8 +1,14 @@
-"""슬랙 알림 메시지의 👍/👎 반응을 피드백 라벨로 수집하는 폴러.
+"""슬랙 알림 메시지의 이모지 반응을 피드백 라벨로 수집하는 폴러.
 
 알림 메시지에는 rss_collector가 `ref:<10자리 해시>`를 심어둔다. 이 스크립트는
 채널 히스토리에서 반응이 달린 메시지를 찾아 ref를 이벤트로 역매핑하고
-👍 → useful, 👎 → noise 라벨을 data/feedback.jsonl에 기록한다.
+useful 계열(👍·🔥·📌·⭐·💯) → useful, noise 계열(👎·🚫·💤) → noise 라벨을
+data/feedback.jsonl에 기록한다. 👍/👎 하나로만 누르기엔 심리적 문턱이 있고
+"중요해서 나중에 다시 볼 것"·"봤는데 별로"처럼 뉘앙스가 다른 반응도 실제로
+자주 달려서, 같은 useful/noise 이진 라벨 안에 더 자연스러운 이모지 선택지를
+넓힌 것 — 라벨 스키마 자체(useful/noise 두 클래스)는 바꾸지 않는다(학습·통계
+파이프라인이 전부 이진 분류를 전제하고 있어, 클래스를 늘리면 그쪽까지 다
+고쳐야 하는데 지금 라벨 볼륨으로는 이진 분류도 벅차다).
 
 주의: 메시지 하나에 기사 여러 건이 담긴 경우 반응은 그 메시지의 모든 기사에
 적용된다. 기사별로 다르게 평가하려면 feedback.py CLI를 사용한다.
@@ -35,8 +41,8 @@ for stream in (sys.stdout, sys.stderr):
 BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 CHANNELS = [c.strip() for c in os.environ.get("SLACK_FEEDBACK_CHANNELS", "").split(",") if c.strip()]
 REF_RE = re.compile(r"ref:([0-9a-f]{10})")
-USEFUL_REACTIONS = {"+1", "thumbsup"}
-NOISE_REACTIONS = {"-1", "thumbsdown"}
+USEFUL_REACTIONS = {"+1", "thumbsup", "fire", "pushpin", "star", "100"}
+NOISE_REACTIONS = {"-1", "thumbsdown", "no_entry", "zzz"}
 MAX_PAGES = 5
 RECENT_LINES = 5000
 
