@@ -1224,12 +1224,46 @@ def should_alert(importance, triage=None, min_score=None):
     threshold = IMPORTANCE_ALERT_THRESHOLD if min_score is None else int(min_score)
     return (importance or {}).get("score", 0) >= threshold
 
+def iter_lines_reverse(path, chunk_size=65536):
+    """텍스트 파일을 끝에서부터 청크 단위로 거슬러 읽어 한 줄씩(최신 줄 먼저) 반환.
+
+    events.jsonl류 append-only 로그는 시간순으로 계속 쌓이기만 하는데, 여태
+    소비처들이 readlines()[-N:]으로 "최근 것만 본다"고 흉내냈지만 그건 파일
+    전체를 메모리에 다 읽은 "다음에" 자르는 거라 파일이 커질수록 매번 전체를
+    읽는 비용이 그대로였다. 이 제너레이터는 파일 끝에서부터 실제로 필요한
+    만큼만 읽으므로, 호출부가 원하는 시점에 break하면 그 이후는 아예 안 읽는다.
+
+    UTF-8 멀티바이트 문자가 청크 경계에서 잘릴 수 있어 완결된 줄 단위로만
+    디코드한다(마지막 미완성 조각은 다음 청크와 합쳐서 처리). 텍스트 모드로 쓰인
+    파일은 Windows에서 줄바꿈이 \r\n으로 저장되므로 \r도 함께 벗겨낸다.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+    with path.open("rb") as file:
+        file.seek(0, 2)
+        remaining = file.tell()
+        buffer = b""
+        while remaining > 0:
+            read_size = min(chunk_size, remaining)
+            remaining -= read_size
+            file.seek(remaining)
+            buffer = file.read(read_size) + buffer
+            lines = buffer.split(b"\n")
+            buffer = lines[0]  # 청크 경계에서 잘렸을 수 있으니 다음 청크와 합칠 몫으로 남겨둠
+            for line in reversed(lines[1:]):
+                line = line.rstrip(b"\r")
+                if line:
+                    yield line.decode("utf-8", errors="replace")
+        buffer = buffer.rstrip(b"\r")
+        if buffer:
+            yield buffer.decode("utf-8", errors="replace")
+
 # ===== 크로스소스 클러스터링 (수집 시점 — 같은 사건의 중복 알림 억제 + 교차 보도 가점) =====
 CLUSTER_WINDOW_HOURS = int(os.environ.get("CLUSTER_WINDOW_HOURS", "72"))
 CLUSTER_CVE_CONTAINMENT = 0.5   # 겹친 CVE 수 / min(양쪽 CVE 수) — 대형 종합기사의 체인 병합 방지
 CLUSTER_TITLE_JACCARD = 0.5     # 제목 토큰 유사도 — 오병합이 미병합보다 해로우므로 보수적
 CORROBORATION_CAP = 20
-_RECENT_EVENTS_MAX_LINES = 5000
 
 # 취약점 카탈로그형 소스는 "보도"가 아니므로 클러스터링에서 제외
 # (NVD는 모든 CVE를 수록하므로 교차 확인 신호가 아니고, 뉴스 알림을 억제해서도 안 된다)
@@ -1251,19 +1285,15 @@ def _title_tokens(title):
     return {token for token in tokens if token not in _TITLE_STOPWORDS}
 
 def _read_recent_events(hours, events_file=None):
-    """events.jsonl 뒤쪽에서 시간 창 안의 이벤트만 파싱 (카탈로그형 소스 제외)"""
-    path = Path(events_file) if events_file else EVENTS_FILE
-    if not path.exists():
-        return []
-    try:
-        with path.open("r", encoding="utf-8") as file:
-            lines = file.readlines()[-_RECENT_EVENTS_MAX_LINES:]
-    except OSError:
-        return []
+    """events.jsonl 뒤쪽에서 시간 창 안의 이벤트만 파싱 (카탈로그형 소스 제외).
 
+    append-only라 시간순으로 쌓인다는 전제하에 끝에서부터 거슬러 읽다가 cutoff보다
+    오래된 이벤트를 만나면 즉시 멈춘다 — 파일 전체 크기와 무관하게 창 크기만큼만 읽는다.
+    """
+    path = Path(events_file) if events_file else EVENTS_FILE
     cutoff = datetime.utcnow() - timedelta(hours=hours)
     events = []
-    for line in lines:
+    for line in iter_lines_reverse(path):
         line = line.strip()
         if not line:
             continue
@@ -1271,14 +1301,15 @@ def _read_recent_events(hours, events_file=None):
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if (event.get("source") or "") in CATALOG_SOURCES:
-            continue
         try:
             fetched = datetime.fromisoformat(str(event.get("fetched_at")).replace("Z", "+00:00")).replace(tzinfo=None)
         except (TypeError, ValueError):
             continue
-        if fetched >= cutoff:
-            events.append(event)
+        if fetched < cutoff:
+            break  # 이 지점부터는 전부 더 오래된 이벤트 — 조기 종료
+        if (event.get("source") or "") in CATALOG_SOURCES:
+            continue
+        events.append(event)
     return events
 
 def find_related_events(cves, title, hours=None, exclude_source=None, events_file=None):

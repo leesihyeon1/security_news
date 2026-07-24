@@ -56,19 +56,23 @@ def slack_api(method, params):
 
 
 def build_ref_map():
-    """최근 이벤트의 ref 해시 → 이벤트 ID 매핑"""
-    if not common_utils.EVENTS_FILE.exists():
-        return {}
-    with common_utils.EVENTS_FILE.open("r", encoding="utf-8") as file:
-        lines = file.readlines()[-RECENT_LINES:]
+    """최근 이벤트의 ref 해시 → 이벤트 ID 매핑.
+
+    파일 끝에서부터 거슬러 읽어 RECENT_LINES줄만 훑는다 — 로그 전체 크기와
+    무관하게 읽는 양이 고정된다.
+    """
     ref_map = {}
-    for line in lines:
+    count = 0
+    for line in common_utils.iter_lines_reverse(common_utils.EVENTS_FILE):
+        count += 1
+        if count > RECENT_LINES:
+            break
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
         if event.get("id"):
-            ref_map[common_utils.event_ref(event["id"])] = event["id"]
+            ref_map.setdefault(common_utils.event_ref(event["id"]), event["id"])
     return ref_map
 
 

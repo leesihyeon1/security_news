@@ -188,29 +188,37 @@ def normalize_legacy_boannews(raw):
 
 
 def load_events(since):
-    """통합 이벤트 로그와 구 보안뉴스 로그를 함께 읽고 (source, url) 기준으로 중복 제거"""
+    """통합 이벤트 로그와 구 보안뉴스 로그를 함께 읽고 (source, url) 기준으로 중복 제거.
+
+    append-only 로그를 끝에서부터 거슬러 읽다가 since보다 오래된 이벤트를 만나면
+    멈춘다 — 로그 전체 크기와 무관하게 이번 집계 기간만큼만 읽는다.
+    """
     events = {}
 
     for path, legacy in ((common_utils.EVENTS_FILE, False), (LEGACY_BOANNEWS_EVENTS_FILE, True)):
         if not path.exists():
             continue
-        with path.open("r", encoding="utf-8") as file:
-            for line in file:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        recent = []
+        for line in common_utils.iter_lines_reverse(path):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-                event = normalize_legacy_boannews(raw) if legacy else raw
-                fetched = parse_iso(event.get("fetched_at"))
-                if fetched is None or fetched < since:
-                    continue
+            event = normalize_legacy_boannews(raw) if legacy else raw
+            fetched = parse_iso(event.get("fetched_at"))
+            if fetched is None:
+                continue
+            if fetched < since:
+                break  # 이 지점부터는 전부 더 오래된 이벤트 — 조기 종료
+            recent.append(event)
 
-                key = "{}|{}".format(event.get("source"), event.get("url") or event.get("id"))
-                events.setdefault(key, event)
+        for event in reversed(recent):  # 시간순으로 되돌려 기존 dedup(첫 등장 우선) 순서 유지
+            key = "{}|{}".format(event.get("source"), event.get("url") or event.get("id"))
+            events.setdefault(key, event)
 
     return list(events.values())
 

@@ -30,24 +30,27 @@ RECENT_LINES = 3000
 
 
 def load_recent_events():
-    """events.jsonl 뒤쪽 이벤트를 최신순으로 반환 (id 기준 중복 제거)"""
-    if not common_utils.EVENTS_FILE.exists():
-        return []
-    with common_utils.EVENTS_FILE.open("r", encoding="utf-8") as file:
-        lines = file.readlines()[-RECENT_LINES:]
+    """events.jsonl 뒤쪽 이벤트를 최신순으로 반환 (id 기준 중복 제거).
 
+    파일 끝에서부터 거슬러 읽어 RECENT_LINES줄만 훑는다 — 로그 전체 크기와
+    무관하게 읽는 양이 고정된다.
+    """
     events = {}
-    for line in lines:
+    count = 0
+    for line in common_utils.iter_lines_reverse(common_utils.EVENTS_FILE):
         line = line.strip()
         if not line:
             continue
+        count += 1
+        if count > RECENT_LINES:
+            break
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if event.get("id"):
-            events[event["id"]] = event
-    return list(reversed(list(events.values())))
+        if event.get("id") and event["id"] not in events:
+            events[event["id"]] = event  # 역순 순회라 처음 만나는 게 최신 버전
+    return list(events.values())
 
 
 def was_alerted(event):
