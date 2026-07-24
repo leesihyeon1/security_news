@@ -86,6 +86,14 @@ def print_events(events, labels, alerted_only=True, limit=30):
         if event.get("category"):
             reason = event.get("category_reason")
             print("      └ {}{}".format(event["category"], ": {}".format(reason) if reason else ""))
+        review = event.get("analyst_review")
+        if review:
+            score = lambda key: review.get(key) if review.get(key) is not None else "-"
+            detail = (review.get("reasoning") or {}).get("technical_detail")
+            print("      └ rubric 기술{}·실행{}·신뢰{}{}".format(
+                score("technical_substance"), score("actionability"), score("credibility"),
+                ": {}".format(detail) if detail else "",
+            ))
         shown += 1
         if shown >= limit:
             break
