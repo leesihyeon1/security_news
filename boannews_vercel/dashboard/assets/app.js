@@ -3,7 +3,7 @@
 
   const state = {
     period: "daily",
-    region: "all", // all | domestic | overseas
+    tab: "all", // all | domestic | overseas | recommended
     cache: {}, // period -> payload
   };
 
@@ -151,17 +151,19 @@
     );
   }
 
-  function regionData(payload) {
-    if (state.region === "domestic") return payload.domestic;
-    if (state.region === "overseas") return payload.overseas;
-    return {
-      highlights: (payload.domestic.highlights || []).concat(payload.overseas.highlights || []),
-      trend_reads: (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []),
-    };
+  // 탭별로 필요한 데이터만 추려서 반환. 읽을만한 동향(trend_reads)은 요약/국내/해외에
+  // 섞이지 않고 recommended 탭에서만 다룬다 — 같은 기사가 여러 탭에 중복 노출되지 않게.
+  function tabData(payload) {
+    if (state.tab === "domestic") return { highlights: payload.domestic.highlights || [] };
+    if (state.tab === "overseas") return { highlights: payload.overseas.highlights || [] };
+    if (state.tab === "recommended") {
+      return { trend_reads: (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []) };
+    }
+    return { highlights: (payload.domestic.highlights || []).concat(payload.overseas.highlights || []) };
   }
 
   function render(payload) {
-    const region = regionData(payload);
+    const data = tabData(payload);
     $generatedAt.textContent = payload.title + " · 기간: " + payload.period_label + " · 생성: " + fmtDate(payload.generated_at);
 
     let html = "";
@@ -169,15 +171,15 @@
 
     html +=
       '<div class="region-tabs">' +
-      ["all", "domestic", "overseas"].map((r) => {
-        const label = r === "all" ? "요약" : r === "domestic" ? "국내" : "해외";
-        const active = state.region === r ? " is-active" : "";
-        return '<button type="button" class="region-tab' + active + '" data-region="' + r + '">' + label + "</button>";
+      ["all", "domestic", "overseas", "recommended"].map((t) => {
+        const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" : "추천기사";
+        const active = state.tab === t ? " is-active" : "";
+        return '<button type="button" class="region-tab' + active + '" data-region="' + t + '">' + label + "</button>";
       }).join("") +
       "</div>";
 
-    if (state.region === "all") {
-      // 요약 탭: AI 총평 + 핵심 취약점 + 주요뉴스/읽을만한 동향 구분 유지
+    if (state.tab === "all") {
+      // 요약 탭: AI 총평 + 핵심 취약점 + 주요뉴스(읽을만한 동향은 추천기사 탭으로 분리됨)
       if (payload.narrative) {
         html += '<div class="section"><div class="section-title">AI 분석</div><div class="narrative">' + esc(payload.narrative) + "</div></div>";
       }
@@ -189,20 +191,20 @@
       }
 
       html +=
-        '<div class="section"><div class="section-title">주요 뉴스 <span class="count">' + (region.highlights || []).length + "건</span></div>" +
-        renderItemList(region.highlights) +
+        '<div class="section"><div class="section-title">주요 뉴스 <span class="count">' + (data.highlights || []).length + "건</span></div>" +
+        renderItemList(data.highlights) +
         "</div>";
-
+    } else if (state.tab === "recommended") {
+      // 추천기사 탭: 읽을만한 동향(국내+해외 통합)을 소스별로 묶어서 표시
       html +=
-        '<div class="section"><div class="section-title">읽을만한 동향 <span class="count">' + (region.trend_reads || []).length + "건</span></div>" +
-        renderItemList(region.trend_reads) +
+        '<div class="section"><div class="section-title">추천 기사 <span class="count">' + (data.trend_reads || []).length + "건</span></div>" +
+        renderBySource(data.trend_reads) +
         "</div>";
     } else {
-      // 국내/해외 탭: AI 총평·핵심 취약점 없이, 소스별로 기사를 묶어서 쭉 나열
-      const allEvents = (region.highlights || []).concat(region.trend_reads || []);
+      // 국내/해외 탭: AI 총평·핵심 취약점 없이, 주요 뉴스만 소스별로 묶어서 나열
       html +=
-        '<div class="section"><div class="section-title">기사 <span class="count">' + allEvents.length + "건</span></div>" +
-        renderBySource(allEvents) +
+        '<div class="section"><div class="section-title">기사 <span class="count">' + (data.highlights || []).length + "건</span></div>" +
+        renderBySource(data.highlights) +
         "</div>";
     }
 
@@ -210,7 +212,7 @@
 
     $app.querySelectorAll(".region-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
-        state.region = btn.dataset.region;
+        state.tab = btn.dataset.region;
         render(payload);
       });
     });
