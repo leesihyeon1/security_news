@@ -206,6 +206,26 @@ html, body {
   font-size: 0.82rem;
 }
 
+/* ===== Source-grouped article list (국내/해외 탭) ===== */
+.source-group { margin-bottom: 22px; }
+.source-group:last-child { margin-bottom: 0; }
+.source-group-head {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.source-group-head .count {
+  font-weight: 500;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+}
+
 .narrative {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

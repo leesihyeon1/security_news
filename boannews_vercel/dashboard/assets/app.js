@@ -77,7 +77,8 @@
     return '<span class="level-badge ' + level + '">' + level + "</span>";
   }
 
-  function renderItem(event) {
+  function renderItem(event, opts) {
+    opts = opts || {};
     const metaBits = [];
     if (event.category) metaBits.push(esc(event.category));
     if (event.published_at) metaBits.push(esc(fmtDate(event.published_at)));
@@ -85,7 +86,7 @@
     return (
       '<div class="item">' +
       '<div class="item-top">' +
-      '<span class="item-source">' + esc(event.source_label || event.source || "") + "</span>" +
+      (opts.hideSource ? "" : '<span class="item-source">' + esc(event.source_label || event.source || "") + "</span>") +
       renderLevelBadge(event.level) +
       "</div>" +
       '<div class="item-title"><a href="' + href + '" target="_blank" rel="noopener">' + esc(event.title) + "</a></div>" +
@@ -99,7 +100,35 @@
     if (!events || !events.length) {
       return '<div class="empty-state">해당 없음</div>';
     }
-    return '<div class="item-list">' + events.map(renderItem).join("") + "</div>";
+    return '<div class="item-list">' + events.map((e) => renderItem(e)).join("") + "</div>";
+  }
+
+  function groupBySource(events) {
+    const order = [];
+    const groups = {};
+    events.forEach((event) => {
+      const key = event.source_label || event.source || "기타";
+      if (!groups[key]) {
+        groups[key] = [];
+        order.push(key);
+      }
+      groups[key].push(event);
+    });
+    return order
+      .map((key) => ({ source: key, items: groups[key] }))
+      .sort((a, b) => b.items.length - a.items.length);
+  }
+
+  function renderBySource(events) {
+    if (!events || !events.length) {
+      return '<div class="empty-state">해당 없음</div>';
+    }
+    return groupBySource(events).map((group) =>
+      '<div class="source-group">' +
+      '<div class="source-group-head">' + esc(group.source) + ' <span class="count">' + group.items.length + '건</span></div>' +
+      '<div class="item-list">' + group.items.map((e) => renderItem(e, { hideSource: true })).join("") + "</div>" +
+      "</div>"
+    ).join("");
   }
 
   function renderCveCard(card) {
@@ -147,25 +176,35 @@
       }).join("") +
       "</div>";
 
-    if (payload.narrative) {
-      html += '<div class="section"><div class="section-title">AI 분석</div><div class="narrative">' + esc(payload.narrative) + "</div></div>";
-    }
+    if (state.region === "all") {
+      // 요약 탭: AI 총평 + 핵심 취약점 + 주요뉴스/읽을만한 동향 구분 유지
+      if (payload.narrative) {
+        html += '<div class="section"><div class="section-title">AI 분석</div><div class="narrative">' + esc(payload.narrative) + "</div></div>";
+      }
 
-    if (payload.cards && payload.cards.length) {
+      if (payload.cards && payload.cards.length) {
+        html +=
+          '<div class="section"><div class="section-title">핵심 취약점 <span class="count">복수 소스 교차 확인 · ' + payload.cards.length + '건</span></div>' +
+          '<div class="card-list">' + payload.cards.map(renderCveCard).join("") + "</div></div>";
+      }
+
       html +=
-        '<div class="section"><div class="section-title">핵심 취약점 <span class="count">복수 소스 교차 확인 · ' + payload.cards.length + '건</span></div>' +
-        '<div class="card-list">' + payload.cards.map(renderCveCard).join("") + "</div></div>";
+        '<div class="section"><div class="section-title">주요 뉴스 <span class="count">' + (region.highlights || []).length + "건</span></div>" +
+        renderItemList(region.highlights) +
+        "</div>";
+
+      html +=
+        '<div class="section"><div class="section-title">읽을만한 동향 <span class="count">' + (region.trend_reads || []).length + "건</span></div>" +
+        renderItemList(region.trend_reads) +
+        "</div>";
+    } else {
+      // 국내/해외 탭: AI 총평·핵심 취약점 없이, 소스별로 기사를 묶어서 쭉 나열
+      const allEvents = (region.highlights || []).concat(region.trend_reads || []);
+      html +=
+        '<div class="section"><div class="section-title">기사 <span class="count">' + allEvents.length + "건</span></div>" +
+        renderBySource(allEvents) +
+        "</div>";
     }
-
-    html +=
-      '<div class="section"><div class="section-title">주요 뉴스 <span class="count">' + (region.highlights || []).length + "건</span></div>" +
-      renderItemList(region.highlights) +
-      "</div>";
-
-    html +=
-      '<div class="section"><div class="section-title">읽을만한 동향 <span class="count">' + (region.trend_reads || []).length + "건</span></div>" +
-      renderItemList(region.trend_reads) +
-      "</div>";
 
     $app.innerHTML = html;
 
