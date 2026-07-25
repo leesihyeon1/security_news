@@ -148,22 +148,22 @@
       "</div>";
 
     if (payload.narrative) {
-      html += '<div class="section"><div class="section-title">🤖 AI 분석</div><div class="narrative">' + esc(payload.narrative) + "</div></div>";
+      html += '<div class="section"><div class="section-title">AI 분석</div><div class="narrative">' + esc(payload.narrative) + "</div></div>";
     }
 
     if (payload.cards && payload.cards.length) {
       html +=
-        '<div class="section"><div class="section-title">🎯 핵심 취약점 <span class="count">복수 소스 교차 확인 · ' + payload.cards.length + '건</span></div>' +
+        '<div class="section"><div class="section-title">핵심 취약점 <span class="count">복수 소스 교차 확인 · ' + payload.cards.length + '건</span></div>' +
         '<div class="card-list">' + payload.cards.map(renderCveCard).join("") + "</div></div>";
     }
 
     html +=
-      '<div class="section"><div class="section-title">📰 주요 뉴스 <span class="count">' + (region.highlights || []).length + "건</span></div>" +
+      '<div class="section"><div class="section-title">주요 뉴스 <span class="count">' + (region.highlights || []).length + "건</span></div>" +
       renderItemList(region.highlights) +
       "</div>";
 
     html +=
-      '<div class="section"><div class="section-title">📖 읽을만한 동향 <span class="count">' + (region.trend_reads || []).length + "건</span></div>" +
+      '<div class="section"><div class="section-title">읽을만한 동향 <span class="count">' + (region.trend_reads || []).length + "건</span></div>" +
       renderItemList(region.trend_reads) +
       "</div>";
 

@@ -98,8 +98,6 @@ html, body {
   font-size: 1.05rem;
   letter-spacing: -0.01em;
 }
-.brand-icon { font-size: 1.3rem; }
-
 .topbar-controls {
   display: flex;
   align-items: center;
@@ -135,12 +133,14 @@ html, body {
 .theme-toggle {
   border: 1px solid var(--border);
   background: var(--bg-elevated);
-  color: var(--text);
-  width: 34px;
+  color: var(--text-muted);
   height: 34px;
+  padding: 0 14px;
   border-radius: 999px;
   cursor: pointer;
-  font-size: 0.95rem;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.82rem;
   display: flex;
   align-items: center;
   justify-content: center;
