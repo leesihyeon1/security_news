@@ -141,7 +141,7 @@
     html +=
       '<div class="region-tabs">' +
       ["all", "domestic", "overseas"].map((r) => {
-        const label = r === "all" ? "전체" : r === "domestic" ? "국내" : "해외";
+        const label = r === "all" ? "요약" : r === "domestic" ? "국내" : "해외";
         const active = state.region === r ? " is-active" : "";
         return '<button type="button" class="region-tab' + active + '" data-region="' + r + '">' + label + "</button>";
       }).join("") +
