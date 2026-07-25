@@ -62,7 +62,6 @@
       { label: "Critical", value: stats.critical, cls: "" },
       { label: "KEV", value: stats.kev, cls: "" },
       { label: "랜섬웨어", value: stats.ransomware, cls: "" },
-      { label: "자산매칭", value: stats.asset_hits, cls: "" },
     ];
     return (
       '<div class="stat-strip">' +

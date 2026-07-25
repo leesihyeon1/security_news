@@ -2,7 +2,7 @@
   "title": "주간 보안 인텔리전스 리포트",
   "period": "weekly",
   "period_label": "2026-07-18 09:00 ~ 2026-07-25 09:00 (UTC)",
-  "generated_at": "2026-07-24T23:23:52Z",
+  "generated_at": "2026-07-25T00:02:16Z",
   "narrative": "AI 총평(주간): 한 주간 취약점 공개와 공급망 공격 시도가 두드러졌습니다.",
   "stats": {
     "total": 142,
@@ -11,7 +11,6 @@
     "critical": 1,
     "kev": 1,
     "ransomware": 1,
-    "asset_hits": 1,
     "by_source": {
       "asec": 5,
       "boannews": 4,

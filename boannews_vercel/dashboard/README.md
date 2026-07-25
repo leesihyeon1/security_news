@@ -46,7 +46,7 @@ vercel.json        /data/*.json 캐시 무효화 헤더
   "period_label": "2026-07-24 09:00 ~ 2026-07-25 09:00 (UTC)",
   "generated_at": "2026-07-25T09:00:00Z",
   "narrative": "AI 총평 텍스트",
-  "stats": { "total": 24, "p1": 1, "p2": 2, "critical": 1, "kev": 1, "ransomware": 1, "asset_hits": 1, "by_source": {"asec": 5, ...} },
+  "stats": { "total": 24, "p1": 1, "p2": 2, "critical": 1, "kev": 1, "ransomware": 1, "by_source": {"asec": 5, ...} },
   "cards": [ /* CVE 상관관계 카드 — 국내/해외 구분 없음(카드 하나에 여러 소스 섞여 있을 수 있어서) */ ],
   "domestic": { "highlights": [...], "trend_reads": [...] },
   "overseas": { "highlights": [...], "trend_reads": [...] }
@@ -61,6 +61,7 @@ vercel.json        /data/*.json 캐시 무효화 헤더
 (이메일/슬랙/텍스트 리포트는 내부용이라 그대로 보여줌. 매칭 로직 자체는 전혀 안 바뀜,
 여기서 직렬화만 안 함):
 - `matched_assets`(자사 보유 자산·제품 매칭 결과) — 어떤 제품을 보유하는지 노출 방지.
-  CVE 카드의 `severity_bits`도 자산매칭 문구를 뺀 버전
+  CVE 카드의 `severity_bits`도 자산매칭 문구를 뺀 버전. `stats.asset_hits`(건수)도
+  같은 이유로 뺀다 — 숫자만으로도 "자산 인벤토리를 추적한다"는 사실이 드러나므로
 - `pir_groups`/`pir_gaps`(우선 정보 요구사항 매칭) — 조직이 무엇을 우선순위로 보는지
   (예: 특정 산업 표적 위협 추적 여부) 노출 방지

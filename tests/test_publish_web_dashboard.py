@@ -86,6 +86,13 @@ def test_build_dashboard_payload_omits_pir_info():
     assert "pir_gaps" not in payload
 
 
+def test_build_dashboard_payload_omits_asset_hits_count():
+    """자산매칭 건수만으로도 '이 조직이 자산 인벤토리를 추적한다'는 사실이 드러나므로,
+    이름뿐 아니라 stats.asset_hits 집계 자체를 대시보드 출력에서 뺀다."""
+    payload = gr.build_dashboard_payload("제목", "daily", "기간", _stats(), "", [], [], [])
+    assert "asset_hits" not in payload["stats"]
+
+
 def test_publish_skips_when_repo_path_not_configured(monkeypatch):
     monkeypatch.setattr(pwd, "REPO_PATH", "")
     assert pwd.publish({"period": "daily", "generated_at": "2026-01-01T00:00:00Z"}) is False

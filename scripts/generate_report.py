@@ -1379,9 +1379,11 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
 
     PIR(우선 정보 요구사항)과 자산매칭 정보는 의도적으로 담지 않는다 — 조직이 무엇을
     우선순위로 보는지, 어떤 자산·제품을 보유하는지가 공개될 수 있는 이 사이트에 노출되면
-    안 되기 때문(내부용인 이메일/슬랙/텍스트 리포트는 그대로 보여줌). PIR 매칭·자산매칭
-    로직 자체(insight_score, classify_urgency 등)는 전혀 바뀌지 않았다 — 여기서 결과를
-    직렬화하지 않을 뿐이다.
+    안 되기 때문(내부용인 이메일/슬랙/텍스트 리포트는 그대로 보여줌). 자산매칭은 이름뿐
+    아니라 건수(stats.asset_hits)도 뺀다 — "자산매칭 N건"이라는 숫자만으로도 "이 조직이
+    자산 인벤토리를 추적한다"는 사실 자체가 드러나므로. PIR 매칭·자산매칭 로직 자체
+    (insight_score, classify_urgency 등)는 전혀 바뀌지 않았다 — 여기서 결과를 직렬화하지
+    않을 뿐이다.
     """
     def serialize_event(event):
         # matched_assets는 의도적으로 뺀다 — 공개 웹 대시보드에 자사 보유 자산/제품명이
@@ -1445,7 +1447,6 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "critical": len(stats["critical"]),
             "kev": len(stats["kev"]),
             "ransomware": len(stats["ransomware"]),
-            "asset_hits": len(stats["asset_hits"]),
             "by_source": dict(stats["by_source"].most_common()),
         },
         "cards": [serialize_card(card) for card in cards[:MAX_CVE_CARDS]],
