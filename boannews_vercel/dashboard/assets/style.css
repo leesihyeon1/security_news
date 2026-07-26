@@ -176,9 +176,35 @@ html, body {
 }
 .history-month-body {
   display: none;
+  flex-direction: column;
   margin-top: 10px;
 }
 .history-month.is-open .history-month-body { display: flex; }
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+.page-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  min-width: 34px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.page-btn:hover { color: var(--text); border-color: var(--accent); }
+.page-btn.is-active {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
 
 .item-title mark, .item-summary mark {
   background: var(--accent-soft);

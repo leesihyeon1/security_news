@@ -1,12 +1,15 @@
 (function () {
   "use strict";
 
+  const PAGE_SIZE = 30;
+
   const state = {
     period: "daily",
     tab: "all", // all | domestic | overseas | recommended | cve | history
     cache: {}, // period -> payload
     query: "",
     searchIndex: null, // null = 아직 로딩 전, 로드되면 배열
+    pages: {}, // pageKey -> 현재 페이지 번호(1부터)
   };
 
   const $app = document.getElementById("app");
@@ -92,6 +95,25 @@
     return '<span class="level-badge ' + level + '">' + level + "</span>";
   }
 
+  // ===== Pagination (국내/해외, History 검색·월별 아카이브에서 공용) =====
+  function paginate(items, page) {
+    const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+    const clamped = Math.min(Math.max(1, page), totalPages);
+    const start = (clamped - 1) * PAGE_SIZE;
+    return { pageItems: items.slice(start, start + PAGE_SIZE), page: clamped, totalPages: totalPages };
+  }
+
+  function renderPagination(pageKey, page, totalPages) {
+    if (totalPages <= 1) return "";
+    let buttons = "";
+    for (let p = 1; p <= totalPages; p++) {
+      buttons +=
+        '<button type="button" class="page-btn' + (p === page ? " is-active" : "") + '" data-page-key="' +
+        esc(pageKey) + '" data-page="' + p + '">' + p + "</button>";
+    }
+    return '<div class="pagination">' + buttons + "</div>";
+  }
+
   function renderItem(event, opts) {
     opts = opts || {};
     const metaBits = [];
@@ -134,16 +156,26 @@
       .sort((a, b) => b.items.length - a.items.length);
   }
 
-  function renderBySource(events) {
+  // pageKey를 주면 그 목록을 PAGE_SIZE 단위로 잘라서 보여주고 페이지 번호를 붙인다
+  // (국내/해외 탭용) — 안 주면(추천기사 탭) 예전처럼 전부 보여준다.
+  function renderBySource(events, pageKey) {
     if (!events || !events.length) {
       return '<div class="empty-state">해당 없음</div>';
     }
-    return groupBySource(events).map((group) =>
+    let items = events;
+    let paginationHtml = "";
+    if (pageKey) {
+      const result = paginate(events, state.pages[pageKey] || 1);
+      items = result.pageItems;
+      paginationHtml = renderPagination(pageKey, result.page, result.totalPages);
+    }
+    const groupsHtml = groupBySource(items).map((group) =>
       '<div class="source-group">' +
       '<div class="source-group-head">' + esc(group.source) + ' <span class="count">' + group.items.length + '건</span></div>' +
       '<div class="item-list">' + group.items.map((e) => renderItem(e, { hideSource: true })).join("") + "</div>" +
       "</div>"
     ).join("");
+    return groupsHtml + paginationHtml;
   }
 
   function renderCveCard(card) {
@@ -230,9 +262,12 @@
         '<div class="empty-state">"' + esc(query) + '"에 대한 결과가 없습니다.</div></div>'
       );
     }
+    const result = paginate(scored, state.pages["history-search"] || 1);
     return (
       '<div class="section"><div class="section-title">검색 결과 <span class="count">' + scored.length + '건</span></div>' +
-      '<div class="item-list">' + scored.map((s) => renderHistoryItem(s.entry, words)).join("") + "</div></div>"
+      '<div class="item-list">' + result.pageItems.map((s) => renderHistoryItem(s.entry, words)).join("") + "</div>" +
+      renderPagination("history-search", result.page, result.totalPages) +
+      "</div>"
     );
   }
 
@@ -254,11 +289,16 @@
 
     return order.map((month, idx) => {
       const items = groups[month];
+      const pageKey = "history-month-" + month;
+      const result = paginate(items, state.pages[pageKey] || 1);
       return (
         '<div class="section history-month' + (idx === 0 ? " is-open" : "") + '" data-month="' + esc(month) + '">' +
         '<button type="button" class="history-month-toggle">' + esc(month) +
         ' <span class="count">' + items.length + "건</span></button>" +
-        '<div class="item-list history-month-body">' + items.map(renderHistoryItem).join("") + "</div>" +
+        '<div class="history-month-body">' +
+        '<div class="item-list">' + result.pageItems.map((e) => renderHistoryItem(e)).join("") + "</div>" +
+        renderPagination(pageKey, result.page, result.totalPages) +
+        "</div>" +
         "</div>"
       );
     }).join("");
@@ -338,10 +378,10 @@
       // History 탭: 검색어가 있으면 전체 기간 검색 결과, 없으면 월별 아카이브 브라우저
       html += renderHistorySection();
     } else {
-      // 국내/해외 탭: AI 총평·핵심 취약점 없이, 주요 뉴스만 소스별로 묶어서 나열
+      // 국내/해외 탭: AI 총평·핵심 취약점 없이, 주요 뉴스만 소스별로 묶어서 나열(30건씩 페이지네이션)
       html +=
         '<div class="section"><div class="section-title">기사 <span class="count">' + (data.highlights || []).length + "건</span></div>" +
-        renderBySource(data.highlights) +
+        renderBySource(data.highlights, "region-" + state.tab) +
         "</div>";
     }
 
@@ -361,6 +401,13 @@
     $app.querySelectorAll(".history-month-toggle").forEach((btn) => {
       btn.addEventListener("click", () => {
         btn.closest(".history-month").classList.toggle("is-open");
+      });
+    });
+
+    $app.querySelectorAll(".page-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.pages[btn.dataset.pageKey] = parseInt(btn.dataset.page, 10);
+        render(payload);
       });
     });
   }
@@ -401,6 +448,7 @@
   function initSearch() {
     $searchInput.addEventListener("input", () => {
       state.query = $searchInput.value;
+      state.pages["history-search"] = 1;
       if (state.query.trim() && state.tab !== "history") {
         state.tab = "history";
       }
