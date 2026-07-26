@@ -171,7 +171,7 @@
 
     html +=
       '<div class="region-tabs">' +
-      ["all", "domestic", "overseas", "recommended"].map((t) => {
+      ["all", "recommended", "domestic", "overseas"].map((t) => {
         const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" : "추천기사";
         const active = state.tab === t ? " is-active" : "";
         return '<button type="button" class="region-tab' + active + '" data-region="' + t + '">' + label + "</button>";
