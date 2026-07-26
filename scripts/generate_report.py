@@ -1537,6 +1537,13 @@ def main():
     pir_groups = group_by_pir(events)
     highlight_ids = {event.get("id") for event in highlights}
     trend_reads = pick_trend_reads(events, shown_card_event_ids | highlight_ids)
+    # 대시보드 추천기사 탭용 — 이메일과 달리 MAX_TREND_ITEMS(5) 캡이 없다. 국내/해외
+    # 탭과 마찬가지로 대시보드 전용 하이라이트(all_highlights) 기준으로 제외해야
+    # 두 탭에 같은 기사가 중복 노출되지 않는다.
+    all_highlight_ids = {event.get("id") for event in all_highlights}
+    all_trend_reads = pick_trend_reads(
+        events, shown_card_event_ids | all_highlight_ids, max_items=len(events),
+    )
 
     print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, PIR {}종). AI 해석 생성 중...".format(
         stats["total"], len(cards), len(pir_groups)
@@ -1565,7 +1572,7 @@ def main():
     print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
 
     dashboard_payload = build_dashboard_payload(
-        title, args.period, period_label, stats, narrative, all_highlights, cards, trend_reads, keywords,
+        title, args.period, period_label, stats, narrative, all_highlights, cards, all_trend_reads, keywords,
     )
     publish_web_dashboard.publish(dashboard_payload)
 
