@@ -7,9 +7,10 @@ dashboard/ 쪽에 쓴다. generate_report.py가 리포트를 만든 직후 이�
 dashboard/data/<period>-latest.json(최신본)과 dashboard/data/<period>-<날짜>.json
 (히스토리)을 쓰고, 그 클론에서 git add/commit/push까지 수행한다 — 새 토큰·API 연동
 없이 이 기기에 이미 설정된 git 자격증명(Credential Manager)을 그대로 쓴다. 동시에
-dashboard/data/search-index.json(대시보드 History 탭·검색용 누적 인덱스, 기사/CVE
-카드를 평평한 목록으로 저장)도 갱신한다 — SEARCH_INDEX_RETENTION_DAYS보다 오래된
-항목은 정리된다.
+dashboard/data/search-index.json(대시보드 History 탭·검색용 인덱스)도 data/events.jsonl
+에서 직접 통째로 재구성한다 — 특정 리포트가 뭘 하이라이트로 뽑았는지와 무관하게
+항상 최근 SEARCH_INDEX_RETENTION_DAYS일치 전체 기사가 들어있고, 과거에 이미 수집된
+기사도 그대로 백필된다(리포트 발행이 그날 실패해도 인덱스는 영향받지 않음).
 
 실패해도(경로 미설정, git 오류, push 실패 등) 예외를 절대 밖으로 던지지 않는다 —
 대시보드 발행은 부가 기능이라 이것 때문에 메인 리포트 발송이 막히면 안 된다.
@@ -24,6 +25,8 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import common_utils
 
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
@@ -43,89 +46,63 @@ def _run_git(args, cwd):
     return result.stdout
 
 
-def _index_entries_from_payload(payload, period, date_stamp):
-    """대시보드 History 탭·검색용으로 이번 payload의 기사/CVE 카드를 평평한 목록으로 뽑는다."""
-    entries = []
+def _rebuild_search_index_from_events(repo):
+    """search-index.json을 data/events.jsonl에서 통째로 재구성한다(어느 리포트가 뭘 하이라이트로
+    뽑았는지와 무관 — 그래서 과거에 이미 수집된 기사도 그대로 백필되고, 리포트 발행이 실패한
+    날에도 인덱스는 영향받지 않는다).
 
-    def add_article(event):
-        entries.append({
+    CVE 상관관계 카드(같은 CVE를 여러 소스로 묶은 것)는 여기서 다시 계산하지 않고 개별 기사만
+    담는다 — correlate_by_cve() 로직을 옮겨오는 복잡도 없이도, CVE 번호로 검색하면 그걸 언급한
+    기사가 다 나오므로 검색 용도로는 충분하다.
+
+    끝에서부터 거슬러 읽다가 보관 기간(SEARCH_INDEX_RETENTION_DAYS)보다 오래된 이벤트를 만나면
+    멈춘다 — 로그 전체 크기와 무관하게 그 기간만큼만 읽는다. cutoff 판정은 fetched_at(수집
+    순서와 같은 방향으로 단조 증가) 기준이고, 화면에 보여줄 date는 기사 자체의 published_at을
+    우선한다.
+    """
+    cutoff = (datetime.utcnow() - timedelta(days=SEARCH_INDEX_RETENTION_DAYS)).isoformat()
+
+    by_key = {}
+    for line in common_utils.iter_lines_reverse(common_utils.EVENTS_FILE):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        fetched_at = event.get("fetched_at") or ""
+        if fetched_at < cutoff:
+            break
+
+        source = event.get("source") or ""
+        if source in common_utils.NON_NEWS_SOURCES:
+            continue
+
+        url = event.get("url") or ""
+        key = url or "{}|{}".format(source, event.get("title") or "")
+        if key in by_key:
+            continue  # 끝에서부터 훑으므로 먼저 만난(더 최근에 수집된) 것을 유지
+
+        date_stamp = (event.get("published_at") or fetched_at)[:10]
+        by_key[key] = {
             "date": date_stamp,
-            "period": period,
             "type": "article",
             "title": event.get("title") or "",
-            "url": event.get("url") or "",
-            "source_label": event.get("source_label") or event.get("source") or "",
+            "url": common_utils.tracking_url(event.get("id"), url) or url,
+            "source_label": common_utils.source_label(source),
             "category": event.get("category") or "",
-            "level": event.get("level") or "",
-            "summary": (event.get("summary") or "")[:200],
-        })
+            "level": (event.get("triage") or {}).get("level") or "",
+            "summary": (event.get("ai_summary") or event.get("summary") or "")[:200],
+        }
 
-    for region in ("domestic", "overseas"):
-        bucket = payload.get(region) or {}
-        for event in bucket.get("highlights") or []:
-            add_article(event)
-        for event in bucket.get("trend_reads") or []:
-            add_article(event)
+    entries = sorted(by_key.values(), key=lambda e: e.get("date") or "", reverse=True)
 
-    for card in payload.get("cards") or []:
-        items = card.get("items") or []
-        entries.append({
-            "date": date_stamp,
-            "period": period,
-            "type": "cve",
-            "title": card.get("cve") or "",
-            "url": (items[0].get("url") if items else "") or "",
-            "source_label": ", ".join(card.get("sources") or []),
-            "category": "CVE",
-            "level": card.get("level") or "",
-            "summary": (card.get("summary") or "")[:200],
-        })
-
-    return entries
-
-
-def _index_dedup_key(entry):
-    """기사는 URL로, CVE 카드는 제목(CVE ID)으로 동일 항목을 판별한다.
-
-    일간 리포트가 실은 기사가 나중에 주간 롤업에도 다시 실리면(같은 기사, 다른
-    period+date) 검색 결과에 두 번 뜨는 걸 막기 위한 키다.
-    """
-    url = entry.get("url")
-    if url:
-        return url
-    return "{}|{}".format(entry.get("type") or "", entry.get("title") or "")
-
-
-def _update_search_index(repo, payload, period, date_stamp):
-    """검색 인덱스를 갱신 — 같은 (period, date) 재발행 시 그날 항목을 통째로 교체(중복 누적 방지),
-    보관 기간(SEARCH_INDEX_RETENTION_DAYS)이 지난 항목은 정리하고, 같은 기사가 daily/weekly에
-    걸쳐 중복 등재되면 가장 먼저(오래된 날짜) 등재된 것만 남긴다."""
     index_path = repo / "dashboard" / "data" / SEARCH_INDEX_FILE
-
-    existing = []
-    if index_path.exists():
-        try:
-            with index_path.open("r", encoding="utf-8") as file:
-                existing = json.load(file)
-        except (json.JSONDecodeError, OSError):
-            existing = []
-
-    existing = [e for e in existing if not (e.get("period") == period and e.get("date") == date_stamp)]
-    existing.extend(_index_entries_from_payload(payload, period, date_stamp))
-
-    cutoff = (datetime.utcnow() - timedelta(days=SEARCH_INDEX_RETENTION_DAYS)).strftime("%Y-%m-%d")
-    existing = [e for e in existing if (e.get("date") or "") >= cutoff]
-
-    existing.sort(key=lambda e: e.get("date") or "")  # 오래된 것부터 훑어 첫 등장(가장 이른 날짜)을 유지
-    deduped = {}
-    for entry in existing:
-        deduped.setdefault(_index_dedup_key(entry), entry)
-    existing = list(deduped.values())
-
-    existing.sort(key=lambda e: e.get("date") or "", reverse=True)
-
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     with index_path.open("w", encoding="utf-8") as file:
-        json.dump(existing, file, ensure_ascii=False, indent=2)
+        json.dump(entries, file, ensure_ascii=False, indent=2)
 
 
 def publish(payload, repo_path=None):
@@ -153,7 +130,7 @@ def publish(payload, repo_path=None):
         for path in (latest_path, history_path):
             with path.open("w", encoding="utf-8") as file:
                 json.dump(payload, file, ensure_ascii=False, indent=2)
-        _update_search_index(repo, payload, period, date_stamp)
+        _rebuild_search_index_from_events(repo)
 
         _run_git(["add", "dashboard/data"], cwd=repo)
         status = _run_git(["status", "--porcelain"], cwd=repo)

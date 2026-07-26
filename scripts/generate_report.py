@@ -30,58 +30,10 @@ for stream in (sys.stdout, sys.stderr):
 
 LEGACY_BOANNEWS_EVENTS_FILE = common_utils.DATA_DIR / "boannews_events.jsonl"
 
-SOURCE_LABELS = {
-    "nvd": "NVD CVE",
-    "cisa_kev": "CISA KEV",
-    "kisa": "KISA/KrCERT",
-    "asec": "안랩 ASEC",
-    "msrc": "Microsoft 패치",
-    "github_advisory": "GitHub Advisory",
-    "boannews": "보안뉴스",
-    "thehackernews": "The Hacker News",
-    "bleepingcomputer": "BleepingComputer",
-    "sans_isc": "SANS ISC",
-    "krebsonsecurity": "Krebs on Security",
-    "therecord": "The Record",
-    "securityweek": "SecurityWeek",
-    "darkreading": "Dark Reading",
-    "talos": "Cisco Talos",
-    "unit42": "Unit 42",
-    "checkpoint_research": "Check Point Research",
-    "thedfirreport": "The DFIR Report",
-    "securelist": "Securelist",
-    "google_security": "Google Security Blog",
-    "microsoft_security": "Microsoft Security Blog",
-    "mandiant": "Google TI (Mandiant)",
-    "crowdstrike": "CrowdStrike",
-    "sentinelone": "SentinelOne Labs",
-    "welivesecurity": "ESET WeLiveSecurity",
-    "sophos": "Sophos News",
-    "trendmicro": "Trend Micro Research",
-    "rapid7": "Rapid7",
-    "elastic_security": "Elastic Security Labs",
-    "volexity": "Volexity",
-    "jpcert": "JPCERT/CC",
-    "cyberscoop": "CyberScoop",
-    "infosecurity_magazine": "Infosecurity Magazine",
-    "theregister_security": "The Register",
-    "helpnetsecurity": "Help Net Security",
-    "securityaffairs": "Security Affairs",
-    "dailysecu": "데일리시큐",
-    "estsecurity_alyac": "알약 블로그",
-    "plainbit": "플레인비트",
-    "inca_isarc": "잉카 ISARC",
-    "s2w": "S2W",
-    "nshc_threatrecon": "NSHC ThreatRecon",
-    "genians": "지니언스 시큐리티 센터",
-    "proofpoint": "Proofpoint",
-    "malwarebytes": "Malwarebytes Labs",
-    "reddit_netsec": "Reddit r/netsec",
-    "reddit_cybersecurity": "Reddit r/cybersecurity",
-    "reddit_reverseengineering": "Reddit r/ReverseEngineering",
-    "reddit_asknetsec": "Reddit r/AskNetsec",
-    "exploit_db": "Exploit-DB",
-}
+# 소스 표시명·비뉴스 소스 제외 목록은 publish_web_dashboard.py(검색 인덱스)도 함께
+# 써야 해서 common_utils로 옮겼다 — 이 이름으로 그대로 계속 쓴다.
+source_label = common_utils.source_label
+NON_NEWS_SOURCES = common_utils.NON_NEWS_SOURCES
 
 # 웹 대시보드(boannews_vercel)의 국내/해외 탭 분류 — 한국어 매체·국내 벤더 리서치만
 # "domestic", 나머지(해외 매체·글로벌 벤더·카탈로그형 소스 포함)는 전부 "overseas".
@@ -106,10 +58,6 @@ CARD_PRODUCTS_MAX = 5
 CARD_REMEDIATION_CHARS_DIGEST = 100
 CARD_REMEDIATION_CHARS_SLACK = 120
 CARD_REMEDIATION_CHARS = 150
-
-# 주요 뉴스 TOP에서 제외할 비뉴스 소스 — API·공지형 항목은 CVSS 점수로 목록을
-# 도배하기 쉽고, CVE 카드·소스별 전용 알림이 이미 다루므로 뉴스만 노출한다.
-NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa", "exploit_db"}
 
 # "읽을만한 동향" 큐레이션: 긴급도 점수가 낮아 알림되지 않은 기사 중
 # 인사이트 신호(PIR 매칭, 또는 high 관련성의 위협 분석 기사)가 있는 것을 고른다.
@@ -140,10 +88,6 @@ INSIGHT_WEIGHTS = {
     "recency": 5,          # 7일 기준 선형 감쇠 (그 이상 오래되면 0)
 }
 
-
-
-def source_label(source):
-    return SOURCE_LABELS.get(source, source or "unknown")
 
 
 def parse_iso(value):

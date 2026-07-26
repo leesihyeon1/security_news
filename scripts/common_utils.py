@@ -25,6 +25,72 @@ EVENTS_FILE = DATA_DIR / "events.jsonl"
 FEEDBACK_FILE = DATA_DIR / "feedback.jsonl"
 LEARNED_WEIGHTS_FILE = DATA_DIR / "learned_weights.json"
 
+# 소스 코드명 -> 사람이 읽을 표시명. generate_report.py(리포트)와
+# publish_web_dashboard.py(검색 인덱스) 둘 다 이벤트를 사람이 읽을 형태로
+# 직렬화해야 해서 공용 모듈에 둔다.
+SOURCE_LABELS = {
+    "nvd": "NVD CVE",
+    "cisa_kev": "CISA KEV",
+    "kisa": "KISA/KrCERT",
+    "asec": "안랩 ASEC",
+    "msrc": "Microsoft 패치",
+    "github_advisory": "GitHub Advisory",
+    "boannews": "보안뉴스",
+    "thehackernews": "The Hacker News",
+    "bleepingcomputer": "BleepingComputer",
+    "sans_isc": "SANS ISC",
+    "krebsonsecurity": "Krebs on Security",
+    "therecord": "The Record",
+    "securityweek": "SecurityWeek",
+    "darkreading": "Dark Reading",
+    "talos": "Cisco Talos",
+    "unit42": "Unit 42",
+    "checkpoint_research": "Check Point Research",
+    "thedfirreport": "The DFIR Report",
+    "securelist": "Securelist",
+    "google_security": "Google Security Blog",
+    "microsoft_security": "Microsoft Security Blog",
+    "mandiant": "Google TI (Mandiant)",
+    "crowdstrike": "CrowdStrike",
+    "sentinelone": "SentinelOne Labs",
+    "welivesecurity": "ESET WeLiveSecurity",
+    "sophos": "Sophos News",
+    "trendmicro": "Trend Micro Research",
+    "rapid7": "Rapid7",
+    "elastic_security": "Elastic Security Labs",
+    "volexity": "Volexity",
+    "jpcert": "JPCERT/CC",
+    "cyberscoop": "CyberScoop",
+    "infosecurity_magazine": "Infosecurity Magazine",
+    "theregister_security": "The Register",
+    "helpnetsecurity": "Help Net Security",
+    "securityaffairs": "Security Affairs",
+    "dailysecu": "데일리시큐",
+    "estsecurity_alyac": "알약 블로그",
+    "plainbit": "플레인비트",
+    "inca_isarc": "잉카 ISARC",
+    "s2w": "S2W",
+    "nshc_threatrecon": "NSHC ThreatRecon",
+    "genians": "지니언스 시큐리티 센터",
+    "proofpoint": "Proofpoint",
+    "malwarebytes": "Malwarebytes Labs",
+    "reddit_netsec": "Reddit r/netsec",
+    "reddit_cybersecurity": "Reddit r/cybersecurity",
+    "reddit_reverseengineering": "Reddit r/ReverseEngineering",
+    "reddit_asknetsec": "Reddit r/AskNetsec",
+    "exploit_db": "Exploit-DB",
+}
+
+
+def source_label(source):
+    return SOURCE_LABELS.get(source, source or "unknown")
+
+
+# 순수 CVE/공지 피드 소스 — 제목이 "CVE-XXXX" 식이라 "기사"로 보기 어려워
+# 뉴스 목록(top_items)·검색 인덱스에서 제외한다. CVE 카드·소스별 전용
+# 알림이 이 소스들의 내용을 이미 별도로 다룬다.
+NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa", "exploit_db"}
+
 def load_env_file(dotenv_path=None):
     if dotenv_path is None:
         dotenv_path = PROJECT_ROOT / ".env"
