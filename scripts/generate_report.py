@@ -1537,12 +1537,13 @@ def main():
     pir_groups = group_by_pir(events)
     highlight_ids = {event.get("id") for event in highlights}
     trend_reads = pick_trend_reads(events, shown_card_event_ids | highlight_ids)
-    # 대시보드 추천기사 탭용 — 이메일과 달리 MAX_TREND_ITEMS(5) 캡이 없다. 국내/해외
-    # 탭과 마찬가지로 대시보드 전용 하이라이트(all_highlights) 기준으로 제외해야
-    # 두 탭에 같은 기사가 중복 노출되지 않는다.
-    all_highlight_ids = {event.get("id") for event in all_highlights}
+    # 대시보드 추천기사 탭용 — 이메일과 달리 MAX_TREND_ITEMS(5) 캡이 없다. 제외 기준은
+    # (대시보드용 전체 하이라이트가 아니라) 이메일과 같은 작은 highlight_ids를 그대로
+    # 쓴다 — 대시보드 국내/해외 탭이 이미 그 기간 전체를 보여주는 아카이브가 된 이상,
+    # "추천기사"와 일부 겹치는 건 자연스럽다(오히려 all_highlights 기준으로 제외하면
+    # 후보 풀이 거의 안 남아 추천기사가 텅 비어버린다).
     all_trend_reads = pick_trend_reads(
-        events, shown_card_event_ids | all_highlight_ids, max_items=len(events),
+        events, shown_card_event_ids | highlight_ids, max_items=len(events),
     )
 
     print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, PIR {}종). AI 해석 생성 중...".format(
