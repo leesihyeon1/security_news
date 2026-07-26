@@ -18,6 +18,7 @@
   const $loading = document.getElementById("loading");
   const $generatedAt = document.getElementById("generated-at");
   const $searchInput = document.getElementById("search-input");
+  const $keywordSidebar = document.getElementById("keyword-sidebar");
 
   // ===== Theme =====
   function initTheme() {
@@ -330,9 +331,40 @@
     return { highlights: (payload.domestic.highlights || []).concat(payload.overseas.highlights || []) };
   }
 
+  // AI가 리포트 생성 시 하루 한 번 뽑아준 고유명사(위협 행위자·멀웨어명·CVE 등) 태그.
+  // 클릭하면 검색으로 바로 이어진다 — 넓은 화면에서 .page 좌우 여백을 쓰는 사이드바.
+  function renderKeywordSidebar(payload) {
+    const keywords = payload.keywords || [];
+    if (!keywords.length) {
+      $keywordSidebar.innerHTML = "";
+      return;
+    }
+    const label = payload.period === "weekly" ? "이번 주 키워드" : "오늘의 키워드";
+    $keywordSidebar.innerHTML =
+      '<div class="keyword-sidebar-title">' + esc(label) + "</div>" +
+      '<div class="keyword-tag-list">' +
+      keywords.map((kw) =>
+        '<button type="button" class="keyword-tag" data-keyword="' + esc(kw) + '">' + esc(kw) + "</button>"
+      ).join("") +
+      "</div>";
+
+    $keywordSidebar.querySelectorAll(".keyword-tag").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const keyword = btn.dataset.keyword;
+        $searchInput.value = keyword;
+        state.query = keyword;
+        state.pages["history-search"] = 1;
+        state.tab = "history";
+        render(payload);
+        logSearch(keyword); // 클릭도 검색으로 취급 — 디바운스 기다리지 않고 바로 기록
+      });
+    });
+  }
+
   function render(payload) {
     const data = tabData(payload);
     $generatedAt.textContent = payload.title + " · 기간: " + payload.period_label + " · 생성: " + fmtDate(payload.generated_at);
+    renderKeywordSidebar(payload);
 
     let html = "";
     html += renderStatStrip(payload.stats);

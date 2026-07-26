@@ -420,6 +420,47 @@ html, body {
   padding-top: 20px;
 }
 
+/* ===== Keyword sidebar — .page(960px 중앙정렬)의 남는 좌우 여백을 쓴다.
+   좁은 화면에서는 겹칠 공간이 없으니 아예 숨긴다(모바일에서는 필요성도 낮음). ===== */
+.keyword-sidebar {
+  display: none;
+  position: fixed;
+  top: 110px;
+  left: calc(50% + 500px);
+  width: 200px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+}
+@media (min-width: 1400px) {
+  .keyword-sidebar { display: block; }
+}
+.keyword-sidebar-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.keyword-tag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.keyword-tag {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.keyword-tag:hover { border-color: var(--accent); color: var(--accent); }
+
 @media (max-width: 560px) {
   .page { padding: 0 14px 40px; }
   .topbar { padding: 16px 0 14px; }

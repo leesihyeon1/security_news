@@ -919,6 +919,35 @@ def _strip_narrative_section(narrative, header):
     return before or after
 
 
+KEYWORD_HEADER = "핵심 키워드"
+MAX_KEYWORDS = 8
+
+
+def _extract_keywords(narrative, header=KEYWORD_HEADER, max_items=MAX_KEYWORDS):
+    """[핵심 키워드] 섹션 본문을 쉼표/줄바꿈/불릿 구분자 상관없이 파싱해 리스트로 반환한다.
+    웹 대시보드 사이드바에서 클릭하면 검색으로 이어지는 태그로 쓴다 — 본문 narrative에는
+    안 어울리는 형식이라 여기서 뽑아낸 뒤 _strip_narrative_section()으로 따로 제거한다."""
+    match = re.search(r"\[{}\]\s*\n?(.*?)(?=\n\[|\Z)".format(re.escape(header)), narrative, re.S)
+    if not match:
+        return []
+    body = match.group(1).strip()
+    if not body:
+        return []
+
+    raw_items = re.split(r"[,\n]|(?:^|\n)\s*-\s*", body)
+    keywords = []
+    seen = set()
+    for raw in raw_items:
+        term = raw.strip(" -\t.")
+        if not term or term.lower() in seen:
+            continue
+        seen.add(term.lower())
+        keywords.append(term)
+        if len(keywords) >= max_items:
+            break
+    return keywords
+
+
 def ai_narrative(period_label, digest):
     prompt = """당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.
 아래는 {period} 동안 수집된 보안 이벤트 요약이다. 이를 바탕으로 보안담당자용 리포트 본문을 한국어로 작성하라.
@@ -948,6 +977,12 @@ def ai_narrative(period_label, digest):
 - 정확히 3개 이내, 각 항목은 무엇을 해야 하는지 행동 중심으로 1문장
 - CVE ID, CVSS 수치, PIR 번호, 공격 그룹명 등 세부 데이터 나열 금지 — 이미 다른 섹션에 있으므로 반복하지 말 것
 
+[핵심 키워드]
+- 오늘 데이터에 등장한 것 중 검색해볼 만한 고유명사·구체적 용어 5~8개를 쉼표로 구분해 한 줄로 나열하라
+  (예: 위협 행위자명, 멀웨어·랜섬웨어 패밀리명, 제품명, CVE ID, 특이한 공격 기법명)
+- "랜섬웨어", "취약점", "피싱" 같은 일반 용어·범주명은 넣지 마라 — 구체적 고유명사만
+- 데이터에 그런 고유명사가 부족하면 억지로 8개를 채우지 말고 있는 만큼만 써라
+
 번호/불릿 항목 작성 규칙 (모든 섹션 공통, 중요):
 - 번호나 "-"만 쓰고 그 뒤에 설명 문장을 비워두는 것은 절대 금지한다 (예: "1.\n2." 처럼 내용 없이 끝내지 말 것) — 쓸 항목 수를 줄이는 것은 되지만, 쓰기로 한 항목은 반드시 실질적인 문장으로 채워라
 - 항목 형식 예시: "1. 설명 문장." 또는 "1. **키워드**: 설명 문장." — 번호/불릿과 설명 문장은 반드시 같은 줄에 붙여 써라
@@ -960,12 +995,14 @@ def ai_narrative(period_label, digest):
 
     narrative = common_utils.llm_generate(prompt, timeout=300) or ""
     if not narrative:
-        return narrative
+        return narrative, []
     narrative = _truncate_summary_section(narrative)
     narrative = _truncate_numbered_items(narrative, "핵심 위협 TOP 3")
     narrative = _truncate_numbered_items(narrative, "자사 자산 관련")
     narrative = _truncate_numbered_items(narrative, "권고 조치", max_items=3)
-    return narrative
+    keywords = _extract_keywords(narrative)
+    narrative = _strip_narrative_section(narrative, KEYWORD_HEADER)
+    return narrative, keywords
 
 
 def build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups,
@@ -1360,7 +1397,7 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
     return blocks
 
 
-def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads):
+def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads, keywords=None):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
 
     이메일/슬랙/텍스트 리포트는 지면이 한정돼 있어 highlights·cards를 상위 N개로
@@ -1449,6 +1486,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         "cards": [serialize_card(card) for card in cards],
         "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
         "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
+        "keywords": keywords or [],
     }
 
 
@@ -1501,7 +1539,7 @@ def main():
         stats["total"], len(cards), len(pir_groups)
     ))
     digest = build_digest(period_label, stats, events, cards)
-    narrative = ai_narrative(period_label, digest)
+    narrative, keywords = ai_narrative(period_label, digest)
     if not narrative:
         narrative = "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"
 
@@ -1524,7 +1562,7 @@ def main():
     print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
 
     dashboard_payload = build_dashboard_payload(
-        title, args.period, period_label, stats, narrative, all_highlights, cards, trend_reads,
+        title, args.period, period_label, stats, narrative, all_highlights, cards, trend_reads, keywords,
     )
     publish_web_dashboard.publish(dashboard_payload)
 
