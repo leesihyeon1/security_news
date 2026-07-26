@@ -26,7 +26,7 @@ MIN_LABELS_FOR_STATS = 10  # 이 미만 표본은 비율이 통계적으로 의�
 
 
 def load_labeled_events():
-    """피드백 라벨이 붙은 이벤트만 (label, event) 쌍으로 반환. 통합 로그 + 구 로그 모두 조회."""
+    """피드백 라벨이 붙은 이벤트만 (label, event, record) 튜플로 반환. 통합 로그 + 구 로그 모두 조회."""
     labels = common_utils.load_feedback()
     if not labels:
         return []
@@ -52,20 +52,20 @@ def load_labeled_events():
     for event_id, record in labels.items():
         event = events_by_id.get(event_id)
         if event:
-            pairs.append((record["label"], event))
+            pairs.append((record["label"], event, record))
     return pairs
 
 
 def useful_rate(pairs):
     if not pairs:
         return None
-    useful = sum(1 for label, _ in pairs if label == "useful")
+    useful = sum(1 for label, _, _ in pairs if label == "useful")
     return useful, len(pairs)
 
 
 def print_breakdown(pairs, key_fn, section_name):
     counts = {}
-    for label, event in pairs:
+    for label, event, _ in pairs:
         bucket = counts.setdefault(key_fn(event), {"useful": 0, "noise": 0})
         bucket[label] = bucket.get(label, 0) + 1
 
@@ -79,10 +79,29 @@ def print_breakdown(pairs, key_fn, section_name):
         print("  {}: {:.0%} ({}/{}){}".format(key, useful / total if total else 0, useful, total, note))
 
 
+def print_via_breakdown(pairs):
+    """라벨 출처(via)별 useful 비율 — 클릭(약한 신호)과 슬랙/수동(명시적 판단)을 구분해서 보여준다.
+    두 출처의 useful 비율이 크게 다르면 train_weights.py의 confidence_weight() 상수를
+    재조정할 근거가 된다."""
+    counts = {}
+    for label, _, record in pairs:
+        via = record.get("via") or "manual"
+        bucket = counts.setdefault(via, {"useful": 0, "noise": 0})
+        bucket[label] = bucket.get(label, 0) + 1
+
+    print()
+    print("[라벨 출처(via)별 useful 비율 — click은 학습 시 가중치를 낮춰서 반영함]")
+    rows = sorted(counts.items(), key=lambda kv: -(kv[1].get("useful", 0) + kv[1].get("noise", 0)))
+    for via, bucket in rows:
+        useful, noise = bucket.get("useful", 0), bucket.get("noise", 0)
+        total = useful + noise
+        print("  {}: {:.0%} ({}/{})".format(via, useful / total if total else 0, useful, total))
+
+
 def print_alerted_noise_mismatches(pairs, limit=10):
     """알림까지 나갔는데 noise로 라벨된 사례 — 모델이 확신했는데 틀린, 가장 정보량 큰 오답.
     라벨 1건보다 이런 불일치 사례가 스코어링 개선에 훨씬 유용하다."""
-    mismatches = [event for label, event in pairs if label == "noise" and gr.event_alerted(event)]
+    mismatches = [event for label, event, _ in pairs if label == "noise" and gr.event_alerted(event)]
     if not mismatches:
         return
 
@@ -113,8 +132,8 @@ def main():
     if total < MIN_LABELS_FOR_STATS:
         print("(표본이 {}건 미만이라 아래 분석은 참고용입니다)".format(MIN_LABELS_FOR_STATS))
 
-    alerted_pairs = [(label, event) for label, event in pairs if gr.event_alerted(event)]
-    trend_pairs = [(label, event) for label, event in pairs if not gr.event_alerted(event)]
+    alerted_pairs = [(label, event, record) for label, event, record in pairs if gr.event_alerted(event)]
+    trend_pairs = [(label, event, record) for label, event, record in pairs if not gr.event_alerted(event)]
 
     print()
     print("[두 트랙 비교 — 알림 vs 추천]")
@@ -129,6 +148,7 @@ def main():
     print_breakdown(pairs, lambda e: gr.source_label(e.get("source")), "소스")
     print_breakdown(pairs, lambda e: e.get("category") or "미분류", "카테고리")
     print_breakdown(pairs, lambda e: gr.event_level(e) or "P3", "트리아지 레벨")
+    print_via_breakdown(pairs)
     print_alerted_noise_mismatches(pairs)
 
 

@@ -1,9 +1,13 @@
 """피드백 라벨로 중요도 가중치를 학습해 data/learned_weights.json을 생성한다.
 
 feedback.py(또는 슬랙 폴러)가 기록한 useful/noise 라벨과 events.jsonl의 신호를
-연결해 로지스틱 회귀(순수 파이썬, L2 정규화)를 학습한다. 결과 파일이 존재하면
-score_importance()가 규칙 기반 대신 '유용 확률 x100'을 점수로 사용하고,
-삭제(--reset)하면 규칙 기반으로 즉시 복귀한다.
+연결해 로지스틱 회귀(순수 파이썬, L2 정규화, 샘플 가중치 적용)를 학습한다. 결과
+파일이 존재하면 score_importance()가 규칙 기반 대신 '유용 확률 x100'을 점수로
+사용하고, 삭제(--reset)하면 규칙 기반으로 즉시 복귀한다.
+
+라벨마다 confidence_weight()로 학습 반영 비중을 다르게 준다 — 클릭(via=click)은
+"읽고 싶어서 눌렀다"는 약한 신호일 뿐이라, 슬랙 반응·수동 라벨(명시적 판단, 가중치
+1.0)보다 낮게(기본 0.4, click_count가 쌓이면 최대 0.8까지) 반영한다.
 
 라벨이 총 30건 + 클래스별 10건 미만이면 과적합 위험으로 학습을 거부한다.
 
@@ -64,6 +68,18 @@ def maybe_remind_slack(total, useful, noise):
         common_utils.save_json_state(REMINDER_STATE_FILE, state)
 
 
+def confidence_weight(record):
+    """via=click(자동, 약한 신호)은 슬랙 반응·수동 라벨(via=slack/manual 등, 강한 신호)보다
+    낮은 가중치로 학습에 반영한다 — 클릭은 "읽고 싶어서 눌렀다"는 신호일 뿐, 슬랙 이모지의
+    "읽어보니 유용했다"는 명시적 판단과 같은 무게로 취급하면 안 되기 때문. click_count(같은
+    기사가 여러 번 클릭된 횟수)가 쌓일수록 신뢰도를 조금씩 올리되, 명시적 판단(1.0)에는
+    못 미치도록 상한을 둔다."""
+    if record.get("via") != "click":
+        return 1.0
+    click_count = record.get("click_count") or 1
+    return min(0.8, 0.4 + 0.1 * (click_count - 1))
+
+
 def features_from_event(event):
     """저장된 이벤트에서 score_importance와 동일한 특징 벡터를 복원"""
     triage = event.get("triage") or {}
@@ -104,33 +120,37 @@ def load_dataset():
         event = events.get(event_id)
         if event is None:
             continue
-        dataset.append((features_from_event(event), 1 if record["label"] == "useful" else 0))
+        dataset.append((
+            features_from_event(event),
+            1 if record["label"] == "useful" else 0,
+            confidence_weight(record),
+        ))
     return dataset, labels
 
 
 def train(dataset, feature_names):
     weights = {name: 0.0 for name in feature_names}
     bias = 0.0
-    n = len(dataset)
+    total_weight = sum(sample_weight for _, _, sample_weight in dataset) or 1.0
     for _ in range(EPOCHS):
         grad_w = {name: 0.0 for name in feature_names}
         grad_b = 0.0
-        for features, y in dataset:
+        for features, y, sample_weight in dataset:
             z = bias + sum(weights[name] * features.get(name, 0) for name in feature_names)
-            error = (1.0 / (1.0 + math.exp(-z))) - y
+            error = ((1.0 / (1.0 + math.exp(-z))) - y) * sample_weight
             grad_b += error
             for name in feature_names:
                 if features.get(name):
                     grad_w[name] += error
-        bias -= LEARNING_RATE * grad_b / n
+        bias -= LEARNING_RATE * grad_b / total_weight
         for name in feature_names:
-            weights[name] -= LEARNING_RATE * (grad_w[name] / n + L2 * weights[name])
+            weights[name] -= LEARNING_RATE * (grad_w[name] / total_weight + L2 * weights[name])
     return weights, bias
 
 
 def accuracy(dataset, weights, bias):
     correct = 0
-    for features, y in dataset:
+    for features, y, _ in dataset:
         z = bias + sum(weights[name] * features.get(name, 0) for name in weights)
         correct += int((z >= 0) == (y == 1))
     return correct / len(dataset)
@@ -151,7 +171,7 @@ def main():
         return
 
     dataset, labels = load_dataset()
-    useful = sum(1 for _, y in dataset if y == 1)
+    useful = sum(1 for _, y, _ in dataset if y == 1)
     noise = len(dataset) - useful
     print("[*] 라벨 {}건 중 이벤트 매칭 {}건 (useful {} / noise {})".format(
         len(labels), len(dataset), useful, noise
