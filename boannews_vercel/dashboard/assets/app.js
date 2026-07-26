@@ -80,8 +80,8 @@
   function renderStatStrip(stats) {
     const tiles = [
       { label: "총 건수", value: stats.total, cls: "" },
-      { label: "P1", value: stats.p1, cls: "p1" },
-      { label: "P2", value: stats.p2, cls: "p2" },
+      { label: "P1 · 긴급", value: stats.p1, cls: "p1", title: "P1: 실제 악용 중이며 자사 자산과 관련된 건 (최우선 대응 필요)" },
+      { label: "P2 · 주의", value: stats.p2, cls: "p2", title: "P2: 실제 악용 중이거나, PoC 공개·중대한 영향에 자사 자산이 걸린 건" },
       { label: "Critical", value: stats.critical, cls: "" },
       { label: "KEV", value: stats.kev, cls: "" },
       { label: "랜섬웨어", value: stats.ransomware, cls: "" },
@@ -89,7 +89,7 @@
     return (
       '<div class="stat-strip">' +
       tiles.map((t) =>
-        '<div class="stat-tile ' + t.cls + '"><div class="num">' + esc(t.value) + '</div><div class="label">' + esc(t.label) + "</div></div>"
+        '<div class="stat-tile ' + t.cls + '"' + (t.title ? ' title="' + esc(t.title) + '"' : "") + '><div class="num">' + esc(t.value) + '</div><div class="label">' + esc(t.label) + "</div></div>"
       ).join("") +
       "</div>"
     );
