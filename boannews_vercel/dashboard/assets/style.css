@@ -180,6 +180,13 @@ html, body {
 }
 .history-month.is-open .history-month-body { display: flex; }
 
+.item-title mark, .item-summary mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
 /* ===== Region tabs ===== */
 .region-tabs {
   display: flex;

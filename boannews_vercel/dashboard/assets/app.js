@@ -167,7 +167,24 @@
   }
 
   // ===== History tab (검색 + 월별 아카이브) =====
-  function renderHistoryItem(entry) {
+  function escapeRegExp(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // esc()로 이스케이프된(HTML-safe) 텍스트 위에서 검색어만 <mark>로 감싼다 —
+  // 태그·속성이 없는 순수 텍스트라 이스케이프 후에 처리해도 안전하다.
+  function highlightEscaped(escapedText, words) {
+    if (!words.length) return escapedText;
+    const pattern = new RegExp("(" + words.map(escapeRegExp).join("|") + ")", "gi");
+    return escapedText.replace(pattern, "<mark>$1</mark>");
+  }
+
+  function queryWords(query) {
+    return query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+
+  function renderHistoryItem(entry, words) {
+    words = words || [];
     const href = entry.url ? esc(entry.url) : "#";
     const metaBits = [esc(entry.date)];
     if (entry.category) metaBits.push(esc(entry.category));
@@ -177,31 +194,45 @@
       '<span class="item-source">' + esc(entry.source_label || "") + "</span>" +
       renderLevelBadge(entry.level) +
       "</div>" +
-      '<div class="item-title"><a href="' + href + '" target="_blank" rel="noopener">' + esc(entry.title) + "</a></div>" +
+      '<div class="item-title"><a href="' + href + '" target="_blank" rel="noopener">' +
+      highlightEscaped(esc(entry.title), words) + "</a></div>" +
       '<div class="item-meta">' + metaBits.map((b) => "<span>" + b + "</span>").join("") + "</div>" +
-      (entry.summary ? '<div class="item-summary">' + esc(entry.summary) + "</div>" : "") +
+      (entry.summary ? '<div class="item-summary">' + highlightEscaped(esc(entry.summary), words) + "</div>" : "") +
       "</div>"
     );
   }
 
-  function matchesQuery(entry, query) {
-    const haystack = [entry.title, entry.summary, entry.category, entry.source_label]
-      .join(" ")
-      .toLowerCase();
-    return haystack.indexOf(query) !== -1;
+  // AND 매칭: 입력한 모든 단어가 (순서·인접 무관하게) 어딘가에 다 있어야 매칭.
+  // 제목에서 매칭되면 요약/카테고리/소스명에서만 매칭된 것보다 높은 점수를 준다.
+  function matchScore(entry, words) {
+    const title = (entry.title || "").toLowerCase();
+    const rest = [entry.summary, entry.category, entry.source_label].join(" ").toLowerCase();
+    let score = 0;
+    for (const word of words) {
+      const inTitle = title.indexOf(word) !== -1;
+      const inRest = rest.indexOf(word) !== -1;
+      if (!inTitle && !inRest) return -1;
+      score += inTitle ? 3 : 1;
+    }
+    return score;
   }
 
   function renderHistorySearchResults(index, query) {
-    const matches = index.filter((entry) => matchesQuery(entry, query));
-    if (!matches.length) {
+    const words = queryWords(query);
+    const scored = index
+      .map((entry) => ({ entry: entry, score: matchScore(entry, words) }))
+      .filter((s) => s.score >= 0)
+      .sort((a, b) => b.score - a.score || (b.entry.date || "").localeCompare(a.entry.date || ""));
+
+    if (!scored.length) {
       return (
         '<div class="section"><div class="section-title">검색 결과 <span class="count">0건</span></div>' +
         '<div class="empty-state">"' + esc(query) + '"에 대한 결과가 없습니다.</div></div>'
       );
     }
     return (
-      '<div class="section"><div class="section-title">검색 결과 <span class="count">' + matches.length + '건</span></div>' +
-      '<div class="item-list">' + matches.map(renderHistoryItem).join("") + "</div></div>"
+      '<div class="section"><div class="section-title">검색 결과 <span class="count">' + scored.length + '건</span></div>' +
+      '<div class="item-list">' + scored.map((s) => renderHistoryItem(s.entry, words)).join("") + "</div></div>"
     );
   }
 
