@@ -93,6 +93,27 @@
     );
   }
 
+  const INFO_CATEGORY_TOP_N = 5;
+
+  function renderInfoBreakdown(stats) {
+    const entries = Object.entries(stats.info_by_category || {});
+    if (!entries.length) return "";
+    const top = entries.slice(0, INFO_CATEGORY_TOP_N);
+    const restCount = entries.slice(INFO_CATEGORY_TOP_N).reduce((sum, [, count]) => sum + count, 0);
+    const chips = top.map(([name, count]) =>
+      '<span class="info-chip">' + esc(name) + '<span class="info-chip-count">' + esc(count) + "</span></span>"
+    );
+    if (restCount > 0) {
+      chips.push('<span class="info-chip info-chip-rest">그 외<span class="info-chip-count">' + esc(restCount) + "</span></span>");
+    }
+    return (
+      '<div class="info-breakdown">' +
+      '<span class="info-breakdown-label">정보성 ' + esc(stats.info) + "건</span>" +
+      '<div class="info-breakdown-chips">' + chips.join("") + "</div>" +
+      "</div>"
+    );
+  }
+
   function renderLevelBadge(level) {
     if (level !== "P1" && level !== "P2") return "";
     return '<span class="level-badge ' + level + '">' + level + "</span>";
@@ -403,6 +424,7 @@
 
     let html = "";
     html += renderStatStrip(payload.stats);
+    html += renderInfoBreakdown(payload.stats);
 
     html +=
       '<div class="region-tabs">' +

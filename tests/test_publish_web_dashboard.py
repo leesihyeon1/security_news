@@ -10,6 +10,7 @@ def _stats(total=2):
     return {
         "total": total, "p1": [], "p2": [], "critical": [], "kev": [],
         "ransomware": [], "asset_hits": [], "by_source": Counter({"asec": 1, "krebsonsecurity": 1}),
+        "info_by_category": Counter({"악성코드": total}),
     }
 
 

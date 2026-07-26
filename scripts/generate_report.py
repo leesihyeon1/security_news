@@ -237,6 +237,11 @@ def build_stats(events):
         "asset_hits": asset_hits,
         "p1": [event for event in events if event_level(event) == "P1"],
         "p2": [event for event in events if event_level(event) == "P2"],
+        "info_by_category": Counter(
+            event.get("category") or "미분류"
+            for event in events
+            if event_level(event) not in ("P1", "P2")
+        ),
         "top_cves": cve_counter.most_common(10),
         "top_assets": asset_counter.most_common(10),
         "top_actors": actor_counter.most_common(10),
@@ -1530,6 +1535,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "p1": len(stats["p1"]),
             "p2": len(stats["p2"]),
             "info": stats["total"] - len(stats["p1"]) - len(stats["p2"]),
+            "info_by_category": dict(stats["info_by_category"].most_common()),
             "by_source": dict(stats["by_source"].most_common()),
         },
         "cards": [serialize_card(card) for card in cards],
