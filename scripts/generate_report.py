@@ -1419,6 +1419,12 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
 def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
 
+    이메일/슬랙/텍스트 리포트는 지면이 한정돼 있어 highlights·cards를 상위 N개로
+    캡(top_items, MAX_CVE_CARDS)하지만, 대시보드는 그런 제약이 없는 브라우징
+    페이지라 그 기간에 해당하는 항목을 전부 받는다(caller인 main()이 highlights는
+    캡 없이, cards는 correlate_by_cve() 결과 그대로 넘긴다) — 국내/해외 탭이 국제
+    P1 기사가 많은 날에도 항상 그날 국내 기사를 보여줄 수 있다.
+
     하이라이트·읽을만한 동향은 소스 하나에 붙으니 국내/해외로 나눌 수 있다. CVE 카드는
     여러 소스를 가로지르는 집계라 지역 구분 없이 그대로 담는다(카드 하나에 국내·해외
     소스가 섞여 있을 수 있어 나누는 게 의미 없음).
@@ -1496,7 +1502,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "ransomware": len(stats["ransomware"]),
             "by_source": dict(stats["by_source"].most_common()),
         },
-        "cards": [serialize_card(card) for card in cards[:MAX_CVE_CARDS]],
+        "cards": [serialize_card(card) for card in cards],
         "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
         "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
     }
@@ -1530,15 +1536,19 @@ def main():
     # CVE 크로스소스 상관관계: 복수 소스 등장 CVE는 카드로 병합하고,
     # 카드에 포함된 이벤트는 개별 TOP 목록에서 제외해 중복 표시를 막는다
     cards = correlate_by_cve(events)
-    enrich_cards_with_github_poc(cards[:MAX_CVE_CARDS])  # 실제 노출되는 카드에만 API 호출
+    enrich_cards_with_github_poc(cards[:MAX_CVE_CARDS])  # 이메일/슬랙 상위 카드에만 API 호출(비용 절약)
     shown_card_event_ids = set()
-    for card in cards[:MAX_CVE_CARDS]:
+    for card in cards:  # 대시보드는 카드를 전부 보여주므로, 카드로 이미 다루는 이벤트는 전부 제외해야 중복이 없다
         shown_card_event_ids.update(card["event_ids"])
-    highlights = top_items([
+    filtered_events = [
         event for event in events
         if event.get("id") not in shown_card_event_ids
         and (event.get("source") or "") not in NON_NEWS_SOURCES
-    ])
+    ]
+    highlights = top_items(filtered_events)
+    # 대시보드 국내/해외 탭용 — 이메일과 달리 top-10 캡이 없다. 국제 P1이 많은 날에도
+    # 국내 기사가 순위 경쟁에서 밀려 탭이 통째로 비는 일이 없도록 그 기간 전체를 담는다.
+    all_highlights = sorted(filtered_events, key=event_sort_key)
     pir_groups = group_by_pir(events)
     highlight_ids = {event.get("id") for event in highlights}
     trend_reads = pick_trend_reads(events, shown_card_event_ids | highlight_ids)
@@ -1570,7 +1580,7 @@ def main():
     print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
 
     dashboard_payload = build_dashboard_payload(
-        title, args.period, period_label, stats, narrative, highlights, cards, trend_reads,
+        title, args.period, period_label, stats, narrative, all_highlights, cards, trend_reads,
     )
     publish_web_dashboard.publish(dashboard_payload)
 
