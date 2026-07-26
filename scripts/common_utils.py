@@ -1029,6 +1029,18 @@ def load_feedback(feedback_file=None):
                 labels[record["event_id"]] = record
     return labels
 
+def feedback_confidence_weight(record):
+    """via=click(자동, 약한 신호)은 슬랙 반응·수동 라벨(via=slack/manual 등, 강한 신호)보다
+    낮은 가중치로 취급한다 — 클릭은 "읽고 싶어서 눌렀다"는 신호일 뿐, 슬랙 이모지의
+    "읽어보니 유용했다"는 명시적 판단과 같은 무게로 두면 안 되기 때문. click_count(같은
+    기사가 여러 번 클릭된 횟수)가 쌓일수록 신뢰도를 조금씩 올리되, 명시적 판단(1.0)에는
+    못 미치도록 상한을 둔다. train_weights.py(학습 반영 비중)와 generate_report.py
+    (추천기사 insight_score 가산)가 함께 쓴다."""
+    if record.get("via") != "click":
+        return 1.0
+    click_count = record.get("click_count") or 1
+    return min(0.8, 0.4 + 0.1 * (click_count - 1))
+
 def append_feedback(records, feedback_file=None):
     path = Path(feedback_file) if feedback_file else FEEDBACK_FILE
     path.parent.mkdir(parents=True, exist_ok=True)

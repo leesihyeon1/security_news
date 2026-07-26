@@ -68,16 +68,7 @@ def maybe_remind_slack(total, useful, noise):
         common_utils.save_json_state(REMINDER_STATE_FILE, state)
 
 
-def confidence_weight(record):
-    """via=click(자동, 약한 신호)은 슬랙 반응·수동 라벨(via=slack/manual 등, 강한 신호)보다
-    낮은 가중치로 학습에 반영한다 — 클릭은 "읽고 싶어서 눌렀다"는 신호일 뿐, 슬랙 이모지의
-    "읽어보니 유용했다"는 명시적 판단과 같은 무게로 취급하면 안 되기 때문. click_count(같은
-    기사가 여러 번 클릭된 횟수)가 쌓일수록 신뢰도를 조금씩 올리되, 명시적 판단(1.0)에는
-    못 미치도록 상한을 둔다."""
-    if record.get("via") != "click":
-        return 1.0
-    click_count = record.get("click_count") or 1
-    return min(0.8, 0.4 + 0.1 * (click_count - 1))
+confidence_weight = common_utils.feedback_confidence_weight
 
 
 def features_from_event(event):

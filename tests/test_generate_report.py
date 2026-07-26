@@ -110,3 +110,16 @@ def test_pick_trend_reads_excludes_noise_labeled_events(monkeypatch):
     events = [_trend_candidate_event(1, pirs=["PIR-1"], relevance="high", confidence="high")]
     result = gr.pick_trend_reads(events, exclude_ids=set())
     assert result == []
+
+
+def test_pick_trend_reads_ranks_useful_feedback_higher(monkeypatch):
+    """useful 라벨이 붙은 기사는 다른 조건이 동일해도 insight_score 가산으로 먼저 뽑혀야 함."""
+    monkeypatch.setattr(common_utils, "load_pirs", lambda: {})
+    monkeypatch.setattr(common_utils, "load_feedback", lambda: {"asec:2": {"label": "useful", "via": "slack"}})
+
+    events = [
+        _trend_candidate_event(1, category="침해사고", relevance="high"),
+        _trend_candidate_event(2, category="침해사고", relevance="high"),
+    ]
+    result = gr.pick_trend_reads(events, exclude_ids=set())
+    assert [e["id"] for e in result] == ["asec:2", "asec:1"]

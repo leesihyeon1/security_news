@@ -86,6 +86,11 @@ INSIGHT_WEIGHTS = {
                            # 비중을 감안해 절반 수준으로 낮춤(악용상태·심각도·자산매칭·신뢰도 등
                            # 나머지 고유 정보는 이 가중치로 계속 반영).
     "recency": 5,          # 7일 기준 선형 감쇠 (그 이상 오래되면 0)
+    "feedback_useful": 15,  # useful 라벨 * feedback_confidence_weight(0.4~1.0) — 이전엔
+                            # importance_score(학습 가중치)를 거쳐서만 희석 반영됐는데, 그건
+                            # "useful 라벨이 붙은 이 기사 자체"가 아니라 "이 기사의 특징(악용
+                            # 상태·자산매칭 등)이 학습에 얼마나 기여했는가"라 간접적이었다.
+                            # 여기선 그 기사가 실제로 useful로 라벨된 사실 자체를 직접 가산한다.
 }
 
 
@@ -409,6 +414,14 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         buzz = event["_hn_buzz"]
         return buzz["points"] if buzz else 0
 
+    def feedback_useful_value(event):
+        """이 기사 자체가 useful로 라벨된 정도(0~1) — noise 제외(위 candidates 필터)와
+        별개로, 클릭·슬랙 반응으로 이미 유용하다고 확인된 기사를 추천에서 직접 우대한다."""
+        record = feedback.get(event.get("id"))
+        if not record or record.get("label") != "useful":
+            return 0.0
+        return common_utils.feedback_confidence_weight(record)
+
     def insight_score(event):
         """가중합 인사이트 점수(높을수록 우선) — 어느 한 축이 조금 밀려도 나머지 축의
         압도적 우위로 뒤집을 수 있게 튜플 순서 대신 연속값으로 합산한다."""
@@ -426,6 +439,7 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             + w["hn_buzz"] * math.log1p(hn_points(event))
             + w["importance"] * (importance_score(event) / 100.0)
             + w["recency"] * max(0.0, 1.0 - recency_days / 7.0)
+            + w["feedback_useful"] * feedback_useful_value(event)
         )
 
     candidates = []
