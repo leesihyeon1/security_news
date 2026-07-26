@@ -432,10 +432,8 @@ html, body {
   top: 110px;
   left: calc(50% + 454px);
   width: 170px;
-  max-height: calc(100vh - 140px);
-  overflow-y: auto;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 @media (min-width: 1300px) {
   .right-sidebar { display: flex; }
@@ -445,6 +443,26 @@ html, body {
 }
 @media (min-width: 1900px) {
   .right-sidebar { width: 260px; }
+}
+/* 키워드/추천기사 각각 독립된 카드+스크롤 영역 — 하나로 묶여있으면 스크롤바가
+   둘 중 어디에도 속하지 않은 것처럼 어중간하게 나타나 보기 안 좋았다. 각 패널이
+   자기 몫만큼만 차지하고(min-height:0으로 flex item이 내용만큼 줄어들게 한 뒤
+   max-height로 상한을 둠) 넘치면 그 패널 안에서만 스크롤된다. 내용 없을 땐
+   :empty로 아예 숨겨 빈 박스가 보이지 않게 한다. */
+.sidebar-panel {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.sidebar-panel:empty {
+  display: none;
+  padding: 0;
+  border: none;
 }
 .keyword-sidebar-title {
   font-size: 0.78rem;
