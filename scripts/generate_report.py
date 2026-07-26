@@ -959,6 +959,22 @@ def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_it
     return narrative[:match.start(2)] + "\n".join(final_items) + _normalize_tail(narrative, match.end(2))
 
 
+def _strip_narrative_section(narrative, header):
+    """narrative에서 [header] 섹션(제목+본문)을 통째로 제거한 사본을 반환한다 — 원본은 안 건드린다.
+
+    공개 웹 대시보드처럼 특정 섹션(예: 자산매칭)을 보여주면 안 되는 출력에서만 쓴다 —
+    이메일/슬랙/텍스트 리포트는 이 함수를 거치지 않은 원본 narrative를 그대로 쓴다.
+    """
+    match = re.search(r"\[{}\]\s*\n?.*?(?=\n\[|\Z)".format(re.escape(header)), narrative, re.S)
+    if not match:
+        return narrative
+    before = narrative[:match.start()].rstrip("\n")
+    after = narrative[match.end():].lstrip("\n")
+    if before and after:
+        return before + "\n\n" + after
+    return before or after
+
+
 def ai_narrative(period_label, digest):
     prompt = """당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.
 아래는 {period} 동안 수집된 보안 이벤트 요약이다. 이를 바탕으로 보안담당자용 리포트 본문을 한국어로 작성하라.
@@ -1404,7 +1420,8 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
     아니라 건수(stats.asset_hits)도 뺀다 — "자산매칭 N건"이라는 숫자만으로도 "이 조직이
     자산 인벤토리를 추적한다"는 사실 자체가 드러나므로. PIR 매칭·자산매칭 로직 자체
     (insight_score, classify_urgency 등)는 전혀 바뀌지 않았다 — 여기서 결과를 직렬화하지
-    않을 뿐이다.
+    않을 뿐이다. AI 총평(narrative)의 [자사 자산 관련] 섹션도 같은 이유로 여기서만 잘라낸다
+    (이메일/슬랙에 넘어가는 narrative 원본은 그대로 유지).
     """
     def serialize_event(event):
         # matched_assets는 의도적으로 뺀다 — 공개 웹 대시보드에 자사 보유 자산/제품명이
@@ -1460,7 +1477,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         "period": period,
         "period_label": period_label,
         "generated_at": common_utils.utc_now_iso(),
-        "narrative": narrative or "",
+        "narrative": _strip_narrative_section(narrative, "자사 자산 관련") if narrative else "",
         "stats": {
             "total": stats["total"],
             "p1": len(stats["p1"]),
