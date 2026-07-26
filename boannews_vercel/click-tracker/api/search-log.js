@@ -10,8 +10,15 @@
 //
 // 대시보드와 이 함수가 서로 다른 Vercel 프로젝트(다른 오리진)라 브라우저의
 // fetch() 호출이 CORS 프리플라이트를 거친다 — 아래서 명시적으로 허용한다.
+//
+// IP별 요청 제한(RATE_LIMIT)과 리스트 길이 상한(MAX_LIST_SIZE)은 lib/redisGuards.js.
 
 const Redis = require("ioredis");
+const { isRateLimited, capList, getClientIp } = require("../lib/redisGuards");
+
+const RATE_LIMIT = 30;
+const RATE_WINDOW_SECONDS = 60;
+const MAX_LIST_SIZE = 5000; // 풀러가 한동안 안 돌아도 Redis에 무한정 쌓이지 않게 하는 상한
 
 let redisClient = null;
 function getRedisClient() {
@@ -60,9 +67,15 @@ module.exports = async (req, res) => {
 
   const client = getRedisClient();
   if (client) {
+    const limited = await isRateLimited(client, "search-log", getClientIp(req), RATE_LIMIT, RATE_WINDOW_SECONDS);
+    if (limited) {
+      res.status(429).send("Too Many Requests");
+      return;
+    }
     const record = JSON.stringify({ query, result_count: resultCount, ts: new Date().toISOString() });
     try {
       await client.rpush("search_log", record);
+      await capList(client, "search_log", MAX_LIST_SIZE);
     } catch (error) {
       // 로그 실패해도 검색 자체는 이미 클라이언트에서 끝난 동작이라 사용자에게 영향 없음
       console.error("search log failed", error);

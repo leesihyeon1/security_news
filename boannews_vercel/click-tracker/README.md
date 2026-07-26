@@ -62,3 +62,12 @@ curl -X POST "https://your-project.vercel.app/api/search-log" \
 - 리다이렉트 자체는 Redis 호출 성공 여부와 무관하게 항상 수행된다 — 추적 실패가
   사용자의 열람을 막지 않는다.
 - `api/search-log.js`도 `REDIS_URL` 없으면 조용히 204만 반환(검색 자체엔 영향 없음).
+
+## 요청 제한·리스트 크기 상한 (`lib/redisGuards.js`)
+
+IP당 요청 빈도 제한(`click.js` 분당 60회, `search-log.js` 분당 30회)과, `clicks`/
+`search_log` Redis 리스트 길이 상한(5000건)을 둔다 — 스팸성 요청이나 풀러가 오래
+안 도는 상황에서도 Redis가 무한정 커지지 않게 하는 안전장치다. `click.js`는 제한에
+걸려도 로깅만 건너뛰고 **리다이렉트는 항상 수행**한다(추적 실패가 열람을 막으면 안
+됨). `search-log.js`는 제한에 걸리면 `429`를 반환하는데, 클라이언트(`app.js`)가
+어차피 실패를 조용히 무시하므로 사용자 경험에는 영향 없다.

@@ -8,8 +8,17 @@
 // 필요 환경변수(Vercel 프로젝트 설정 > Environment Variables, Storage 연결 시 자동 생성):
 //   REDIS_URL — redis://... 형식의 네이티브 Redis 연결 문자열
 // 없으면 로깅만 건너뛰고 리다이렉트는 그대로 동작한다.
+//
+// IP별 요청 제한(RATE_LIMIT)과 리스트 길이 상한(MAX_LIST_SIZE)은 lib/redisGuards.js —
+// 둘 다 리다이렉트 자체는 막지 않고 로깅만 건너뛰게 한다(추적 실패가 열람을 막으면 안 됨).
 
 const Redis = require("ioredis");
+const { isRateLimited, capList, getClientIp } = require("../lib/redisGuards");
+
+// IP당 이 창(초) 안에 이 횟수 넘게 오면 그 요청은 로깅만 스킵한다(리다이렉트는 항상 함).
+const RATE_LIMIT = 60;
+const RATE_WINDOW_SECONDS = 60;
+const MAX_LIST_SIZE = 5000; // 풀러가 한동안 안 돌아도 Redis에 무한정 쌓이지 않게 하는 상한
 
 // 서버리스 함수가 재사용(warm start)될 때 연결을 재활용 — 매 요청마다 새로 연결하지 않는다.
 let redisClient = null;
@@ -62,12 +71,16 @@ module.exports = async (req, res) => {
 
   const client = getRedisClient();
   if (client && ref && !isPrefetchRequest(req.headers["user-agent"])) {
-    const record = JSON.stringify({ ref: String(ref), url: target, ts: new Date().toISOString() });
-    try {
-      await client.rpush("clicks", record);
-    } catch (error) {
-      // 로그 실패해도 사용자 리다이렉트는 반드시 진행 — 추적 실패가 열람을 막으면 안 됨
-      console.error("click log failed", error);
+    const limited = await isRateLimited(client, "click", getClientIp(req), RATE_LIMIT, RATE_WINDOW_SECONDS);
+    if (!limited) {
+      const record = JSON.stringify({ ref: String(ref), url: target, ts: new Date().toISOString() });
+      try {
+        await client.rpush("clicks", record);
+        await capList(client, "clicks", MAX_LIST_SIZE);
+      } catch (error) {
+        // 로그 실패해도 사용자 리다이렉트는 반드시 진행 — 추적 실패가 열람을 막으면 안 됨
+        console.error("click log failed", error);
+      }
     }
   }
 
