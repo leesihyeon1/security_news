@@ -1,8 +1,10 @@
 # click-tracker
 
-boannews_mail 리포트/알림 링크의 클릭을 기록하는 Vercel 서버리스 함수. 클릭 로그는
-Redis에 쌓이고, 메인 프로젝트의 `scripts/click_feedback_puller.py`가 주기적으로
-읽어가 `data/feedback.jsonl`에 `useful` 라벨로 기록한다.
+boannews_mail 리포트/알림 링크의 클릭과, `../dashboard/` 검색창 검색어를 기록하는
+Vercel 서버리스 함수 모음(`api/click.js`, `api/search-log.js`). 둘 다 같은 Redis에
+쌓이고, 메인 프로젝트의 `scripts/click_feedback_puller.py` / `scripts/search_log_puller.py`가
+주기적으로 읽어가 각각 `data/feedback.jsonl`(`useful` 라벨) / `data/search_log.jsonl`에
+기록한다.
 
 `boannews_vercel` 저장소 안의 하위 프로젝트 중 하나다(다른 하나는 `../dashboard/`).
 같은 저장소를 공유하지만 **완전히 별도의 Vercel 프로젝트**로 배포한다(Root Directory
@@ -45,6 +47,13 @@ curl -I "https://your-project.vercel.app/api/click?ref=test&url=https%3A%2F%2Fex
 `302`와 `Location: https://example.com` 헤더가 보이면 정상. Redis 대시보드(Vercel
 Storage든 Upstash든)에서 `clicks` 리스트에 항목이 쌓이는지도 확인 가능.
 
+```
+curl -X POST "https://your-project.vercel.app/api/search-log" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"test","result_count":3}'
+```
+`204`면 정상. Redis `search_log` 리스트에 항목이 쌓이는지 확인 가능.
+
 ## 장애/설정 누락 시 동작
 
 - `CLICK_TRACK_BASE_URL`(메인 프로젝트)이 설정 안 돼 있으면 링크는 그냥 원본 URL 그대로
@@ -52,3 +61,4 @@ Storage든 Upstash든)에서 `clicks` 리스트에 항목이 쌓이는지도 확
 - `REDIS_URL`이 이 Vercel 함수에 없으면 로깅만 건너뛰고 리다이렉트는 정상 동작한다.
 - 리다이렉트 자체는 Redis 호출 성공 여부와 무관하게 항상 수행된다 — 추적 실패가
   사용자의 열람을 막지 않는다.
+- `api/search-log.js`도 `REDIS_URL` 없으면 조용히 204만 반환(검색 자체엔 영향 없음).

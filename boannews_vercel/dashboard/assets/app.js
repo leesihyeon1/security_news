@@ -2,6 +2,8 @@
   "use strict";
 
   const PAGE_SIZE = 30;
+  const SEARCH_LOG_URL = "https://click-tracker-two.vercel.app/api/search-log";
+  const SEARCH_LOG_DEBOUNCE_MS = 1000;
 
   const state = {
     period: "daily",
@@ -445,7 +447,23 @@
     });
   }
 
+  // 검색어 입력이 멈춘 뒤(SEARCH_LOG_DEBOUNCE_MS) 한 번만 기록한다 — 관심사 파악·
+  // 결과 0건 케이스(검색 공백·검색 로직 개선 지점) 추적용. 실패해도 검색 자체엔 영향 없음.
+  function logSearch(query) {
+    loadSearchIndex().then((index) => {
+      const words = queryWords(query);
+      const resultCount = index.filter((entry) => matchScore(entry, words) >= 0).length;
+      fetch(SEARCH_LOG_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query, result_count: resultCount }),
+        keepalive: true,
+      }).catch(() => {});
+    });
+  }
+
   function initSearch() {
+    let logTimer = null;
     $searchInput.addEventListener("input", () => {
       state.query = $searchInput.value;
       state.pages["history-search"] = 1;
@@ -453,6 +471,12 @@
         state.tab = "history";
       }
       if (state.cache[state.period]) render(state.cache[state.period]);
+
+      if (logTimer) clearTimeout(logTimer);
+      const query = state.query.trim();
+      if (query) {
+        logTimer = setTimeout(() => logSearch(query), SEARCH_LOG_DEBOUNCE_MS);
+      }
     });
   }
 
