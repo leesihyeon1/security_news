@@ -91,7 +91,17 @@ INSIGHT_WEIGHTS = {
                             # "useful 라벨이 붙은 이 기사 자체"가 아니라 "이 기사의 특징(악용
                             # 상태·자산매칭 등)이 학습에 얼마나 기여했는가"라 간접적이었다.
                             # 여기선 그 기사가 실제로 useful로 라벨된 사실 자체를 직접 가산한다.
+                            # 단, 클릭 기반 라벨은 FEEDBACK_USEFUL_MIN_CLICKS 문턱 미만이면
+                            # 0으로 취급(아래 feedback_useful_value) — 우연한 클릭 한두 번이
+                            # 바로 다음 추천에 영향을 주지 않게.
 }
+
+# 클릭 1~2회는 우연히 눌렀을 가능성이 있어 추천기사 가산(feedback_useful)에서는 무시하고,
+# 이 문턱 이상 반복 클릭된 것부터만 신호로 인정한다. train_weights.py의 학습 반영 비중은
+# 그대로 confidence_weight의 연속값(0.4~0.8)을 쓴다 — 학습은 통계적으로 많은 샘플에 걸쳐
+# 완만하게 반영되니 문턱이 필요 없지만, 추천은 개별 기사 하나의 순위를 바로 바꾸는 거라
+# 약한 신호 하나로 흔들리면 안 된다.
+FEEDBACK_USEFUL_MIN_CLICKS = 3
 
 
 
@@ -416,9 +426,13 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
 
     def feedback_useful_value(event):
         """이 기사 자체가 useful로 라벨된 정도(0~1) — noise 제외(위 candidates 필터)와
-        별개로, 클릭·슬랙 반응으로 이미 유용하다고 확인된 기사를 추천에서 직접 우대한다."""
+        별개로, 클릭·슬랙 반응으로 이미 유용하다고 확인된 기사를 추천에서 직접 우대한다.
+        클릭 기반 라벨은 FEEDBACK_USEFUL_MIN_CLICKS 미만이면 우연한 클릭일 수 있어 0으로
+        취급 — 슬랙/수동 라벨(명시적 판단)은 문턱 없이 그대로 인정한다."""
         record = feedback.get(event.get("id"))
         if not record or record.get("label") != "useful":
+            return 0.0
+        if record.get("via") == "click" and (record.get("click_count") or 1) < FEEDBACK_USEFUL_MIN_CLICKS:
             return 0.0
         return common_utils.feedback_confidence_weight(record)
 

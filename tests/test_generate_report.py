@@ -112,14 +112,55 @@ def test_pick_trend_reads_excludes_noise_labeled_events(monkeypatch):
     assert result == []
 
 
+def _same_published_at(events):
+    """recency 축이 published_at의 미세한 생성 시각 차이로 정렬 순서를 흔들지 않도록,
+    두 이벤트의 published_at을 동일하게 맞춰 feedback_useful 축만 순수하게 비교한다."""
+    for event in events:
+        event["published_at"] = events[0]["published_at"]
+    return events
+
+
 def test_pick_trend_reads_ranks_useful_feedback_higher(monkeypatch):
     """useful 라벨이 붙은 기사는 다른 조건이 동일해도 insight_score 가산으로 먼저 뽑혀야 함."""
     monkeypatch.setattr(common_utils, "load_pirs", lambda: {})
     monkeypatch.setattr(common_utils, "load_feedback", lambda: {"asec:2": {"label": "useful", "via": "slack"}})
 
-    events = [
+    events = _same_published_at([
         _trend_candidate_event(1, category="침해사고", relevance="high"),
         _trend_candidate_event(2, category="침해사고", relevance="high"),
-    ]
+    ])
+    result = gr.pick_trend_reads(events, exclude_ids=set())
+    assert [e["id"] for e in result] == ["asec:2", "asec:1"]
+
+
+def test_pick_trend_reads_ignores_single_click_feedback(monkeypatch):
+    """클릭 기반 useful 라벨은 FEEDBACK_USEFUL_MIN_CLICKS 미만이면 가산되지 않아야 함
+    (우연한 클릭 한 번으로 순위가 바뀌면 안 됨)."""
+    monkeypatch.setattr(common_utils, "load_pirs", lambda: {})
+    monkeypatch.setattr(
+        common_utils, "load_feedback",
+        lambda: {"asec:2": {"label": "useful", "via": "click", "click_count": 1}},
+    )
+
+    events = _same_published_at([
+        _trend_candidate_event(1, category="침해사고", relevance="high"),
+        _trend_candidate_event(2, category="침해사고", relevance="high"),
+    ])
+    result = gr.pick_trend_reads(events, exclude_ids=set())
+    assert [e["id"] for e in result] == ["asec:1", "asec:2"]
+
+
+def test_pick_trend_reads_boosts_repeated_click_feedback(monkeypatch):
+    """FEEDBACK_USEFUL_MIN_CLICKS 이상 반복 클릭되면 그때부터는 가산돼야 함."""
+    monkeypatch.setattr(common_utils, "load_pirs", lambda: {})
+    monkeypatch.setattr(
+        common_utils, "load_feedback",
+        lambda: {"asec:2": {"label": "useful", "via": "click", "click_count": gr.FEEDBACK_USEFUL_MIN_CLICKS}},
+    )
+
+    events = _same_published_at([
+        _trend_candidate_event(1, category="침해사고", relevance="high"),
+        _trend_candidate_event(2, category="침해사고", relevance="high"),
+    ])
     result = gr.pick_trend_reads(events, exclude_ids=set())
     assert [e["id"] for e in result] == ["asec:2", "asec:1"]
