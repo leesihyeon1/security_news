@@ -422,7 +422,10 @@ html, body {
 
 /* ===== 오른쪽 사이드바(키워드 위, 추천기사 아래) — .page(880px 중앙정렬)의 남는
    오른쪽 여백을 쓴다. 1300px부터 노출(1366px대 노트북 화면 커버 목적) — 좁은
-   화면에서는 겹칠 공간이 없으니 아예 숨긴다(모바일에서는 필요성도 낮음). ===== */
+   화면에서는 겹칠 공간이 없으니 아예 숨긴다(모바일에서는 필요성도 낮음).
+   본문(.page)은 가독성 때문에 폭을 고정해두지만, 사이드바는 읽는 텍스트가 아니라서
+   화면이 넓어질수록 단계적으로 더 넓혀 남는 여백을 활용한다. 오프셋(454px)은
+   .page 폭에서 나온 값이라 폭이 바뀌어도 그대로 유지된다. ===== */
 .right-sidebar {
   display: none;
   position: fixed;
@@ -436,6 +439,12 @@ html, body {
 }
 @media (min-width: 1300px) {
   .right-sidebar { display: flex; }
+}
+@media (min-width: 1600px) {
+  .right-sidebar { width: 220px; }
+}
+@media (min-width: 1900px) {
+  .right-sidebar { width: 260px; }
 }
 .keyword-sidebar-title {
   font-size: 0.78rem;
