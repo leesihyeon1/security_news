@@ -9,7 +9,11 @@ Redis 리스트("clicks")에 RPUSH로 쌓아둔다. 이 스크립트가 그걸 �
 클릭 = 실제로 읽고 싶어서 눌렀다는 의미 있는 신호라 useful로만 취급한다(noise는
 자동화하지 않음 — 안 누른 것이 "별로였다"는 증거는 아니므로).
 
-이미 라벨(수동/자동 불문)이 있는 이벤트는 건드리지 않는다.
+라벨 자체는 "이미 라벨(수동/자동 불문)이 있는 이벤트는 건드리지 않는다"는 원칙을
+지키지만, click_count(누적 클릭 수)는 이 스크립트가 직접 붙인 라벨(via=click)에
+한해서는 계속 누적 갱신한다 — 수동 라벨이나 슬랙 반응으로 이미 확정된 이벤트는
+그대로 둔다. click_count는 같은 useful이라도 "1번 클릭"과 "여러 번 클릭"을
+구분해 학습·순위 매김에 가중치로 쓸 수 있게 하기 위함이다.
 
 필요 설정(.env):
     REDIS_URL=redis://default:<password>@<host>:<port>   (Vercel Storage에서 발급)
@@ -156,25 +160,44 @@ def main():
     ref_map = build_ref_map()
     existing_labels = common_utils.load_feedback()
 
-    records = []
+    # 이번 실행에서 각 이벤트에 새로 들어온 클릭 수·최신 시각을 먼저 센다(같은 기사를
+    # 여러 명이 누르거나 재방문하면 한 번의 실행에 여러 건이 몰릴 수 있다).
+    new_clicks_by_event = {}
+    last_ts_by_event = {}
     unmatched = 0
     for click in click_records:
         event_id = ref_map.get(click.get("ref"))
         if not event_id:
             unmatched += 1
             continue
-        if event_id in existing_labels:
-            continue  # 이미 라벨(수동/자동 불문) 있으면 덮어쓰지 않음
+        new_clicks_by_event[event_id] = new_clicks_by_event.get(event_id, 0) + 1
+        if click.get("ts"):
+            last_ts_by_event[event_id] = click["ts"]
+
+    records = []
+    new_labels = 0
+    updated_counts = 0
+    for event_id, new_clicks in new_clicks_by_event.items():
+        existing = existing_labels.get(event_id)
+        if existing and existing.get("via") != "click":
+            continue  # 수동 라벨·슬랙 반응이 이미 있으면 건드리지 않음
+        prev_count = (existing or {}).get("click_count") or 0
+        total = prev_count + new_clicks
         records.append({
             "event_id": event_id,
             "label": "useful",
             "labeled_at": common_utils.utc_now_iso(),
             "via": "click",
-            "evidence": "클릭 추적됨({})".format(click.get("ts") or ""),
+            "click_count": total,
+            "evidence": "클릭 누적 {}회(최근: {})".format(total, last_ts_by_event.get(event_id, "")),
         })
+        if existing:
+            updated_counts += 1
+        else:
+            new_labels += 1
 
-    print("[*] 클릭 로그 {}건 중 신규 라벨 {}건 (ref 매칭 안 됨 {}건, 자동 스캔 제외 {}건)".format(
-        len(raw_records), len(records), unmatched, len(raw_records) - len(click_records)
+    print("[*] 클릭 로그 {}건 중 신규 라벨 {}건, 카운트 갱신 {}건 (ref 매칭 안 됨 {}건, 자동 스캔 제외 {}건)".format(
+        len(raw_records), new_labels, updated_counts, unmatched, len(raw_records) - len(click_records)
     ))
 
     if args.dry_run:
@@ -183,7 +206,7 @@ def main():
 
     if records:
         common_utils.append_feedback(records)
-        print("[+] {}건 자동 라벨링 완료".format(len(records)))
+        print("[+] {}건 자동 라벨링/카운트 갱신 완료".format(len(records)))
 
     trim_processed(client, len(raw_records))
 
