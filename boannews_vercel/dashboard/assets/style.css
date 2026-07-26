@@ -420,10 +420,10 @@ html, body {
   padding-top: 20px;
 }
 
-/* ===== Keyword sidebar — .page(880px 중앙정렬)의 남는 좌우 여백을 쓴다.
-   1300px부터 노출(1366px대 노트북 화면 커버 목적) — 좁은 화면에서는 겹칠 공간이
-   없으니 아예 숨긴다(모바일에서는 필요성도 낮음). ===== */
-.keyword-sidebar {
+/* ===== 오른쪽 사이드바(키워드 위, 추천기사 아래) — .page(880px 중앙정렬)의 남는
+   오른쪽 여백을 쓴다. 1300px부터 노출(1366px대 노트북 화면 커버 목적) — 좁은
+   화면에서는 겹칠 공간이 없으니 아예 숨긴다(모바일에서는 필요성도 낮음). ===== */
+.right-sidebar {
   display: none;
   position: fixed;
   top: 110px;
@@ -431,9 +431,11 @@ html, body {
   width: 170px;
   max-height: calc(100vh - 140px);
   overflow-y: auto;
+  flex-direction: column;
+  gap: 24px;
 }
 @media (min-width: 1300px) {
-  .keyword-sidebar { display: block; }
+  .right-sidebar { display: flex; }
 }
 .keyword-sidebar-title {
   font-size: 0.78rem;
@@ -461,20 +463,8 @@ html, body {
 }
 .keyword-tag:hover { border-color: var(--accent); color: var(--accent); }
 
-/* ===== Trend(추천기사) sidebar — keyword-sidebar를 좌우 대칭으로 미러링.
-   탭은 그대로 유지하고, 이 폭 이상에서만 여기에도 중복 표시한다. ===== */
-.trend-sidebar {
-  display: none;
-  position: fixed;
-  top: 110px;
-  right: calc(50% + 454px);
-  width: 170px;
-  max-height: calc(100vh - 140px);
-  overflow-y: auto;
-}
-@media (min-width: 1300px) {
-  .trend-sidebar { display: block; }
-}
+/* ===== Trend(추천기사) — .right-sidebar 안에서 키워드 패널 아래로 쌓인다.
+   탭은 그대로 유지하고, 이 사이드바는 넓은 화면에서 중복 표시하는 보조 뷰다. ===== */
 .trend-sidebar-title {
   font-size: 0.78rem;
   font-weight: 700;
