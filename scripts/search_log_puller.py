@@ -33,7 +33,7 @@ for stream in (sys.stdout, sys.stderr):
 REDIS_URL = os.environ.get("REDIS_URL", "")
 SEARCH_LOG_KEY = "search_log"
 MAX_PULL = 500  # 한 번 실행에 처리할 최대 로그 수
-SEARCH_LOG_FILE = common_utils.DATA_DIR / "search_log.jsonl"
+SEARCH_LOG_FILE = common_utils.SEARCH_LOG_FILE
 
 
 def _connect():

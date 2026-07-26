@@ -260,3 +260,38 @@ def test_read_recent_events_excludes_catalog_sources(tmp_path, monkeypatch):
 
     result = common_utils._read_recent_events(72)
     assert [e["id"] for e in result] == ["asec:1"]
+
+
+# ===== load_recent_search_terms =====
+
+def _make_search_log(query, days_ago, result_count=1):
+    return {
+        "query": query,
+        "result_count": result_count,
+        "ts": (datetime.utcnow() - timedelta(days=days_ago)).isoformat() + "Z",
+    }
+
+
+def test_load_recent_search_terms_respects_window(tmp_path):
+    log_file = tmp_path / "search_log.jsonl"
+    records = [_make_search_log("old query", 10), _make_search_log("fresh query", 1)]
+    with log_file.open("w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    result = common_utils.load_recent_search_terms(days=7, search_log_file=log_file)
+    assert result == [["fresh", "query"]]
+
+
+def test_load_recent_search_terms_lowercases_and_drops_short_tokens(tmp_path):
+    log_file = tmp_path / "search_log.jsonl"
+    with log_file.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(_make_search_log("FortiGate 것 RCE", 1), ensure_ascii=False) + "\n")
+
+    result = common_utils.load_recent_search_terms(days=7, search_log_file=log_file)
+    assert result == [["fortigate", "rce"]]  # "것"(1자)은 잡음으로 제외
+
+
+def test_load_recent_search_terms_missing_file_returns_empty(tmp_path):
+    result = common_utils.load_recent_search_terms(days=7, search_log_file=tmp_path / "nope.jsonl")
+    assert result == []

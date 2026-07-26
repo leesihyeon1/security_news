@@ -94,6 +94,10 @@ INSIGHT_WEIGHTS = {
                             # 단, 클릭 기반 라벨은 FEEDBACK_USEFUL_MIN_CLICKS 문턱 미만이면
                             # 0으로 취급(아래 feedback_useful_value) — 우연한 클릭 한두 번이
                             # 바로 다음 추천에 영향을 주지 않게.
+    "search_interest": 10,  # 최근 SEARCH_INTEREST_WINDOW_DAYS일간 대시보드 History 탭에서
+                            # 검색된 단어와 매칭되면 가산 — "요즘 관심사"를 추천에 되먹임.
+                            # 검색 활동은 클릭보다도 능동적인 관심 표현이라 볼 수 있지만,
+                            # 아직 사용자 수 대비 검색량이 적어 relevance(25)보다는 낮게 둠.
 }
 
 # 클릭 1~2회는 우연히 눌렀을 가능성이 있어 추천기사 가산(feedback_useful)에서는 무시하고,
@@ -102,6 +106,8 @@ INSIGHT_WEIGHTS = {
 # 완만하게 반영되니 문턱이 필요 없지만, 추천은 개별 기사 하나의 순위를 바로 바꾸는 거라
 # 약한 신호 하나로 흔들리면 안 된다.
 FEEDBACK_USEFUL_MIN_CLICKS = 3
+
+SEARCH_INTEREST_WINDOW_DAYS = 7  # 이보다 오래된 검색어는 "요즘 관심사"로 보기엔 낡음
 
 
 
@@ -372,6 +378,7 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
     max_items = max_items or MAX_TREND_ITEMS
     pir_defs = common_utils.load_pirs()
     feedback = common_utils.load_feedback()
+    search_queries = common_utils.load_recent_search_terms(days=SEARCH_INTEREST_WINDOW_DAYS)
 
     def published_ts(event):
         parsed = parse_iso(event.get("published_at"))
@@ -436,6 +443,20 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             return 0.0
         return common_utils.feedback_confidence_weight(record)
 
+    def search_interest_value(event):
+        """이 기사가 최근 검색어 중 하나와 매칭되면 1.0, 아니면 0.0 — 검색어의 모든 단어가
+        기사 텍스트(제목·요약·카테고리·행위자·멀웨어군)에 있어야 매칭으로 본다(AND, History
+        탭 검색과 동일한 방식)."""
+        if not search_queries:
+            return 0.0
+        haystack = " ".join(str(value) for value in (
+            event.get("title"), event.get("summary"), event.get("category"),
+            event.get("threat_actor"), event.get("malware_family"),
+        ) if value).lower()
+        if not haystack:
+            return 0.0
+        return 1.0 if any(all(word in haystack for word in words) for words in search_queries) else 0.0
+
     def insight_score(event):
         """가중합 인사이트 점수(높을수록 우선) — 어느 한 축이 조금 밀려도 나머지 축의
         압도적 우위로 뒤집을 수 있게 튜플 순서 대신 연속값으로 합산한다."""
@@ -454,6 +475,7 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             + w["importance"] * (importance_score(event) / 100.0)
             + w["recency"] * max(0.0, 1.0 - recency_days / 7.0)
             + w["feedback_useful"] * feedback_useful_value(event)
+            + w["search_interest"] * search_interest_value(event)
         )
 
     candidates = []

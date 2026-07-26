@@ -1,8 +1,17 @@
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 import common_utils
 import generate_report as gr
+
+
+@pytest.fixture(autouse=True)
+def _no_real_search_log(monkeypatch):
+    """pick_trend_reads()가 실제 data/search_log.jsonl을 읽지 않도록 기본값을 비워둔다 —
+    검색어 가산(search_interest)을 직접 테스트하는 케이스만 이걸 다시 monkeypatch한다."""
+    monkeypatch.setattr(common_utils, "load_recent_search_terms", lambda **kwargs: [])
 
 
 def _make_event(event_id, hours_ago, url=None, source="asec"):
@@ -164,3 +173,33 @@ def test_pick_trend_reads_boosts_repeated_click_feedback(monkeypatch):
     ])
     result = gr.pick_trend_reads(events, exclude_ids=set())
     assert [e["id"] for e in result] == ["asec:2", "asec:1"]
+
+
+def test_pick_trend_reads_boosts_search_interest_match(monkeypatch):
+    """최근 검색어(단어 전부 매칭)와 겹치는 기사가 다른 조건이 동일해도 먼저 뽑혀야 함."""
+    monkeypatch.setattr(common_utils, "load_pirs", lambda: {})
+    monkeypatch.setattr(common_utils, "load_feedback", lambda: {})
+    monkeypatch.setattr(common_utils, "load_recent_search_terms", lambda **kwargs: [["fortigate"]])
+
+    events = _same_published_at([
+        _trend_candidate_event(1, category="침해사고", relevance="high"),
+        _trend_candidate_event(2, category="침해사고", relevance="high"),
+    ])
+    events[1]["title"] = "FortiGate 취약점 발견"  # 대소문자 달라도 매칭돼야 함
+    result = gr.pick_trend_reads(events, exclude_ids=set())
+    assert [e["id"] for e in result] == ["asec:2", "asec:1"]
+
+
+def test_pick_trend_reads_ignores_search_terms_that_dont_match(monkeypatch):
+    """검색어 단어 중 하나라도 기사 텍스트에 없으면(AND 매칭 실패) 가산되지 않아야 함."""
+    monkeypatch.setattr(common_utils, "load_pirs", lambda: {})
+    monkeypatch.setattr(common_utils, "load_feedback", lambda: {})
+    monkeypatch.setattr(common_utils, "load_recent_search_terms", lambda **kwargs: [["fortigate", "rce"]])
+
+    events = _same_published_at([
+        _trend_candidate_event(1, category="침해사고", relevance="high"),
+        _trend_candidate_event(2, category="침해사고", relevance="high"),
+    ])
+    events[1]["title"] = "FortiGate 취약점 발견"  # "rce"는 없어서 AND 매칭 실패해야 함
+    result = gr.pick_trend_reads(events, exclude_ids=set())
+    assert [e["id"] for e in result] == ["asec:1", "asec:2"]

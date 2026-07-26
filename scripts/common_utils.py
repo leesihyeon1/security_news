@@ -23,6 +23,7 @@ INVENTORY_FILE = ASSETS_DIR / "inventory.yml"
 DATA_DIR = PROJECT_ROOT / "data"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
 FEEDBACK_FILE = DATA_DIR / "feedback.jsonl"
+SEARCH_LOG_FILE = DATA_DIR / "search_log.jsonl"
 LEARNED_WEIGHTS_FILE = DATA_DIR / "learned_weights.json"
 
 # 소스 코드명 -> 사람이 읽을 표시명. generate_report.py(리포트)와
@@ -1040,6 +1041,40 @@ def feedback_confidence_weight(record):
         return 1.0
     click_count = record.get("click_count") or 1
     return min(0.8, 0.4 + 0.1 * (click_count - 1))
+
+def load_recent_search_terms(days=7, search_log_file=None):
+    """최근 N일간 대시보드 검색창에 입력된 검색어를, 검색어별 단어 리스트로 반환.
+
+    search_log.jsonl은 search_log_puller.py가 append-only로 쌓으며 대체로 시간순이라
+    (Redis에서 온 순서 그대로) 끝에서부터 거슬러 읽다가 cutoff보다 오래된 로그를 만나면
+    멈춘다. 각 검색어는 공백 기준으로 토큰화한다 — generate_report.py의 추천기사
+    가산(search_interest)이 "이 검색어의 모든 단어가 기사 텍스트에 있는가"로 매칭하는데,
+    이게 대시보드 History 탭 자체의 다중 단어 AND 검색과 같은 방식이라 일관성이 있다.
+    2자 미만 토큰(조사·잡음)은 제외한다.
+    """
+    path = Path(search_log_file) if search_log_file else SEARCH_LOG_FILE
+    if not path.exists():
+        return []
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    queries = []
+    for line in iter_lines_reverse(path):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(record.get("ts")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            continue
+        if ts < cutoff:
+            break  # append-only, 대체로 시간순 — 이 지점부터는 전부 더 오래된 로그
+        words = [w for w in str(record.get("query") or "").strip().lower().split() if len(w) >= 2]
+        if words:
+            queries.append(words)
+    return queries
 
 def append_feedback(records, feedback_file=None):
     path = Path(feedback_file) if feedback_file else FEEDBACK_FILE
