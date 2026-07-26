@@ -948,6 +948,32 @@ def _extract_keywords(narrative, header=KEYWORD_HEADER, max_items=MAX_KEYWORDS):
     return keywords
 
 
+def fallback_keywords(stats, cards, max_items=MAX_KEYWORDS):
+    """LLM이 [핵심 키워드] 섹션을 통째로 빼먹거나 빈 채로 내놓을 때의 안전장치 — 이미
+    코드로 집계된 위협 행위자·악성코드(stats)·CVE(cards)에서 기계적으로 뽑는다.
+    프롬프트에 "절대 생략 금지"를 명시해도 LLM이 가끔 안 지킬 수 있으니, 사이드바가
+    아예 안 뜨는 것보다는 이렇게라도 채우는 게 낫다."""
+    keywords = []
+    seen = set()
+
+    def add(term):
+        term = (term or "").strip()
+        if not term or term.lower() in seen:
+            return
+        seen.add(term.lower())
+        keywords.append(term)
+
+    for actor, _ in stats.get("top_actors") or []:
+        add(actor)
+    for malware, _ in stats.get("top_malware") or []:
+        add(malware)
+    for card in cards:
+        add(card.get("cve"))
+        if len(keywords) >= max_items:
+            break
+    return keywords[:max_items]
+
+
 def ai_narrative(period_label, digest):
     prompt = """당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.
 아래는 {period} 동안 수집된 보안 이벤트 요약이다. 이를 바탕으로 보안담당자용 리포트 본문을 한국어로 작성하라.
@@ -977,14 +1003,15 @@ def ai_narrative(period_label, digest):
 - 정확히 3개 이내, 각 항목은 무엇을 해야 하는지 행동 중심으로 1문장
 - CVE ID, CVSS 수치, PIR 번호, 공격 그룹명 등 세부 데이터 나열 금지 — 이미 다른 섹션에 있으므로 반복하지 말 것
 
-[핵심 키워드]
+[핵심 키워드] (다른 섹션과 달리 이 섹션은 절대 생략하면 안 됨 — 반드시 작성할 것)
 - 앞쪽의 집계 섹션([언급된 공격 그룹·악성코드], [크로스소스 상관관계] 등)만 보지 말고,
   아래 소스별로 나열된 개별 기사 하나하나의 제목·요약까지 전부 훑어서 골라라 — 집계에는
   안 잡히지만 특정 기사 한 건에만 등장하는 특이한 용어도 놓치지 말 것
 - 오늘 데이터에 등장한 것 중 검색해볼 만한 고유명사·구체적 용어 5~8개를 쉼표로 구분해 한 줄로 나열하라
   (예: 위협 행위자명, 멀웨어·랜섬웨어 패밀리명, 제품명, CVE ID, 특이한 공격 기법·도구명)
 - "랜섬웨어", "취약점", "피싱" 같은 일반 용어·범주명은 넣지 마라 — 구체적 고유명사만
-- 데이터에 그런 고유명사가 부족하면 억지로 8개를 채우지 말고 있는 만큼만 써라
+- 정말 고유명사가 하나도 없는 경우가 아니면 최소 3개 이상은 반드시 채워라 — 이 섹션과
+  헤더([핵심 키워드])를 절대 통째로 빼먹지 마라
 
 번호/불릿 항목 작성 규칙 (모든 섹션 공통, 중요):
 - 번호나 "-"만 쓰고 그 뒤에 설명 문장을 비워두는 것은 절대 금지한다 (예: "1.\n2." 처럼 내용 없이 끝내지 말 것) — 쓸 항목 수를 줄이는 것은 되지만, 쓰기로 한 항목은 반드시 실질적인 문장으로 채워라
@@ -1553,6 +1580,8 @@ def main():
     narrative, keywords = ai_narrative(period_label, digest)
     if not narrative:
         narrative = "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"
+    if not keywords:
+        keywords = fallback_keywords(stats, cards)
 
     text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
     html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
