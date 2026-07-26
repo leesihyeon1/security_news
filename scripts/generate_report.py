@@ -908,12 +908,17 @@ ITEM_MAX_CHARS = 140
 
 def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_items=None):
     """[핵심 위협 TOP 3]/[자사 자산 관련]/[권고 조치] 같은 번호·불릿 리스트의 항목별 설명이 길면 문장 단위로 자르고,
-    max_items가 있으면 LLM이 개수 지침을 어겨도 코드가 항목 수 자체를 강제한다 (안전장치)."""
+    max_items가 있으면 LLM이 개수 지침을 어겨도 코드가 항목 수 자체를 강제한다 (안전장치).
+
+    LLM이 가끔 번호/불릿만 쓰고 내용을 안 채운 항목("1.\\n"처럼)을 응답에 섞어 보낸다 —
+    그대로 두면 리포트에 빈 줄로 노출되어 미완성처럼 보이므로 통째로 제외한다."""
     match = re.search(r"(\[{}\]\s*\n?)(.*?)(?=\n\[|\Z)".format(re.escape(header)), narrative, re.S)
     if not match:
         return narrative
 
-    items = [item.rstrip() for item in re.split(r"(?m)^(?=\d+\.\s|-\s)", match.group(2).strip()) if item.strip()]
+    # 마커(숫자.·-) 뒤에 공백이 아니라 문자열 끝이 오는 경우("...\n1.")도 분리해야 한다 —
+    # 안 그러면 내용 없는 마지막 항목이 바로 앞 항목에 그대로 붙어버린다.
+    items = [item.rstrip() for item in re.split(r"(?m)^(?=\d+\.(?:\s|$)|-(?:\s|$))", match.group(2).strip()) if item.strip()]
     if max_items is not None:
         items = items[:max_items]
 
@@ -922,6 +927,12 @@ def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_it
         title_match = re.match(r"(?:\d+\.|-)\s*.*?(?:\*\*\s*:|:)\s*", item)
         title = title_match.group(0) if title_match else ""
         desc = item[len(title):].strip()
+
+        # 콜론 기반 제목을 못 찾으면 desc엔 맨 앞 번호/불릿 마커가 그대로 남아있다 —
+        # 그걸 뗀 실제 내용이 있는지로 판단해야 마커만 있는 항목을 걸러낼 수 있다.
+        body = desc if title else re.sub(r"^(?:\d+\.|-)\s*", "", desc).strip()
+        if not body:
+            continue  # 번호/불릿만 있고 실제 내용이 없는 항목 — 빈 줄로 보여주지 않는다
 
         if len(desc) > max_chars:
             sentences = re.split(r"(?<=[.!?])\s+", desc)
@@ -935,7 +946,17 @@ def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_it
 
         trimmed_items.append((title.rstrip() + " " + desc).strip() if title else desc)
 
-    return narrative[:match.start(2)] + "\n".join(trimmed_items) + _normalize_tail(narrative, match.end(2))
+    # 앞쪽 항목이 빠지면 번호가 2.부터 시작해버리므로, 번호 항목(불릿 "-"는 그대로 둠)은 1부터 다시 매긴다.
+    numbered_index = 0
+    final_items = []
+    for entry in trimmed_items:
+        marker_match = re.match(r"^\d+\.\s*", entry)
+        if marker_match:
+            numbered_index += 1
+            entry = "{}. {}".format(numbered_index, entry[marker_match.end():])
+        final_items.append(entry)
+
+    return narrative[:match.start(2)] + "\n".join(final_items) + _normalize_tail(narrative, match.end(2))
 
 
 def ai_narrative(period_label, digest):
