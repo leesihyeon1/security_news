@@ -2,6 +2,7 @@
   "use strict";
 
   const PAGE_SIZE = 30;
+  const SUMMARY_HIGHLIGHTS_LIMIT = 10; // 요약 탭은 빠른 개요가 목적 — 전체는 국내/해외 탭에서
   const SEARCH_LOG_URL = "https://click-tracker-two.vercel.app/api/search-log";
   const SEARCH_LOG_DEBOUNCE_MS = 1000;
 
@@ -391,9 +392,13 @@
           '<div class="card-list">' + payload.cards.map(renderCveCard).join("") + "</div></div>";
       }
 
+      // 전체(캡 없음)는 국내/해외 탭 몫 — 요약은 상위 N건만 보여주는 빠른 개요로 유지
+      const allHighlights = data.highlights || [];
+      const topHighlights = allHighlights.slice(0, SUMMARY_HIGHLIGHTS_LIMIT);
       html +=
-        '<div class="section"><div class="section-title">주요 뉴스 <span class="count">' + (data.highlights || []).length + "건</span></div>" +
-        renderItemList(data.highlights) +
+        '<div class="section"><div class="section-title">주요 뉴스 <span class="count">상위 ' +
+        topHighlights.length + "건 · 전체 " + allHighlights.length + '건은 국내/해외 탭에서</span></div>' +
+        renderItemList(topHighlights) +
         "</div>";
     } else if (state.tab === "recommended") {
       // 추천기사 탭: 읽을만한 동향(국내+해외 통합)을 소스별로 묶어서 표시
