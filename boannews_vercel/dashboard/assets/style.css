@@ -442,22 +442,21 @@ html, body {
 }
 .keyword-tag-list {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .keyword-tag {
-  display: block;
-  width: 100%;
-  text-align: left;
+  display: inline-flex;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   font-weight: 600;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+  border-radius: 999px;
   cursor: pointer;
+  white-space: nowrap;
 }
 .keyword-tag:hover { border-color: var(--accent); color: var(--accent); }
 
