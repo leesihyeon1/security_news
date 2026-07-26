@@ -82,9 +82,7 @@
       { label: "총 건수", value: stats.total, cls: "" },
       { label: "P1 · 긴급", value: stats.p1, cls: "p1", title: "P1: 실제 악용 중이며 자사 자산과 관련된 건 (최우선 대응 필요)" },
       { label: "P2 · 주의", value: stats.p2, cls: "p2", title: "P2: 실제 악용 중이거나, PoC 공개·중대한 영향에 자사 자산이 걸린 건" },
-      { label: "Critical", value: stats.critical, cls: "" },
-      { label: "KEV", value: stats.kev, cls: "" },
-      { label: "랜섬웨어", value: stats.ransomware, cls: "" },
+      { label: "정보성", value: stats.info, cls: "", title: "긴급·주의에 해당하지 않는 일반 정보 수집성 기사(총 건수 - 긴급 - 주의)" },
     ];
     return (
       '<div class="stat-strip">' +
