@@ -948,6 +948,26 @@ def _extract_keywords(narrative, header=KEYWORD_HEADER, max_items=MAX_KEYWORDS):
     return keywords
 
 
+def _remove_bare_markers(narrative):
+    """번호("1.")나 불릿("-")만 있고 내용이 없는 줄을, 어느 섹션에 있든 통째로 제거하는
+    마지막 안전망. _truncate_numbered_items()가 섹션별로 이미 같은 일을 하지만, 그
+    파싱이 놓치는 예외적인 경우(섹션 헤더 인식 실패 등)까지 잡아내는 최종 방어선이다 —
+    섹션별 로직과 무관하게 "빈 번호/불릿 줄"이 사용자에게 보이는 일 자체를 원천 차단한다.
+    """
+    lines = narrative.split("\n")
+    kept = [line for line in lines if not re.match(r"^\s*(?:\d+\.|-)\s*$", line)]
+
+    result = []
+    blank_run = False
+    for line in kept:
+        is_blank = line.strip() == ""
+        if is_blank and blank_run:
+            continue
+        blank_run = is_blank
+        result.append(line)
+    return "\n".join(result).strip()
+
+
 def fallback_keywords(stats, cards, max_items=MAX_KEYWORDS):
     """LLM이 [핵심 키워드] 섹션을 통째로 빼먹거나 빈 채로 내놓을 때의 안전장치 — 이미
     코드로 집계된 위협 행위자·악성코드(stats)·CVE(cards)에서 기계적으로 뽑는다.
@@ -1030,6 +1050,7 @@ def ai_narrative(period_label, digest):
     narrative = _truncate_numbered_items(narrative, "핵심 위협 TOP 3")
     narrative = _truncate_numbered_items(narrative, "자사 자산 관련")
     narrative = _truncate_numbered_items(narrative, "권고 조치", max_items=3)
+    narrative = _remove_bare_markers(narrative)
     keywords = _extract_keywords(narrative)
     narrative = _strip_narrative_section(narrative, KEYWORD_HEADER)
     return narrative, keywords
