@@ -3,13 +3,16 @@
 
   const state = {
     period: "daily",
-    tab: "all", // all | domestic | overseas | recommended | cve
+    tab: "all", // all | domestic | overseas | recommended | cve | history
     cache: {}, // period -> payload
+    query: "",
+    searchIndex: null, // null = 아직 로딩 전, 로드되면 배열
   };
 
   const $app = document.getElementById("app");
   const $loading = document.getElementById("loading");
   const $generatedAt = document.getElementById("generated-at");
+  const $searchInput = document.getElementById("search-input");
 
   // ===== Theme =====
   function initTheme() {
@@ -51,6 +54,18 @@
     const payload = await res.json();
     state.cache[period] = payload;
     return payload;
+  }
+
+  // History 탭·검색은 기간(daily/weekly)과 무관한 별도 누적 인덱스를 쓴다.
+  async function loadSearchIndex() {
+    if (state.searchIndex) return state.searchIndex;
+    try {
+      const res = await fetch("data/search-index.json", { cache: "no-cache" });
+      state.searchIndex = res.ok ? await res.json() : [];
+    } catch (error) {
+      state.searchIndex = [];
+    }
+    return state.searchIndex;
   }
 
   // ===== Renderers =====
@@ -151,6 +166,84 @@
     );
   }
 
+  // ===== History tab (검색 + 월별 아카이브) =====
+  function renderHistoryItem(entry) {
+    const href = entry.url ? esc(entry.url) : "#";
+    const metaBits = [esc(entry.date)];
+    if (entry.category) metaBits.push(esc(entry.category));
+    return (
+      '<div class="item">' +
+      '<div class="item-top">' +
+      '<span class="item-source">' + esc(entry.source_label || "") + "</span>" +
+      renderLevelBadge(entry.level) +
+      "</div>" +
+      '<div class="item-title"><a href="' + href + '" target="_blank" rel="noopener">' + esc(entry.title) + "</a></div>" +
+      '<div class="item-meta">' + metaBits.map((b) => "<span>" + b + "</span>").join("") + "</div>" +
+      (entry.summary ? '<div class="item-summary">' + esc(entry.summary) + "</div>" : "") +
+      "</div>"
+    );
+  }
+
+  function matchesQuery(entry, query) {
+    const haystack = [entry.title, entry.summary, entry.category, entry.source_label]
+      .join(" ")
+      .toLowerCase();
+    return haystack.indexOf(query) !== -1;
+  }
+
+  function renderHistorySearchResults(index, query) {
+    const matches = index.filter((entry) => matchesQuery(entry, query));
+    if (!matches.length) {
+      return (
+        '<div class="section"><div class="section-title">검색 결과 <span class="count">0건</span></div>' +
+        '<div class="empty-state">"' + esc(query) + '"에 대한 결과가 없습니다.</div></div>'
+      );
+    }
+    return (
+      '<div class="section"><div class="section-title">검색 결과 <span class="count">' + matches.length + '건</span></div>' +
+      '<div class="item-list">' + matches.map(renderHistoryItem).join("") + "</div></div>"
+    );
+  }
+
+  function renderHistoryBrowser(index) {
+    if (!index.length) {
+      return '<div class="empty-state">과거 데이터가 아직 없습니다.</div>';
+    }
+    const groups = {};
+    const order = [];
+    index.forEach((entry) => {
+      const month = (entry.date || "").slice(0, 7); // "YYYY-MM"
+      if (!groups[month]) {
+        groups[month] = [];
+        order.push(month);
+      }
+      groups[month].push(entry);
+    });
+    order.sort().reverse();
+
+    return order.map((month, idx) => {
+      const items = groups[month];
+      return (
+        '<div class="section history-month' + (idx === 0 ? " is-open" : "") + '" data-month="' + esc(month) + '">' +
+        '<button type="button" class="history-month-toggle">' + esc(month) +
+        ' <span class="count">' + items.length + "건</span></button>" +
+        '<div class="item-list history-month-body">' + items.map(renderHistoryItem).join("") + "</div>" +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function renderHistorySection() {
+    if (state.searchIndex === null) {
+      loadSearchIndex().then(() => {
+        if (state.tab === "history") render(state.cache[state.period]);
+      });
+      return '<div class="loading">불러오는 중…</div>';
+    }
+    const query = (state.query || "").trim().toLowerCase();
+    return query ? renderHistorySearchResults(state.searchIndex, query) : renderHistoryBrowser(state.searchIndex);
+  }
+
   // 탭별로 필요한 데이터만 추려서 반환. 읽을만한 동향(trend_reads)은 요약/국내/해외에
   // 섞이지 않고 recommended 탭에서만 다룬다 — 같은 기사가 여러 탭에 중복 노출되지 않게.
   function tabData(payload) {
@@ -160,6 +253,7 @@
       return { trend_reads: (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []) };
     }
     if (state.tab === "cve") return { cards: payload.cards || [] };
+    if (state.tab === "history") return {};
     return { highlights: (payload.domestic.highlights || []).concat(payload.overseas.highlights || []) };
   }
 
@@ -172,8 +266,9 @@
 
     html +=
       '<div class="region-tabs">' +
-      ["all", "recommended", "cve", "domestic", "overseas"].map((t) => {
-        const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" : t === "cve" ? "CVE" : "추천기사";
+      ["all", "recommended", "cve", "domestic", "overseas", "history"].map((t) => {
+        const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" :
+          t === "cve" ? "CVE" : t === "history" ? "History" : "추천기사";
         const active = state.tab === t ? " is-active" : "";
         return '<button type="button" class="region-tab' + active + '" data-region="' + t + '">' + label + "</button>";
       }).join("") +
@@ -208,6 +303,9 @@
         '<div class="section"><div class="section-title">CVE <span class="count">복수 소스 교차 확인 · ' + cards.length + "건</span></div>" +
         (cards.length ? '<div class="card-list">' + cards.map(renderCveCard).join("") + "</div>" : '<div class="empty-state">해당 없음</div>') +
         "</div>";
+    } else if (state.tab === "history") {
+      // History 탭: 검색어가 있으면 전체 기간 검색 결과, 없으면 월별 아카이브 브라우저
+      html += renderHistorySection();
     } else {
       // 국내/해외 탭: AI 총평·핵심 취약점 없이, 주요 뉴스만 소스별로 묶어서 나열
       html +=
@@ -221,7 +319,17 @@
     $app.querySelectorAll(".region-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
         state.tab = btn.dataset.region;
+        if (state.tab !== "history") {
+          state.query = "";
+          $searchInput.value = "";
+        }
         render(payload);
+      });
+    });
+
+    $app.querySelectorAll(".history-month-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        btn.closest(".history-month").classList.toggle("is-open");
       });
     });
   }
@@ -232,6 +340,7 @@
     $loading.style.display = "block";
     try {
       const payload = await loadPeriod(state.period);
+      loadSearchIndex(); // History 탭 클릭 전에 미리 받아둠 (fire-and-forget)
       render(payload);
     } catch (error) {
       const tpl = document.getElementById("tpl-error");
@@ -258,7 +367,18 @@
     });
   }
 
+  function initSearch() {
+    $searchInput.addEventListener("input", () => {
+      state.query = $searchInput.value;
+      if (state.query.trim() && state.tab !== "history") {
+        state.tab = "history";
+      }
+      if (state.cache[state.period]) render(state.cache[state.period]);
+    });
+  }
+
   initTheme();
   initPeriodSwitch();
+  initSearch();
   refresh();
 })();

@@ -147,6 +147,39 @@ html, body {
 }
 .theme-toggle:hover { border-color: var(--accent); }
 
+.search-input {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.85rem;
+  width: 200px;
+  max-width: 40vw;
+}
+.search-input::placeholder { color: var(--text-faint); }
+.search-input:focus { outline: none; border-color: var(--accent); }
+
+/* ===== History tab (month accordion) ===== */
+.history-month-toggle {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.history-month-body {
+  display: none;
+  margin-top: 10px;
+}
+.history-month.is-open .history-month-body { display: flex; }
+
 /* ===== Region tabs ===== */
 .region-tabs {
   display: flex;
@@ -358,4 +391,6 @@ html, body {
   .page { padding: 0 14px 40px; }
   .topbar { padding: 16px 0 14px; }
   .brand-name { font-size: 0.95rem; }
+  .topbar-controls { flex-wrap: wrap; }
+  .search-input { width: 100%; max-width: 100%; order: 3; }
 }
