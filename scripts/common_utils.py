@@ -1593,6 +1593,10 @@ def send_slack_webhook(payload, webhook_url=None):
         return False
 
     payload = _sanitize_slack_payload(payload)
+    # 링크 미리보기(unfurl) 끄기 — 안 끄면 Slack이 메시지 속 링크(click-tracker 경유)를
+    # 사람이 열어보기 전에 자동으로 미리 가져와서, 클릭 피드백에 가짜 "클릭"이 찍힌다.
+    payload.setdefault("unfurl_links", False)
+    payload.setdefault("unfurl_media", False)
 
     try:
         data = json.dumps(payload).encode('utf-8')

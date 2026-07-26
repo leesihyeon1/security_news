@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime
 
 import redis
 
@@ -35,6 +36,9 @@ for stream in (sys.stdout, sys.stderr):
 REDIS_URL = os.environ.get("REDIS_URL", "")
 CLICKS_KEY = "clicks"
 MAX_PULL = 500  # 한 번 실행에 처리할 최대 클릭 로그 수
+RECENT_LINES = 5000  # ref_map 구축 시 훑을 최대 줄 수 — slack_feedback_poller.py와 동일한 제한
+BURST_WINDOW_SECONDS = 2  # 이 시간 창 안에 BURST_MIN_COUNT건 이상 몰리면 자동 스캔으로 간주
+BURST_MIN_COUNT = 3
 
 
 def _connect():
@@ -78,10 +82,52 @@ def trim_processed(client, count):
         print("[-] Redis 정리 실패 — 다음 실행에서 같은 클릭이 다시 보일 수 있습니다(라벨은 중복 기록 안 됨): {}".format(error))
 
 
+def _parse_ts(value):
+    try:
+        return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def filter_burst_clicks(click_records):
+    """메일/리포트 속 링크 여러 개를 몇 초 안에 한꺼번에 훑는 자동 스캔 패턴을 걸러낸다.
+
+    사람은 기사 하나를 읽고 다음 걸 누르기까지 자연스러운 간격이 있는데, 사전스캔
+    봇이나 보안 스캐너는 링크를 순식간에 연달아 방문한다(User-Agent를 브라우저처럼
+    위장해도 이 타이밍 패턴까진 못 숨김). 짧은 시간 창 안에 BURST_MIN_COUNT건 이상
+    몰려 찍히면 그 구간의 클릭은 라벨링 대상에서만 제외한다(Redis 정리는 그대로 진행).
+    """
+    parsed = [(_parse_ts(record.get("ts")), record) for record in click_records]
+    dated = sorted((pair for pair in parsed if pair[0] is not None), key=lambda pair: pair[0])
+
+    suspicious_ids = set()
+    window = []
+    for ts, record in dated:
+        window = [(t, r) for t, r in window if (ts - t).total_seconds() <= BURST_WINDOW_SECONDS]
+        window.append((ts, record))
+        if len(window) >= BURST_MIN_COUNT:
+            suspicious_ids.update(id(r) for _, r in window)
+
+    if suspicious_ids:
+        print("[*] 짧은 시간에 몰려온 클릭 {}건을 자동 스캔으로 간주해 라벨링에서 제외합니다.".format(
+            len(suspicious_ids)
+        ))
+
+    return [record for record in click_records if id(record) not in suspicious_ids]
+
+
 def build_ref_map():
-    """이벤트 ref 해시 -> 이벤트 id 매핑. slack_feedback_poller.build_ref_map()과 동일한 목적."""
+    """이벤트 ref 해시 -> 이벤트 id 매핑. slack_feedback_poller.build_ref_map()과 동일한 목적.
+
+    파일 끝에서부터 거슬러 읽어 RECENT_LINES줄만 훑는다 — 로그 전체 크기와
+    무관하게 읽는 양이 고정된다.
+    """
     ref_map = {}
+    count = 0
     for line in common_utils.iter_lines_reverse(common_utils.EVENTS_FILE):
+        count += 1
+        if count > RECENT_LINES:
+            break
         line = line.strip()
         if not line:
             continue
@@ -100,10 +146,12 @@ def main():
     args = parser.parse_args()
 
     client = _connect()
-    click_records = peek_click_records(client)
-    if not click_records:
+    raw_records = peek_click_records(client)
+    if not raw_records:
         print("[*] 새로 가져올 클릭 로그가 없습니다.")
         return
+
+    click_records = filter_burst_clicks(raw_records)
 
     ref_map = build_ref_map()
     existing_labels = common_utils.load_feedback()
@@ -125,8 +173,8 @@ def main():
             "evidence": "클릭 추적됨({})".format(click.get("ts") or ""),
         })
 
-    print("[*] 클릭 로그 {}건 중 신규 라벨 {}건 (ref 매칭 안 됨 {}건)".format(
-        len(click_records), len(records), unmatched
+    print("[*] 클릭 로그 {}건 중 신규 라벨 {}건 (ref 매칭 안 됨 {}건, 자동 스캔 제외 {}건)".format(
+        len(raw_records), len(records), unmatched, len(raw_records) - len(click_records)
     ))
 
     if args.dry_run:
@@ -137,7 +185,7 @@ def main():
         common_utils.append_feedback(records)
         print("[+] {}건 자동 라벨링 완료".format(len(records)))
 
-    trim_processed(client, len(click_records))
+    trim_processed(client, len(raw_records))
 
 
 if __name__ == "__main__":

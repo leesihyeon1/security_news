@@ -25,6 +25,23 @@ function getRedisClient() {
   return redisClient;
 }
 
+// 사람이 실제로 열어보기 전에 링크를 자동으로 미리 가져가는 주체들 — 이메일 보안
+// 스캐너(Safe Links류), 채팅 앱의 링크 미리보기 봇, 범용 크롤러. 이런 요청까지
+// "클릭"으로 세면 아무도 안 읽은 기사에 useful 라벨이 자동으로 붙어버린다.
+// 리다이렉트 자체는 이 요청들에도 그대로 해준다 — 로깅만 건너뛴다.
+const PREFETCH_UA_PATTERNS = [
+  /slackbot/i, /slack-imgproxy/i,
+  /bot|crawler|spider|preview|unfurl/i,
+  /facebookexternalhit/i, /twitterbot/i, /linkedinbot/i, /whatsapp/i, /telegrambot/i, /discordbot/i,
+  /googlebot|bingbot/i,
+  /safelinks|safe-links|atp-scanner|proofpoint|mimecast|barracuda/i,
+];
+
+function isPrefetchRequest(userAgent) {
+  if (!userAgent) return true; // UA 없는 요청도 사람의 일반 브라우저는 아닐 가능성이 높음
+  return PREFETCH_UA_PATTERNS.some((pattern) => pattern.test(userAgent));
+}
+
 module.exports = async (req, res) => {
   const { ref, url } = req.query;
 
@@ -44,7 +61,7 @@ module.exports = async (req, res) => {
   }
 
   const client = getRedisClient();
-  if (client && ref) {
+  if (client && ref && !isPrefetchRequest(req.headers["user-agent"])) {
     const record = JSON.stringify({ ref: String(ref), url: target, ts: new Date().toISOString() });
     try {
       await client.rpush("clicks", record);
