@@ -84,9 +84,22 @@ def _index_entries_from_payload(payload, period, date_stamp):
     return entries
 
 
+def _index_dedup_key(entry):
+    """기사는 URL로, CVE 카드는 제목(CVE ID)으로 동일 항목을 판별한다.
+
+    일간 리포트가 실은 기사가 나중에 주간 롤업에도 다시 실리면(같은 기사, 다른
+    period+date) 검색 결과에 두 번 뜨는 걸 막기 위한 키다.
+    """
+    url = entry.get("url")
+    if url:
+        return url
+    return "{}|{}".format(entry.get("type") or "", entry.get("title") or "")
+
+
 def _update_search_index(repo, payload, period, date_stamp):
     """검색 인덱스를 갱신 — 같은 (period, date) 재발행 시 그날 항목을 통째로 교체(중복 누적 방지),
-    보관 기간(SEARCH_INDEX_RETENTION_DAYS)이 지난 항목은 정리한다."""
+    보관 기간(SEARCH_INDEX_RETENTION_DAYS)이 지난 항목은 정리하고, 같은 기사가 daily/weekly에
+    걸쳐 중복 등재되면 가장 먼저(오래된 날짜) 등재된 것만 남긴다."""
     index_path = repo / "dashboard" / "data" / SEARCH_INDEX_FILE
 
     existing = []
@@ -102,6 +115,13 @@ def _update_search_index(repo, payload, period, date_stamp):
 
     cutoff = (datetime.utcnow() - timedelta(days=SEARCH_INDEX_RETENTION_DAYS)).strftime("%Y-%m-%d")
     existing = [e for e in existing if (e.get("date") or "") >= cutoff]
+
+    existing.sort(key=lambda e: e.get("date") or "")  # 오래된 것부터 훑어 첫 등장(가장 이른 날짜)을 유지
+    deduped = {}
+    for entry in existing:
+        deduped.setdefault(_index_dedup_key(entry), entry)
+    existing = list(deduped.values())
+
     existing.sort(key=lambda e: e.get("date") or "", reverse=True)
 
     with index_path.open("w", encoding="utf-8") as file:
