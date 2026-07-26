@@ -95,8 +95,10 @@ INSIGHT_WEIGHTS = {
                             # 0으로 취급(아래 feedback_useful_value) — 우연한 클릭 한두 번이
                             # 바로 다음 추천에 영향을 주지 않게.
     "search_interest": 10,  # 최근 SEARCH_INTEREST_WINDOW_DAYS일간 대시보드 History 탭에서
-                            # 검색된 단어와 매칭되면 가산 — "요즘 관심사"를 추천에 되먹임.
-                            # 검색 활동은 클릭보다도 능동적인 관심 표현이라 볼 수 있지만,
+                            # SEARCH_INTEREST_MIN_SEARCHES회 이상 반복 검색된 단어와 매칭되면
+                            # 가산 — "요즘 관심사"를 추천에 되먹임. 한 번만 입력된 검색어는
+                            # feedback_useful의 클릭 문턱과 같은 이유로 제외한다(우연한 호기심
+                            # 방지). 검색 활동은 클릭보다도 능동적인 관심 표현이라 볼 수 있지만,
                             # 아직 사용자 수 대비 검색량이 적어 relevance(25)보다는 낮게 둠.
 }
 
@@ -108,6 +110,7 @@ INSIGHT_WEIGHTS = {
 FEEDBACK_USEFUL_MIN_CLICKS = 3
 
 SEARCH_INTEREST_WINDOW_DAYS = 7  # 이보다 오래된 검색어는 "요즘 관심사"로 보기엔 낡음
+SEARCH_INTEREST_MIN_SEARCHES = 2  # 한 번만 입력된 검색어는 우연한 호기심일 수 있어 제외
 
 
 
@@ -378,7 +381,9 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
     max_items = max_items or MAX_TREND_ITEMS
     pir_defs = common_utils.load_pirs()
     feedback = common_utils.load_feedback()
-    search_queries = common_utils.load_recent_search_terms(days=SEARCH_INTEREST_WINDOW_DAYS)
+    search_queries = common_utils.load_recent_search_terms(
+        days=SEARCH_INTEREST_WINDOW_DAYS, min_count=SEARCH_INTEREST_MIN_SEARCHES,
+    )
 
     def published_ts(event):
         parsed = parse_iso(event.get("published_at"))

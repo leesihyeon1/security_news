@@ -292,6 +292,21 @@ def test_load_recent_search_terms_lowercases_and_drops_short_tokens(tmp_path):
     assert result == [["fortigate", "rce"]]  # "것"(1자)은 잡음으로 제외
 
 
+def test_load_recent_search_terms_min_count_excludes_one_off_queries(tmp_path):
+    log_file = tmp_path / "search_log.jsonl"
+    records = [
+        _make_search_log("fortigate", 1),   # 1회만 검색됨 — 문턱(2) 미달로 제외돼야 함
+        _make_search_log("log4j", 2),
+        _make_search_log("log4j", 1),       # 2회 검색됨 — 문턱 충족
+    ]
+    with log_file.open("w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    result = common_utils.load_recent_search_terms(days=7, search_log_file=log_file, min_count=2)
+    assert result == [["log4j"]]
+
+
 def test_load_recent_search_terms_missing_file_returns_empty(tmp_path):
     result = common_utils.load_recent_search_terms(days=7, search_log_file=tmp_path / "nope.jsonl")
     assert result == []

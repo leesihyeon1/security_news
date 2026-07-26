@@ -7,6 +7,7 @@ import re
 import requests
 import smtplib
 import time
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from email.mime.multipart import MIMEMultipart
@@ -1042,8 +1043,9 @@ def feedback_confidence_weight(record):
     click_count = record.get("click_count") or 1
     return min(0.8, 0.4 + 0.1 * (click_count - 1))
 
-def load_recent_search_terms(days=7, search_log_file=None):
-    """최근 N일간 대시보드 검색창에 입력된 검색어를, 검색어별 단어 리스트로 반환.
+def load_recent_search_terms(days=7, search_log_file=None, min_count=1):
+    """최근 N일간 대시보드 검색창에 입력된 검색어 중 min_count회 이상 반복 검색된 것만,
+    검색어별 단어 리스트로 반환.
 
     search_log.jsonl은 search_log_puller.py가 append-only로 쌓으며 대체로 시간순이라
     (Redis에서 온 순서 그대로) 끝에서부터 거슬러 읽다가 cutoff보다 오래된 로그를 만나면
@@ -1051,12 +1053,17 @@ def load_recent_search_terms(days=7, search_log_file=None):
     가산(search_interest)이 "이 검색어의 모든 단어가 기사 텍스트에 있는가"로 매칭하는데,
     이게 대시보드 History 탭 자체의 다중 단어 AND 검색과 같은 방식이라 일관성이 있다.
     2자 미만 토큰(조사·잡음)은 제외한다.
+
+    min_count(기본 1=문턱 없음)를 올리면 한 번만 입력된 검색어(우연한 호기심일 수 있음)는
+    빼고, 같은 검색어(정규화된 문자열 기준)가 반복 입력된 것만 "관심사"로 인정한다 —
+    feedback_confidence_weight가 클릭 1회를 약한 신호로 보는 것과 같은 취지.
     """
     path = Path(search_log_file) if search_log_file else SEARCH_LOG_FILE
     if not path.exists():
         return []
     cutoff = datetime.utcnow() - timedelta(days=days)
-    queries = []
+    counts = Counter()
+    words_by_query = {}
     for line in iter_lines_reverse(path):
         line = line.strip()
         if not line:
@@ -1071,10 +1078,12 @@ def load_recent_search_terms(days=7, search_log_file=None):
             continue
         if ts < cutoff:
             break  # append-only, 대체로 시간순 — 이 지점부터는 전부 더 오래된 로그
-        words = [w for w in str(record.get("query") or "").strip().lower().split() if len(w) >= 2]
-        if words:
-            queries.append(words)
-    return queries
+        query = str(record.get("query") or "").strip().lower()
+        if not query:
+            continue
+        counts[query] += 1
+        words_by_query.setdefault(query, [w for w in query.split() if len(w) >= 2])
+    return [words for query, words in words_by_query.items() if words and counts[query] >= min_count]
 
 def append_feedback(records, feedback_file=None):
     path = Path(feedback_file) if feedback_file else FEEDBACK_FILE
