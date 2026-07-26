@@ -3,7 +3,7 @@
 
   const state = {
     period: "daily",
-    tab: "all", // all | domestic | overseas | recommended
+    tab: "all", // all | domestic | overseas | recommended | cve
     cache: {}, // period -> payload
   };
 
@@ -159,6 +159,7 @@
     if (state.tab === "recommended") {
       return { trend_reads: (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []) };
     }
+    if (state.tab === "cve") return { cards: payload.cards || [] };
     return { highlights: (payload.domestic.highlights || []).concat(payload.overseas.highlights || []) };
   }
 
@@ -171,8 +172,8 @@
 
     html +=
       '<div class="region-tabs">' +
-      ["all", "recommended", "domestic", "overseas"].map((t) => {
-        const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" : "추천기사";
+      ["all", "recommended", "cve", "domestic", "overseas"].map((t) => {
+        const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" : t === "cve" ? "CVE" : "추천기사";
         const active = state.tab === t ? " is-active" : "";
         return '<button type="button" class="region-tab' + active + '" data-region="' + t + '">' + label + "</button>";
       }).join("") +
@@ -199,6 +200,13 @@
       html +=
         '<div class="section"><div class="section-title">추천 기사 <span class="count">' + (data.trend_reads || []).length + "건</span></div>" +
         renderBySource(data.trend_reads) +
+        "</div>";
+    } else if (state.tab === "cve") {
+      // CVE 탭: 크로스소스 상관관계 카드(요약 탭의 "핵심 취약점"과 동일 데이터)만 모아서 표시
+      const cards = data.cards || [];
+      html +=
+        '<div class="section"><div class="section-title">CVE <span class="count">복수 소스 교차 확인 · ' + cards.length + "건</span></div>" +
+        (cards.length ? '<div class="card-list">' + cards.map(renderCveCard).join("") + "</div>" : '<div class="empty-state">해당 없음</div>') +
         "</div>";
     } else {
       // 국내/해외 탭: AI 총평·핵심 취약점 없이, 주요 뉴스만 소스별로 묶어서 나열
