@@ -20,6 +20,7 @@
   const $generatedAt = document.getElementById("generated-at");
   const $searchInput = document.getElementById("search-input");
   const $keywordSidebar = document.getElementById("keyword-sidebar");
+  const $trendSidebar = document.getElementById("trend-sidebar");
 
   // ===== Theme =====
   function initTheme() {
@@ -362,10 +363,45 @@
     });
   }
 
+  // 추천기사 탭과 같은 데이터를 넓은 화면에서 사이드바로도 보여준다(탭은 그대로 유지 —
+  // 좁은 화면 사용자는 탭으로 접근). 출처·제목만 보이고 클릭하면 요약이 펼쳐진다.
+  function renderTrendSidebar(payload) {
+    const items = (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []);
+    if (!items.length) {
+      $trendSidebar.innerHTML = "";
+      return;
+    }
+    $trendSidebar.innerHTML =
+      '<div class="trend-sidebar-title">추천 기사 <span class="count">' + items.length + '건</span></div>' +
+      '<div class="trend-list">' +
+      items.map((item, idx) =>
+        '<div class="trend-item" data-idx="' + idx + '">' +
+        '<button type="button" class="trend-item-head">' +
+        '<span class="trend-item-source">' + esc(item.source_label || "") + "</span>" +
+        '<span class="trend-item-title">' + esc(item.title) + "</span>" +
+        "</button>" +
+        (item.summary || item.url
+          ? '<div class="trend-item-body">' +
+            (item.summary ? '<p class="item-summary">' + esc(item.summary) + "</p>" : "") +
+            (item.url ? '<a href="' + esc(item.url) + '" target="_blank" rel="noopener" class="trend-item-link">기사 보기</a>' : "") +
+            "</div>"
+          : "") +
+        "</div>"
+      ).join("") +
+      "</div>";
+
+    $trendSidebar.querySelectorAll(".trend-item-head").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        btn.closest(".trend-item").classList.toggle("is-open");
+      });
+    });
+  }
+
   function render(payload) {
     const data = tabData(payload);
     $generatedAt.textContent = payload.title + " · 기간: " + payload.period_label + " · 생성: " + fmtDate(payload.generated_at);
     renderKeywordSidebar(payload);
+    renderTrendSidebar(payload);
 
     let html = "";
     html += renderStatStrip(payload.stats);

@@ -460,6 +460,84 @@ html, body {
 }
 .keyword-tag:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ===== Trend(추천기사) sidebar — keyword-sidebar를 좌우 대칭으로 미러링.
+   탭은 그대로 유지하고, 넓은 화면에서만 여기에도 중복 표시한다. ===== */
+.trend-sidebar {
+  display: none;
+  position: fixed;
+  top: 110px;
+  right: calc(50% + 500px);
+  width: 200px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+}
+@media (min-width: 1400px) {
+  .trend-sidebar { display: block; }
+}
+.trend-sidebar-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.trend-sidebar-title .count {
+  font-weight: 500;
+  color: var(--text-faint);
+}
+.trend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trend-item {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.trend-item-head {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.trend-item-head:hover { color: var(--accent); }
+.trend-item-source {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.trend-item-title {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.trend-item-body {
+  display: none;
+  padding: 0 10px 10px;
+}
+.trend-item.is-open .trend-item-body { display: block; }
+.trend-item-body .item-summary {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0 0 6px;
+}
+.trend-item-link {
+  font-size: 0.74rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+.trend-item-link:hover { text-decoration: underline; }
+
 @media (max-width: 560px) {
   .page { padding: 0 14px 40px; }
   .topbar { padding: 16px 0 14px; }
