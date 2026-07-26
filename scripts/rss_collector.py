@@ -183,8 +183,15 @@ def category_tag(article):
     return "[{}] ".format(category) if category else ""
 
 
-def send_email(feed, articles):
-    subject = "[{}] 신규 보안 기사 {}건".format(feed["label"], len(articles))
+def send_combined_email(feed_alerts):
+    """실행 전체(여러 피드)의 알림 대상 기사를 모아 이메일 한 통으로 발송.
+
+    피드마다 따로 보내면(--all로 수십 개 피드를 처리할 때) Gmail 일일 발송 한도를
+    금방 넘기므로, 한 번의 실행에서는 이메일을 항상 한 통으로 합쳐서 보낸다.
+    슬랙은 피드별로 채널이 다르므로 이 함수와 무관하게 피드마다 그대로 보낸다.
+    """
+    total = sum(len(alerts) for _, alerts in feed_alerts)
+    subject = "RSS 신규 보안 기사 {}건 ({}개 피드)".format(total, len(feed_alerts))
     checked_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     text_lines = [subject, "체크 시간: {}".format(checked_at), ""]
@@ -194,25 +201,30 @@ def send_email(feed, articles):
         "<p>체크 시간: {}</p>".format(checked_at),
     ]
 
-    for idx, article in enumerate(articles, start=1):
-        summary = alert_summary(article)
-        tag = category_tag(article)
-        response = " · ".join(common_utils.enrichment_response_bits(article.get("enrichment")))
-        text_lines.append("{}. {}{}".format(idx, tag, article["title"]))
-        text_lines.append("요약: {}".format(summary))
-        if response:
-            text_lines.append("대응: {}".format(response))
-        text_lines.append("링크: {}".format(article["link"]))
-        text_lines.append("")
+    idx = 0
+    for feed, alerts in feed_alerts:
+        text_lines.append("== {} ==".format(feed["label"]))
+        html_parts.append("<h3>{}</h3>".format(html.escape(feed["label"])))
+        for article in alerts:
+            idx += 1
+            summary = alert_summary(article)
+            tag = category_tag(article)
+            response = " · ".join(common_utils.enrichment_response_bits(article.get("enrichment")))
+            text_lines.append("{}. {}{}".format(idx, tag, article["title"]))
+            text_lines.append("요약: {}".format(summary))
+            if response:
+                text_lines.append("대응: {}".format(response))
+            text_lines.append("링크: {}".format(article["link"]))
+            text_lines.append("")
 
-        html_parts.append("<hr>")
-        html_parts.append("<h3>{}. {}{}</h3>".format(idx, html.escape(tag), html.escape(article["title"])))
-        html_parts.append("<p>{}</p>".format(html.escape(summary)))
-        if response:
-            html_parts.append("<p><b>대응:</b> {}</p>".format(html.escape(response)))
-        html_parts.append(
-            '<p><a href="{0}">{0}</a></p>'.format(html.escape(article["link"]))
-        )
+            html_parts.append("<hr>")
+            html_parts.append("<h4>{}. {}{}</h4>".format(idx, html.escape(tag), html.escape(article["title"])))
+            html_parts.append("<p>{}</p>".format(html.escape(summary)))
+            if response:
+                html_parts.append("<p><b>대응:</b> {}</p>".format(html.escape(response)))
+            html_parts.append(
+                '<p><a href="{0}">{0}</a></p>'.format(html.escape(article["link"]))
+            )
 
     html_parts.append("</body></html>")
     return common_utils.send_email_message(subject, "\n".join(text_lines), "".join(html_parts))
@@ -311,7 +323,13 @@ def print_dry_run(feed, articles):
             print("  enrichment: {}".format(json.dumps(enrichment, ensure_ascii=False)))
 
 
-def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
+def collect_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
+    """기사 수집부터 중요도/클러스터링까지 처리하고, 피드별 채널로 슬랙까지 보낸다.
+
+    이메일은 실행 전체(여러 피드)를 모아 한 통으로 보내야 하므로 여기서는 보내지
+    않고, finalize_feed()가 쓸 결과(dict)만 반환한다. 새 기사가 없거나 dry-run이면
+    None을 반환한다.
+    """
     print("[*] {} 수집 시작...".format(feed["label"]))
     state = common_utils.load_json_state(state_file(feed), lambda: {"sent_ids": []})
     sent_ids = set(state["sent_ids"])
@@ -322,7 +340,7 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
 
     if not new_articles:
         print("[-] {}: 신규 기사가 없습니다.".format(feed["label"]))
-        return
+        return None
 
     print("[!] {}: 신규 기사 {}건".format(feed["label"], len(new_articles)))
 
@@ -387,23 +405,38 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
 
     if dry_run:
         print_dry_run(feed, new_articles)
-        return
+        return None
 
     # 중요도 미달 기사는 알림 없이 events.jsonl에만 적재한다 (일간 리포트에서 확인).
     alerts = [article for article in new_articles if article["alert"]]
     if alerts:
-        email_sent = send_email(feed, alerts)
         slack_sent = send_to_slack(feed, alerts)
-
-        # 두 채널 모두 실패하면 상태를 저장하지 않고 다음 실행에서 재시도합니다.
-        if not email_sent and not slack_sent:
-            print("[-] {}: 메일/슬랙 발송이 모두 실패하여 상태를 저장하지 않습니다.".format(feed["label"]))
-            return
     else:
-        email_sent = slack_sent = False
+        slack_sent = False
         print("[*] {}: 중요도 임계값 미달 {}건 — 알림 생략, 리포트용으로만 적재".format(
             feed["label"], len(new_articles)
         ))
+
+    return {
+        "feed": feed,
+        "state": state,
+        "new_articles": new_articles,
+        "alerts": alerts,
+        "slack_sent": slack_sent,
+    }
+
+
+def finalize_feed(result, email_sent):
+    """collect_feed() 결과를 이벤트 적재 + 상태 저장으로 마무리.
+
+    email_sent는 이번 실행에서 보낸 단일 통합 이메일의 성공 여부(전체 피드 공통) —
+    슬랙은 피드별로 이미 collect_feed()에서 보냈으므로 그 결과(slack_sent)를 그대로 쓴다.
+    """
+    feed = result["feed"]
+    state = result["state"]
+    new_articles = result["new_articles"]
+    alerts = result["alerts"]
+    slack_sent = result["slack_sent"]
 
     events = []
     for article in new_articles:
@@ -445,6 +478,12 @@ def process_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
             )
         )
     common_utils.append_events(events)
+
+    # 알림 대상이 있었는데 메일/슬랙이 둘 다 실패하면, 이벤트는 이미 위에서 적재했으니
+    # 상태만 저장하지 않고 다음 실행에서 알림 재시도 (리포트 데이터 유실은 없음).
+    if alerts and not email_sent and not slack_sent:
+        print("[-] {}: 메일/슬랙 발송이 모두 실패하여 알림 상태를 저장하지 않습니다(이벤트는 적재됨, 다음 실행에서 재시도).".format(feed["label"]))
+        return
 
     updated_ids = state["sent_ids"] + [article["id"] for article in new_articles]
     common_utils.save_json_state(
@@ -488,12 +527,25 @@ def main():
         parser.error("--all 또는 --feed <name>을 지정하세요.")
         return
 
+    results = []
     for feed in selected:
         # 피드 하나가 죽어도 나머지는 계속 수집한다
         try:
-            process_feed(feed, dry_run=args.dry_run, enrich_enabled=not args.no_enrich, limit=args.limit)
+            result = collect_feed(feed, dry_run=args.dry_run, enrich_enabled=not args.no_enrich, limit=args.limit)
+            if result:
+                results.append(result)
         except Exception as error:
             print("[-] {} 처리 중 오류: {}".format(feed.get("label") or feed.get("name"), error))
+
+    if args.dry_run or not results:
+        return
+
+    # 이메일은 이번 실행에서 처리한 모든 피드를 모아 한 통으로 보낸다(Gmail 발송 한도 보호).
+    feed_alerts = [(result["feed"], result["alerts"]) for result in results if result["alerts"]]
+    email_sent = send_combined_email(feed_alerts) if feed_alerts else False
+
+    for result in results:
+        finalize_feed(result, email_sent)
 
 
 if __name__ == "__main__":
