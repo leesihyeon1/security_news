@@ -77,39 +77,25 @@
   }
 
   // ===== Renderers =====
+  const INFO_CATEGORY_TOP_N = 5;
+
   function renderStatStrip(stats) {
     const tiles = [
       { label: "총 건수", value: stats.total, cls: "" },
       { label: "P1 · 긴급", value: stats.p1, cls: "p1", title: "P1: 실제 악용 중이며 자사 자산과 관련된 건 (최우선 대응 필요)" },
       { label: "P2 · 주의", value: stats.p2, cls: "p2", title: "P2: 실제 악용 중이거나, PoC 공개·중대한 영향에 자사 자산이 걸린 건" },
-      { label: "정보성", value: stats.info, cls: "", title: "긴급·주의에 해당하지 않는 일반 정보 수집성 기사(총 건수 - 긴급 - 주의)" },
     ];
+    const categoryEntries = Object.entries(stats.info_by_category || {});
+    categoryEntries.slice(0, INFO_CATEGORY_TOP_N).forEach(([name, count]) => {
+      tiles.push({ label: name, value: count, cls: "" });
+    });
+    const restCount = categoryEntries.slice(INFO_CATEGORY_TOP_N).reduce((sum, [, count]) => sum + count, 0);
+    if (restCount > 0) tiles.push({ label: "그 외", value: restCount, cls: "" });
     return (
       '<div class="stat-strip">' +
       tiles.map((t) =>
         '<div class="stat-tile ' + t.cls + '"' + (t.title ? ' title="' + esc(t.title) + '"' : "") + '><div class="num">' + esc(t.value) + '</div><div class="label">' + esc(t.label) + "</div></div>"
       ).join("") +
-      "</div>"
-    );
-  }
-
-  const INFO_CATEGORY_TOP_N = 5;
-
-  function renderInfoBreakdown(stats) {
-    const entries = Object.entries(stats.info_by_category || {});
-    if (!entries.length) return "";
-    const top = entries.slice(0, INFO_CATEGORY_TOP_N);
-    const restCount = entries.slice(INFO_CATEGORY_TOP_N).reduce((sum, [, count]) => sum + count, 0);
-    const chips = top.map(([name, count]) =>
-      '<span class="info-chip">' + esc(name) + '<span class="info-chip-count">' + esc(count) + "</span></span>"
-    );
-    if (restCount > 0) {
-      chips.push('<span class="info-chip info-chip-rest">그 외<span class="info-chip-count">' + esc(restCount) + "</span></span>");
-    }
-    return (
-      '<div class="info-breakdown">' +
-      '<span class="info-breakdown-label">정보성 ' + esc(stats.info) + "건</span>" +
-      '<div class="info-breakdown-chips">' + chips.join("") + "</div>" +
       "</div>"
     );
   }
@@ -424,7 +410,6 @@
 
     let html = "";
     html += renderStatStrip(payload.stats);
-    html += renderInfoBreakdown(payload.stats);
 
     html +=
       '<div class="region-tabs">' +

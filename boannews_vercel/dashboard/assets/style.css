@@ -262,34 +262,6 @@ html, body {
 .stat-tile.p1 .num { color: var(--p1); }
 .stat-tile.p2 .num { color: var(--p2); }
 
-/* 정보성(P1/P2 아닌 나머지) 건수를 카테고리별로 쪼개 보여주는 칩 목록 —
-   "정보성 N건"이라는 뭉뚱그려진 숫자 하나보다 어떤 종류의 기사가 섞여있는지
-   바로 보이게 한다. 상위 몇 개만 칩으로 두고 나머지는 "그 외"로 합친다. */
-.info-breakdown {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: -10px 0 22px;
-}
-.info-breakdown-label { font-size: 0.76rem; color: var(--text-muted); white-space: nowrap; }
-.info-breakdown-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.info-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 3px 9px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-.info-chip-count { color: var(--text-faint); font-weight: 500; }
-.info-chip-rest { font-style: italic; }
-
 /* ===== Sections ===== */
 .section { margin-bottom: 30px; }
 .section-title {
