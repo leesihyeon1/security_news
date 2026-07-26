@@ -64,6 +64,8 @@ CARD_REMEDIATION_CHARS = 150
 MAX_TREND_ITEMS = 5
 MAX_TREND_PER_CATEGORY = 2  # 카테고리 쏠림 방지 (슬롯이 남으면 상한 해제)
 TREND_CATEGORIES = {"공격캠페인", "침해사고", "개인정보유출", "악성코드", "공급망공격", "기술동향"}
+EXPLORE_SLOT_COUNT = 1  # 개인화(feedback_useful·search_interest) 없이 quality_score만으로
+                        # 확정하는 탐색 슬롯 수 — 필터버블 방지용 하드 가드(아래 pick_trend_reads 참고)
 
 # insight_score()의 축별 가중치 — 튜플 순서(어순위 축이 하나만 달라도 절대 우위) 대신
 # 가중합으로 바꾼 이유: 예를 들어 relevance가 high 대 medium 한 끗 차이만으로, 신선도·
@@ -462,9 +464,11 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             return 0.0
         return 1.0 if any(all(word in haystack for word in words) for words in search_queries) else 0.0
 
-    def insight_score(event):
-        """가중합 인사이트 점수(높을수록 우선) — 어느 한 축이 조금 밀려도 나머지 축의
-        압도적 우위로 뒤집을 수 있게 튜플 순서 대신 연속값으로 합산한다."""
+    def quality_score(event):
+        """개인화(feedback_useful·search_interest) 이전의 순수 품질 축 합 — 탐색 슬롯
+        (EXPLORE_SLOT_COUNT) 선정에 쓴다. 클릭·검색 이력이 없는 새로운 주제도 이 점수만
+        으로 최소 한 자리는 확실히 뽑히게 해, 개인화가 필터버블(이미 관심 보인 주제만
+        계속 추천되는 것)로 흐르지 않게 하는 안전장치다."""
         weights = [(pir_defs.get(pid) or {}).get("weight") for pid in event.get("pirs") or []]
         recency_days = (now_ts - published_ts(event)) / 86400 if published_ts(event) else 999
         w = INSIGHT_WEIGHTS
@@ -479,6 +483,15 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
             + w["hn_buzz"] * math.log1p(hn_points(event))
             + w["importance"] * (importance_score(event) / 100.0)
             + w["recency"] * max(0.0, 1.0 - recency_days / 7.0)
+        )
+
+    def insight_score(event):
+        """가중합 인사이트 점수(높을수록 우선) — quality_score에 개인화 축을 더한다.
+        어느 한 축이 조금 밀려도 나머지 축의 압도적 우위로 뒤집을 수 있게 튜플 순서
+        대신 연속값으로 합산한다."""
+        w = INSIGHT_WEIGHTS
+        return (
+            quality_score(event)
             + w["feedback_useful"] * feedback_useful_value(event)
             + w["search_interest"] * search_interest_value(event)
         )
@@ -533,6 +546,16 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         picked_ids.add(event.get("id"))
         category_counts[event.get("category") or "기타"] += 1
         covered_pirs.update(new_pirs)
+
+    # 탐색 슬롯: 개인화(클릭·검색 이력) 유무와 무관하게, quality_score만 기준으로
+    # EXPLORE_SLOT_COUNT건을 먼저 확정한다 — 필터버블 방지(위 EXPLORE_SLOT_COUNT 주석
+    # 참고). 아래 본선발 패스는 이미 채워진 자리를 자연히 건너뛴다(eligible의 picked_ids 체크).
+    explore_slots = min(EXPLORE_SLOT_COUNT, max_items)
+    for event in sorted(candidates, key=quality_score, reverse=True):
+        if len(picked) >= explore_slots:
+            break
+        if eligible(event, require_new_pir=False, require_high=False, enforce_cap=True):
+            commit(event)
 
     # 1차: 미커버 high 가중치 PIR / 2차: 미커버 PIR 전체 / 3차: 정렬순 충원(카테고리 캡 유지) /
     # 4차: 슬롯이 남으면 카테고리 상한 해제. 클러스터 대표만 남은 후보를 정렬 순서대로

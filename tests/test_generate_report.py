@@ -203,3 +203,18 @@ def test_pick_trend_reads_ignores_search_terms_that_dont_match(monkeypatch):
     events[1]["title"] = "FortiGate 취약점 발견"  # "rce"는 없어서 AND 매칭 실패해야 함
     result = gr.pick_trend_reads(events, exclude_ids=set())
     assert [e["id"] for e in result] == ["asec:1", "asec:2"]
+
+
+def test_pick_trend_reads_explore_slot_ignores_personalization(monkeypatch):
+    """탐색 슬롯(EXPLORE_SLOT_COUNT)은 quality_score만으로 뽑혀야 함 — 개인화(feedback_useful)
+    가산으로 전체 insight_score가 더 높아도, 품질 자체가 낮으면 유일한 슬롯을 못 가져가야 함
+    (필터버블 방지 가드가 실제로 작동하는지 확인)."""
+    monkeypatch.setattr(common_utils, "load_pirs", lambda: {})
+    monkeypatch.setattr(common_utils, "load_feedback", lambda: {"asec:1": {"label": "useful", "via": "slack"}})
+
+    events = _same_published_at([
+        _trend_candidate_event(1, category="침해사고", relevance="medium", reliability="B"),  # 낮은 품질 + 개인화 가산
+        _trend_candidate_event(2, category="침해사고", relevance="high"),  # 높은 품질, 개인화 없음
+    ])
+    result = gr.pick_trend_reads(events, exclude_ids=set(), max_items=1)
+    assert [e["id"] for e in result] == ["asec:2"]
