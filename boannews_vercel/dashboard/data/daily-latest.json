@@ -1,0 +1,145 @@
+{
+  "title": "일간 보안 인텔리전스 리포트",
+  "period": "daily",
+  "period_label": "2026-07-26 00:00 ~ 2026-07-27 00:00 (UTC)",
+  "generated_at": "2026-07-27T01:59:23Z",
+  "narrative": "[총평]\n이번 기간에는 오라클 미들웨어 제품군에서 인증 없이 원격 코드 실행이 가능한 치명적 취약점 5건이 공개되었고, 마이크로소프트 정기 패치를 통해 익스체인지·원격 데스크톱·미디어 파운데이션 등 핵심 구성 요소의 원격 코드 실행 취약점 다수가 패치되었습니다.\n\n[핵심 위협 TOP 3]\n1. 오라클 웹로직·지벨·JDE 치명적 취약점 군: 인증 없이 HTTP·SOAP 요청만으로 서버 완전 장악이 가능해 인터넷 노출 자산이 즉시 공격 표적이 될 수 있습니다.\n2. 마이크로소프트 7월 정기 패치 핵심 취약점 군: 익스체인지 서버, 원격 데스크톱 서비스, 미디어 파운데이션 등 업무 필수 인프라에서 원격 코드 실행 취약점이 다수 포함되어 전사적 패치 적용이 시급합니다.\n3. 채비 전기차 충전 플랫폼 개인정보 유출 사고: 30만 건의 이메일·암호화 개인정보가 유출되어 스미싱·자격증명 재사용 등 2차 공격 시도가 예상되므로 사용자 안내와 모니터링 강화가 필요합니다.\n\n[권고 조치]\n1. 오라클 웹로직 서버, 지벨 CRM, JDE 엔터프라이즈원 등 치명적 취약점 영향 버전을 긴급 점검하고 벤더 패치를 최우선 적용할 필요가 있습니다.\n2. 마이크로소프트 익스체인지, 원격 데스크톱 서비스, 미디어 파운데이션 등 원격 코드 실행 취약점 패치를 전사 자산에 신속히 배포할 것을 권장합니다.\n3. 채비 유출 이메일 주소를 활용한 피싱 메일 유입을 차단하기 위해 메일 보안 정책을 강화하고 임직원 대상 주의 안내를 실시하는 것이 좋습니다.",
+  "stats": {
+    "total": 140,
+    "p1": 0,
+    "p2": 2,
+    "info": 138,
+    "info_by_category": {
+      "미분류": 130,
+      "제품행사": 5,
+      "기타": 1,
+      "정책규제": 1,
+      "기술동향": 1
+    },
+    "by_source": {
+      "msrc": 80,
+      "nvd": 50,
+      "boannews": 10
+    }
+  },
+  "cards": [],
+  "domestic": {
+    "highlights": [
+      {
+        "title": "AI 활용한 공격의 고도화, LLM과 RAG 활용해 대응한다",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=aa423b5ea5&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144847%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-07-27T09:49:00+09:00",
+        "summary": "미토스가 불러온 AI를 활용한 고도화된 공격 가능성... AI로 대응하는 ISEC Training Course, 8월 11~12일 ISEC 동시개최 행사로 열려 [보안뉴스 원병철 기자] 인공지능이 피싱 메일 작성이나 악성코드 제작을 보조하는 수준을 넘어, 취약점을 직접 탐색하고 공격 코드를 개발하는 단계로 발전하고 있다. 이러한 변화를 상징적으로 보여준 사"
+      },
+      {
+        "title": "전기차 충천 플랫폼 채비, 개인정보 30만여건 유출 신고... “이메일 악용 피싱 주의”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=e18910dd3a&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144842%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P2",
+        "category": "개인정보유출",
+        "published_at": "2026-07-26T16:33:00+09:00",
+        "summary": "전기차 충전 플랫폼 채비가 해킹 공격으로 회원 개인정보 약 30만 건이 유출됐음을 확인하고 관계당국에 신고했다. 유출된 정보는 이메일 주소 16만5천 건과 일부 회원의 암호화된 이름, 연락처, 성별, 생년월일 등이다. 채비는 침해 경로 차단, 취약점 조치, 모니터링 강화 등 대응 조치를 취하고 비밀번호 변경과 피싱 주의를 당부했다."
+      },
+      {
+        "title": "로그프레소, 정보보호 공시 확대 앞두고 클라우드 SIEM 고객 기반 확대",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=53fe261247&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144848%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-27T10:08:00+09:00",
+        "summary": "로그프레소가 2027년 정보보호 공시 의무 확대와 ISMS-P 인증 강화를 앞두고 클라우드 SIEM 고객사를 제조·유통·엔터테인먼트 분야로 확대하고 있다. 글로벌 자동차 부품 기업, 대형 온라인 유통 플랫폼, 글로벌 엔터테인먼트 기업 등을 신규 확보했으며, AI 에이전트 기반 자동 대응과 220여 종 연동 앱을 강점으로 내세운다. 클라우드 네이티브 전환과 멀티클라우드 지원을 위해 카카오엔터프라이즈 출신 전문가를 영입했다."
+      },
+      {
+        "title": "[속담으로 배우는 100가지 보안 습관 74] 등잔 밑이 어둡다(4)-택배 송장 그대로 버리면 생기는 문제",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=10e3162414&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144226%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-07-27T09:06:00+09:00",
+        "summary": "택배 송장에 포함된 이름·주소·전화번호 등 개인정보가 스미싱·스팸 등 2차 피해로 이어질 수 있음을 경고하며, 주문 시 안심번호(가상번호) 사용과 수령 후 운송장·바코드 완전 제거·파쇄를 실천할 것을 권고하는 보안 습관 칼럼이다."
+      },
+      {
+        "title": "히타치 밴타라 美노먼 제조시설 세계경제포럼 ‘등대공장’ 선정 발표",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=25ed80c71a&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144850%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-27T10:44:00+09:00",
+        "summary": "히타치 밴타라의 미국 오클라호마주 노먼 스토리지 제조시설이 세계경제포럼(WEF) '등대공장'으로 선정됐다. AI 기반 자율 의사결정과 공급망 최적화를 통해 리드타임 77% 단축, 재고 50% 감축 등 제조 혁신 성과를 인정받았다. HS효성인포메이션시스템은 이 검증된 AI·데이터 인프라 역량을 바탕으로 국내 고객의 AI 전환을 지원할 계획이다."
+      },
+      {
+        "title": "넷앤드, Gateway·Agent 하이브리드 접근제어로 보안 사각지대 해소... ‘HIWARE UAC’ 출시",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=4eff856147&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144852%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-27T10:42:00+09:00",
+        "summary": "넷앤드가 게이트웨이 프록시와 에이전트 기반 심층 통제를 결합한 하이브리드 접근제어 솔루션 'HIWARE UAC'를 출시했다. 우회 접속 경로를 커널 레벨에서 실시간 탐지·차단하고 제로트러스트 원칙인 지속적 검증과 최소 권한을 구현한다. 기존 HIWARE 인프라와 하이브리드 구성으로 단일 정책 관리와 비즈니스 연속성을 동시에 제공한다."
+      },
+      {
+        "title": "휴네시온, 베트남 SOAR 시장 공략 본격화... 판매대리점 확보",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=1584cccdd1&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144851%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-27T10:41:00+09:00",
+        "summary": "휴네시온이 베트남 보안 기업 SCS와 AI 기반 SOAR 플랫폼 '시큐어 오케스트라'의 베트남 시장 판매대리점 계약을 체결했다. 양사는 공공·금융·제조 분야를 대상으로 공동 마케팅과 기술 협력을 통해 사업을 확대할 계획이다. 이번 계약은 동남아시아 시장 진출을 위한 교두보 마련으로 평가된다."
+      },
+      {
+        "title": "개인정보 유출 조사에 평균 8개월... “중대 사건에 인력 집중”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=53ebbe5a7a&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144843%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-07-26T16:49:00+09:00",
+        "summary": "개인정보보호위원회의 개인정보 유출·침해 사건 조사 평균 소요 기간이 8개월(200일 이상)에 달하며, 중대 사건에 인력이 집중돼 일반 사건 처리가 지연되는 문제가 지적됐다. 국회예산정책처는 조사 인력 확대에도 불구하고 사건별 우선순위와 인력 배분 기준이 필요하다고 진단했다. SK텔레콤·쿠팡 등 대규모 유출사고는 집중조사 TF 투입으로 상대적으로 신속히 처리됐으나, 이로 인해 다른 사건 처리가 늦어지는 부작용이 발생한다."
+      },
+      {
+        "title": "9500억달러 반도체 공급·생산 협력... 샌프란시스코 AI서밋 성과는?",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=38fc3b5347&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144841%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-07-26T10:59:00+09:00",
+        "summary": "샌프란시스코 AI서밋에서 국내 주요 기업과 글로벌 빅테크 간 9500억 달러 규모 반도체 공급·생산 협력 등 6건의 협약 체결. 삼성, SK, 네이버, 현대차 등이 엔비디아, 브로드컴, 앤트로픽, 오픈AI 등과 AI 인프라 구축, 피지컬 AI 개발 협력 발표. 정부가 '샌프란시스코 AI선언' 통해 대한민국을 글로벌 AI 공급망 핵심 거점으로 육성하겠다는 정책 의지 표명."
+      },
+      {
+        "title": "토스, 전국 5000개 마트에 ‘페이스페이’ 도입... POS사 투게더스와 MOU",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=beb7df2e86&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144855%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-27T10:54:00+09:00",
+        "summary": "토스가 중소마트 POS 솔루션 기업 투게더스와 업무협약을 체결하고 전국 5,000여 개 마트에 얼굴 결제 서비스 '페이스페이'를 순차 도입한다. 양사는 투게더포스 단말기에 토스페이 결제를 연동하고 공동 프로모션 및 가맹점 마케팅 지원도 확대할 계획이다. 이번 협력으로 고객은 지갑이나 휴대폰 없이 얼굴 인증만으로 결제 가능해진다."
+      }
+    ],
+    "trend_reads": []
+  },
+  "overseas": {
+    "highlights": [],
+    "trend_reads": []
+  },
+  "keywords": [
+    "Oracle WebLogic Server",
+    "Oracle Siebel CRM",
+    "Oracle JD Edwards",
+    "Microsoft Exchange Server",
+    "Windows Remote Desktop Services",
+    "채비",
+    "미토스",
+    "플루언트 폼즈"
+  ]
+}
