@@ -23,6 +23,10 @@
     query: "",
     searchIndex: null, // null = 아직 로딩 전, 로드되면 배열
     pages: {}, // pageKey -> 현재 페이지 번호(1부터)
+    // "심층분석 보기"를 누른 기록 — 새로 누른 게 앞에 오도록 unshift한다. 새로고침하면
+    // 사라지는 세션 한정 상태(서버 쪽 Redis 캐시와 별개 — 다시 눌러도 서버는 캐시로 즉시
+    // 응답하지만, 화면에 "이미 봤다"는 걸 표시하려면 클라이언트도 따로 기억해야 한다).
+    insightHistory: [],
   };
 
   const $app = document.getElementById("app");
@@ -31,6 +35,7 @@
   const $searchInput = document.getElementById("search-input");
   const $keywordSidebar = document.getElementById("keyword-sidebar");
   const $trendSidebar = document.getElementById("trend-sidebar");
+  const $insightSidebar = document.getElementById("insight-sidebar");
 
   // ===== Theme =====
   function initTheme() {
@@ -134,13 +139,22 @@
     return '<div class="pagination">' + buttons + "</div>";
   }
 
-  // 심층분석 버튼 — opts.analyzable로 켜진 곳(인사이트·추천기사 탭)에서만 표시된다.
+  function insightEntryFor(ref) {
+    return state.insightHistory.find((entry) => entry.ref === ref);
+  }
+
+  // 심층분석 버튼 — opts.analyzable로 켜진 곳(추천기사 탭)에서만 표시된다. 결과는
+  // 이 자리에 바로 안 보여주고 인사이트 탭/사이드바로 보낸다 — 이미 분석된 기사는
+  // 버튼 대신 짧은 확인 문구만 남긴다(재클릭·중복 히스토리 방지).
   // event.ref가 없으면(구버전 payload 캐시 등) 버튼 자체를 안 만든다.
   function renderAnalyzeBox(event) {
     if (!event.ref) return "";
+    if (insightEntryFor(event.ref)) {
+      return '<div class="analyze-box analyze-done">✓ 인사이트 탭에서 확인 가능</div>';
+    }
     return (
       '<div class="analyze-box" data-ref="' + esc(event.ref) + '" data-url="' + esc(event.url || "") +
-      '" data-title="' + esc(event.title || "") + '">' +
+      '" data-title="' + esc(event.title || "") + '" data-source-label="' + esc(event.source_label || event.source || "") + '">' +
       '<button type="button" class="analyze-btn">심층분석 보기</button>' +
       '<div class="analyze-result"></div>' +
       "</div>"
@@ -519,6 +533,59 @@
     });
   }
 
+  // 인사이트(심층분석 결과) 목록 — 추천기사 탭 등에서 트리거된 분석이 쌓이는 곳.
+  // 탭 본문과 사이드바가 같은 마크업(.trend-item류 accordion)을 그대로 재사용한다.
+  function renderInsightEntries(items) {
+    return (
+      '<div class="trend-list">' +
+      items.map((entry, idx) =>
+        '<div class="trend-item" data-idx="' + idx + '">' +
+        '<button type="button" class="trend-item-head">' +
+        '<span class="trend-item-source">' + esc(entry.source_label || "") + "</span>" +
+        '<span class="trend-item-title">' + esc(entry.title) + "</span>" +
+        "</button>" +
+        '<div class="trend-item-body">' +
+        '<div class="analyze-text">' + esc(entry.analysis || "").replace(/\n/g, "<br>") + "</div>" +
+        (entry.url ? '<a href="' + esc(entry.url) + '" target="_blank" rel="noopener" class="trend-item-link">기사 보기</a>' : "") +
+        "</div>" +
+        "</div>"
+      ).join("") +
+      "</div>"
+    );
+  }
+
+  function renderInsightTabContent() {
+    if (!state.insightHistory.length) {
+      return (
+        '<div class="section"><div class="section-title">인사이트</div>' +
+        '<div class="empty-state">아직 분석한 기사가 없습니다. 추천기사 탭에서 심층분석 버튼을 눌러보세요.</div></div>'
+      );
+    }
+    return (
+      '<div class="section"><div class="section-title">인사이트 <span class="count">' +
+      state.insightHistory.length + '건</span></div>' +
+      renderInsightEntries(state.insightHistory) +
+      "</div>"
+    );
+  }
+
+  // 넓은 화면에서 사이드바로도 같은 히스토리를 보여준다(탭은 좁은 화면용 접근 경로로 유지).
+  function renderInsightSidebar() {
+    if (!state.insightHistory.length) {
+      $insightSidebar.innerHTML = "";
+      return;
+    }
+    $insightSidebar.innerHTML =
+      '<div class="trend-sidebar-title">인사이트 <span class="count">' + state.insightHistory.length + '건</span></div>' +
+      renderInsightEntries(state.insightHistory);
+
+    $insightSidebar.querySelectorAll(".trend-item-head").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        btn.closest(".trend-item").classList.toggle("is-open");
+      });
+    });
+  }
+
   function render(payload) {
     // 기간이 바뀌면 이전 탭이 새 기간에 없을 수 있다(예: 주간 "통계" 탭 상태에서 일간으로
     // 전환) — 그럴 땐 요약 탭으로 되돌린다.
@@ -529,6 +596,7 @@
     $generatedAt.textContent = payload.title + " · 기간: " + payload.period_label + " · 생성: " + fmtDate(payload.generated_at);
     renderKeywordSidebar(payload);
     renderTrendSidebar(payload);
+    renderInsightSidebar();
 
     let html = "";
     html += renderStatStrip(payload.stats);
@@ -582,14 +650,9 @@
       // 통계 탭: 카테고리·소스 전체 분포 + 주간 동향(전주 대비 급증, 주간 리포트에만 존재) + TOP 순위
       html += renderStatsTab(payload);
     } else if (state.tab === "insight") {
-      // 인사이트 탭: 요약 탭과 같은 "주요 뉴스" 상위 N건에 심층분석 버튼을 붙여서 보여준다.
-      const insightHighlights = ((payload.domestic.highlights || []).concat(payload.overseas.highlights || []))
-        .slice(0, SUMMARY_HIGHLIGHTS_LIMIT);
-      html +=
-        '<div class="section"><div class="section-title">인사이트 <span class="count">주요 뉴스 심층분석 · ' +
-        insightHighlights.length + "건</span></div>" +
-        renderItemList(insightHighlights, { analyzable: true }) +
-        "</div>";
+      // 인사이트 탭: 별도 기사 목록이 아니라, 추천기사 탭 등에서 심층분석을 누른
+      // 결과가 쌓이는 히스토리다(좁은 화면용 접근 경로 — 넓은 화면은 사이드바로도 봄).
+      html += renderInsightTabContent();
     } else if (state.tab === "history") {
       // History 탭: 검색어가 있으면 전체 기간 검색 결과, 없으면 월별 아카이브 브라우저
       html += renderHistorySection();
@@ -616,6 +679,13 @@
 
     $app.querySelectorAll(".analyze-btn").forEach((btn) => {
       btn.addEventListener("click", () => runAnalysis(btn));
+    });
+
+    // 인사이트 탭 본문에서도 accordion 펼치기(사이드바와 같은 마크업 재사용)
+    $app.querySelectorAll(".trend-item-head").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        btn.closest(".trend-item").classList.toggle("is-open");
+      });
     });
 
     $app.querySelectorAll(".history-month-toggle").forEach((btn) => {
@@ -666,11 +736,13 @@
   }
 
   // "심층분석 보기" 버튼 클릭 시 analyze.js를 호출한다. 서버가 캐시·요청 제한을
-  // 관리하므로 여기서는 로딩 상태 표시와 에러 메시지 노출만 신경 쓰면 된다.
+  // 관리하므로 여기서는 로딩/에러 표시만 신경 쓰면 된다. 성공하면 이 자리에 결과를
+  // 바로 안 보여주고 insightHistory에 넣은 뒤 재렌더링한다 — 결과는 인사이트
+  // 탭/사이드바에서 확인(버튼도 그때 "확인 가능" 문구로 바뀐다).
   async function runAnalysis(btn) {
     const box = btn.closest(".analyze-box");
     const resultEl = box.querySelector(".analyze-result");
-    const payload = { ref: box.dataset.ref, url: box.dataset.url, title: box.dataset.title };
+    const requestBody = { ref: box.dataset.ref, url: box.dataset.url, title: box.dataset.title };
 
     btn.disabled = true;
     btn.textContent = "분석 중…";
@@ -681,7 +753,7 @@
       res = await fetch(ANALYZE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(requestBody),
       });
       data = await res.json().catch(() => ({}));
     } catch (error) {
@@ -698,8 +770,14 @@
       return;
     }
 
-    resultEl.innerHTML = '<div class="analyze-text">' + esc(data.analysis || "").replace(/\n/g, "<br>") + "</div>";
-    btn.remove(); // 결과가 나오면 버튼은 치우고 재클릭(=중복 요청) 여지를 없앤다
+    state.insightHistory.unshift({
+      ref: requestBody.ref,
+      title: requestBody.title,
+      url: requestBody.url,
+      source_label: box.dataset.sourceLabel,
+      analysis: data.analysis || "",
+    });
+    render(state.cache[state.period]);
   }
 
   // 검색어 입력이 멈춘 뒤(SEARCH_LOG_DEBOUNCE_MS) 한 번만 기록한다 — 관심사 파악·

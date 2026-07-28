@@ -403,7 +403,7 @@ html, body {
   line-height: 1.5;
 }
 
-/* ===== 심층분석 버튼(인사이트·추천기사 탭) ===== */
+/* ===== 심층분석 버튼(추천기사 탭) — 결과는 여기 안 보여주고 인사이트 탭/사이드바로 보냄 ===== */
 .analyze-box { margin-top: 10px; }
 .analyze-btn {
   display: inline-flex;
@@ -420,8 +420,13 @@ html, body {
 .analyze-btn:hover { border-color: var(--accent); }
 .analyze-btn:disabled { color: var(--text-faint); cursor: default; }
 .analyze-result:empty { display: none; }
+.analyze-done {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ok);
+}
 .analyze-text {
-  margin-top: 8px;
   padding: 12px 14px;
   background: var(--bg);
   border: 1px solid var(--border);
