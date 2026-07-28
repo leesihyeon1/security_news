@@ -337,6 +337,7 @@ def build_email_body(nvd_items, kev_items):
         html_body += "<h3>CISA KEV - Known Exploited Vulnerabilities</h3>"
 
         for idx, item in enumerate(kev_items, start=1):
+            tracked_link = common_utils.tracking_url("cisa_kev:{}".format(item["id"]), item["link"])
             text_body += "{}. {}\n".format(idx, item["cve_id"])
             text_body += "Product: {} {}\n".format(item["vendor"], item["product"])
             text_body += "Name: {}\n".format(item["name"])
@@ -344,7 +345,7 @@ def build_email_body(nvd_items, kev_items):
             text_body += "Summary: {}\n".format(item["description"])
             text_body += "Required action: {}\n".format(item["action"])
             text_body += "Due date: {}\n".format(item["due_date"])
-            text_body += "CISA KEV link: {}\n\n".format(item["link"])
+            text_body += "CISA KEV link: {}\n\n".format(tracked_link)
 
             html_body += """
             <hr>
@@ -366,7 +367,7 @@ def build_email_body(nvd_items, kev_items):
                 description=html.escape(item["description"]),
                 action=html.escape(item["action"]),
                 due_date=html.escape(item["due_date"]),
-                link=html.escape(item["link"]),
+                link=html.escape(tracked_link),
             )
 
     if nvd_items:
@@ -374,6 +375,7 @@ def build_email_body(nvd_items, kev_items):
         html_body += "<h3>NVD High/Critical CVE - CVSS &gt;= {}</h3>".format(MIN_NVD_CVSS_SCORE)
 
         for idx, item in enumerate(nvd_items, start=1):
+            tracked_link = common_utils.tracking_url("nvd:{}".format(item["id"]), item["link"])
             references = "\n".join(["- {}".format(link) for link in item["references"]])
             display_id = cve_display_id(item)
 
@@ -383,7 +385,7 @@ def build_email_body(nvd_items, kev_items):
             text_body += "Published: {}\n".format(item["published"])
             text_body += "Last modified: {}\n".format(item["last_modified"])
             text_body += "Summary: {}\n".format(item["description"])
-            text_body += "NVD link: {}\n".format(item["link"])
+            text_body += "NVD link: {}\n".format(tracked_link)
             if references:
                 text_body += "References:\n{}\n".format(references)
             text_body += "\n"
@@ -406,7 +408,7 @@ def build_email_body(nvd_items, kev_items):
                 published=html.escape(item["published"]),
                 last_modified=html.escape(item["last_modified"]),
                 description=html.escape(item["description"]),
-                link=html.escape(item["link"]),
+                link=html.escape(tracked_link),
             )
 
             if item["references"]:
@@ -480,8 +482,10 @@ def send_to_slack(nvd_items, kev_items):
             date_added = item.get("date_added", "-")
             desc = item.get("description", "설명 없음")
             action = item.get("action", "설명 없음")
-            link = item.get("link", "https://www.cisa.gov")
-            
+            link = common_utils.tracking_url(
+                "cisa_kev:{}".format(item.get("id", "")), item.get("link", "https://www.cisa.gov")
+            )
+
             triage = item.get("triage")
             marker = common_utils.triage_marker(triage) or "• "
             blocks.append({
@@ -510,8 +514,10 @@ def send_to_slack(nvd_items, kev_items):
             score = item.get("score", "N/A")
             severity = item.get("severity", "N/A")
             desc = item.get("description", "설명 없음")
-            link = item.get("link", "https://nvd.nist.gov")
-            
+            link = common_utils.tracking_url(
+                "nvd:{}".format(item.get("id", "")), item.get("link", "https://nvd.nist.gov")
+            )
+
             # 슬랙 글자수 초과 방지 가공
             if len(desc) > 150: 
                 desc = desc[:150] + "..."

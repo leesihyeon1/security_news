@@ -229,11 +229,12 @@ def build_email_body(items):
     """.format(checked_at=html.escape(checked_at))
 
     for idx, item in enumerate(items, start=1):
+        tracked_link = common_utils.tracking_url("kisa:{}".format(item["id"]), item["link"])
         text_body += "{}. {}\n".format(idx, item["title"])
         text_body += "Source: {}\n".format(item["source"])
         text_body += "Published: {}\n".format(item["published"])
         text_body += "Summary: {}\n".format(item["summary"])
-        text_body += "Link: {}\n\n".format(item["link"])
+        text_body += "Link: {}\n\n".format(tracked_link)
 
         html_body += """
         <hr>
@@ -248,7 +249,7 @@ def build_email_body(items):
             source=html.escape(item["source"]),
             published=html.escape(item["published"]),
             summary=html.escape(item["summary"]),
-            link=html.escape(item["link"]),
+            link=html.escape(tracked_link),
         )
 
     html_body += "</body></html>"
@@ -311,6 +312,7 @@ def send_to_slack(items):
              item["body_chars"] = 0
 
         triage = item.get("triage")
+        tracked_link = common_utils.tracking_url("kisa:{}".format(item["id"]), item["link"])
         blocks.append({
             "type": "section",
             "text": {
@@ -320,7 +322,7 @@ def send_to_slack(items):
                     f"> 출처: {item['source']}{common_utils.triage_note(triage)}\n\n"
                     f"🤖 *AI 분석 결과*\n"
                     f"{ai_result[:2500]}\n\n"
-                    f"🔗 <{item['link']}|기사 바로가기>"
+                    f"🔗 <{tracked_link}|기사 바로가기>"
             }
         })
 

@@ -225,6 +225,7 @@ def build_email_body(items):
     """.format(checked_at=html.escape(checked_at))
 
     for idx, item in enumerate(items, start=1):
+        tracked_link = common_utils.tracking_url("msrc:{}".format(item["id"]), item["link"])
         text_body += "{}. {}\n".format(idx, display_cve_id(item))
         text_body += "Title: {}\n".format(item["title"])
         text_body += "Severity: {}\n".format(item["severity"])
@@ -233,7 +234,7 @@ def build_email_body(items):
         text_body += "Exploit status: {}\n".format(item["exploited"])
         text_body += "Document: {}\n".format(item["document_id"])
         text_body += "Summary: {}\n".format(item["description"])
-        text_body += "MSRC link: {}\n\n".format(item["link"])
+        text_body += "MSRC link: {}\n\n".format(tracked_link)
 
         html_body += """
         <hr>
@@ -256,7 +257,7 @@ def build_email_body(items):
             exploited=html.escape(item["exploited"]),
             document_id=html.escape(item["document_id"]),
             description=html.escape(item["description"]),
-            link=html.escape(item["link"]),
+            link=html.escape(tracked_link),
         )
 
     html_body += "</body></html>"
@@ -296,11 +297,12 @@ def send_to_slack(items):
         # Microsoft 패치 데이터 구조에 맞춘 출력
         triage = item.get("triage")
         marker = common_utils.triage_marker(triage) or "• "
+        tracked_link = common_utils.tracking_url("msrc:{}".format(item.get("id", "")), item.get("link", "#"))
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"{marker}*{item.get('title', '제목 없음')}*\n> CVSS Score: `{item.get('score', 'N/A')}`\n> <{item.get('link', '#')}|패치 상세 보기>{common_utils.triage_note(triage)}"
+                "text": f"{marker}*{item.get('title', '제목 없음')}*\n> CVSS Score: `{item.get('score', 'N/A')}`\n> <{tracked_link}|패치 상세 보기>{common_utils.triage_note(triage)}"
             }
         })
 

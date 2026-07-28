@@ -139,6 +139,7 @@ def parse_rss_datetime(value):
 
 def send_to_slack(title, link, summary, triage=None):
     """슬랙으로 알림을 전송하는 함수"""
+    tracked_link = common_utils.tracking_url("asec:{}".format(link), link)
     payload = {
         "text": "🤖 안랩 ASEC 신규 리포트가 게시되었습니다.",
         "blocks": [
@@ -156,7 +157,7 @@ def send_to_slack(title, link, summary, triage=None):
                     "text":
                         f"{common_utils.triage_marker(triage)}*📌 {title}*{common_utils.triage_note(triage)}\n\n"
                         f"{summary}\n\n"
-                        f"🔗 <{link}|리포트 바로가기>"
+                        f"🔗 <{tracked_link}|리포트 바로가기>"
                 }
             },
             {
@@ -209,8 +210,9 @@ def main():
         link = item_link(post)
         title = item_text(post, "title") or link
 
+        tracked_link = common_utils.tracking_url("asec:{}".format(link), link)
         email_subject = f"[ASEC 인텔리전스 알림] {title}"
-        email_body = f"📌 제목: {title}\n🔗 링크: {link}"
+        email_body = f"📌 제목: {title}\n🔗 링크: {tracked_link}"
 
         content_text = fetch_post_body(link) or item_content_text(post)
         published_at = parse_rss_datetime(item_text(post, "pubDate"))

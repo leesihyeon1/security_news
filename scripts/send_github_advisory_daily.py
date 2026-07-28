@@ -220,6 +220,7 @@ def build_email_body(items):
     """.format(checked_at=html.escape(checked_at))
 
     for idx, item in enumerate(items, start=1):
+        tracked_link = common_utils.tracking_url("github_advisory:{}".format(item["id"]), item["link"])
         affected_text = "\n".join(
             "- {ecosystem}/{package}, vulnerable: {vulnerable_range}, patched: {patched_versions}".format(**affected)
             for affected in item["affected"]
@@ -234,7 +235,7 @@ def build_email_body(items):
         text_body += "Summary: {}\n".format(item["description"])
         if affected_text:
             text_body += "Affected packages:\n{}\n".format(affected_text)
-        text_body += "GitHub link: {}\n\n".format(item["link"])
+        text_body += "GitHub link: {}\n\n".format(tracked_link)
 
         html_body += """
         <hr>
@@ -255,7 +256,7 @@ def build_email_body(items):
             cvss_score=html.escape(item["cvss_score"]),
             published=html.escape(item["published"]),
             description=html.escape(item["description"]),
-            link=html.escape(item["link"]),
+            link=html.escape(tracked_link),
         )
 
         if item["affected"]:
@@ -305,11 +306,12 @@ def send_to_slack(items):
     for item in items:
         triage = item.get("triage")
         marker = common_utils.triage_marker(triage) or "• "
+        tracked_link = common_utils.tracking_url("github_advisory:{}".format(item.get("id", "")), item.get("link", "#"))
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"{marker}*{item.get('title', '제목 없음')}*\n> Severity: `{item.get('severity', 'N/A')}`\n> Link: <{item.get('link', '#')}|GitHub advisory>{common_utils.triage_note(triage)}"
+                "text": f"{marker}*{item.get('title', '제목 없음')}*\n> Severity: `{item.get('severity', 'N/A')}`\n> Link: <{tracked_link}|GitHub advisory>{common_utils.triage_note(triage)}"
             }
         })
 

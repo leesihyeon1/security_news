@@ -187,6 +187,7 @@ def build_email_body(news_items):
         summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
         score = (news.get("importance") or {}).get("score")
         response = " · ".join(common_utils.enrichment_response_bits(news.get("enrichment")))
+        tracked_link = common_utils.tracking_url("boannews:{}".format(news["id"]), news["link"])
 
         text_body += "{}. {}\n".format(idx, news["title"])
         text_body += "요약: {}\n".format(summary)
@@ -194,7 +195,7 @@ def build_email_body(news_items):
             text_body += "대응: {}\n".format(response)
         if score is not None:
             text_body += "중요도: {}점\n".format(score)
-        text_body += "기사 링크: {}\n".format(news["link"])
+        text_body += "기사 링크: {}\n".format(tracked_link)
         text_body += "발행일: {}\n\n".format(news["pub_date"])
 
         html_body += """
@@ -210,7 +211,7 @@ def build_email_body(news_items):
             summary=html.escape(summary),
             score_row="<p><b>중요도:</b> {}점</p>".format(score) if score is not None else "",
             pub_date=html.escape(news["pub_date"]),
-            link=html.escape(news["link"]),
+            link=html.escape(tracked_link),
         )
 
     html_body += """
@@ -243,6 +244,7 @@ def send_to_slack(news_items):
         ai_summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
         response = " · ".join(common_utils.enrichment_response_bits(news.get("enrichment")))
         response_line = f"\n🔧 {response}" if response else ""
+        tracked_link = common_utils.tracking_url("boannews:{}".format(news["id"]), news["link"])
 
         triage = news.get("triage")
         blocks.append({
@@ -252,7 +254,7 @@ def send_to_slack(news_items):
                 "text":
                     f"{common_utils.triage_marker(triage)}📰 *{news['title']}*\n\n"
                     f"{ai_summary}{common_utils.triage_note(triage)}{response_line}\n\n"
-                    f"<{news['link']}|기사 보기> · 중요도 {(news.get('importance') or {}).get('score', '-')}점"
+                    f"<{tracked_link}|기사 보기> · 중요도 {(news.get('importance') or {}).get('score', '-')}점"
                 }
     })
         # 피드백 참조 해시 — 슬랙 폴러가 반응(👍/👎)을 이벤트로 역매핑한다

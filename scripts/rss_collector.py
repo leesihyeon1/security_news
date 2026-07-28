@@ -210,11 +210,12 @@ def send_combined_email(feed_alerts):
             summary = alert_summary(article)
             tag = category_tag(article)
             response = " · ".join(common_utils.enrichment_response_bits(article.get("enrichment")))
+            tracked_link = common_utils.tracking_url("{}:{}".format(feed["name"], article["id"]), article["link"])
             text_lines.append("{}. {}{}".format(idx, tag, article["title"]))
             text_lines.append("요약: {}".format(summary))
             if response:
                 text_lines.append("대응: {}".format(response))
-            text_lines.append("링크: {}".format(article["link"]))
+            text_lines.append("링크: {}".format(tracked_link))
             text_lines.append("")
 
             html_parts.append("<hr>")
@@ -223,7 +224,7 @@ def send_combined_email(feed_alerts):
             if response:
                 html_parts.append("<p><b>대응:</b> {}</p>".format(html.escape(response)))
             html_parts.append(
-                '<p><a href="{0}">{0}</a></p>'.format(html.escape(article["link"]))
+                '<p><a href="{0}">{0}</a></p>'.format(html.escape(tracked_link))
             )
 
     html_parts.append("</body></html>")
@@ -244,6 +245,7 @@ def send_to_slack(feed, articles):
     for article in articles:
         triage = article.get("triage")
         response = " · ".join(common_utils.enrichment_response_bits(article.get("enrichment")))
+        tracked_link = common_utils.tracking_url("{}:{}".format(feed["name"], article["id"]), article["link"])
         blocks.append(
             {
                 "type": "section",
@@ -257,7 +259,7 @@ def send_to_slack(feed, articles):
                             common_utils.triage_note(triage),
                             alert_summary(article),
                             "\n🔧 {}".format(response) if response else "",
-                            article["link"],
+                            tracked_link,
                             (article.get("importance") or {}).get("score", "-"),
                         )
                     ),
