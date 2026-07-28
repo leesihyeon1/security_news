@@ -627,6 +627,8 @@ def main():
                 email_sent=email_sent,
                 slack_sent=slack_sent,
                 triage=item.get("triage"),
+                category="취약점",
+                category_reason="CISA KEV API 소스 — 실제 악용 확인된 취약점이므로 카테고리 고정(LLM 판단 아님)",
             )
             for item in new_kev_items
         ]
