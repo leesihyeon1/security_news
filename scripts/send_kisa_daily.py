@@ -4,6 +4,7 @@ import os
 import re
 import smtplib
 import sys
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 import requests
@@ -42,6 +43,10 @@ STATE_FILE = common_utils.STATE_DIR / "kisa_sent_state.json"
 MAX_ITEMS_PER_EMAIL = int(os.environ.get("MAX_KISA_ITEMS_PER_EMAIL", "10"))
 MAX_STORED_SENT_IDS = 500
 XML_DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>", re.IGNORECASE)
+
+# boho.or.kr이 연속 요청을 봇으로 보고 막는지 확인용 — 기사 본문 수집 실패율이
+# 유독 높았던 원인 후보라 요청 사이에 간격을 둬본다.
+ARTICLE_FETCH_DELAY_SECONDS = 2
 
 
 def clean_text(value):
@@ -275,7 +280,10 @@ def send_to_slack(items):
         {"type": "divider"}
     ]
 
-    for item in items:
+    for idx, item in enumerate(items):
+
+        if idx > 0:
+            time.sleep(ARTICLE_FETCH_DELAY_SECONDS)
 
         print(f"본문 수집중: {item['title']}")
 
