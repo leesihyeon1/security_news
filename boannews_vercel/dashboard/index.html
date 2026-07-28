@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>국내/해외 뉴스 클리핑</title>
+<meta name="description" content="일간/주간 보안 뉴스 동향 — 국내/해외">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">국내/해외 뉴스 클리핑</span>
+    </div>
+    <div class="topbar-controls">
+      <input type="search" id="search-input" class="search-input" placeholder="검색 (제목·요약·카테고리)" aria-label="히스토리 검색">
+      <div class="segmented" id="period-switch" role="tablist" aria-label="기간 선택">
+        <button type="button" class="segmented-btn is-active" data-period="daily" role="tab" aria-selected="true">일간</button>
+        <button type="button" class="segmented-btn" data-period="weekly" role="tab" aria-selected="false">주간</button>
+      </div>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="테마 전환" title="테마 전환">테마</button>
+    </div>
+  </header>
+
+  <main id="app" class="content">
+    <div class="loading" id="loading">불러오는 중…</div>
+  </main>
+
+  <footer class="footer">
+    <span id="generated-at"></span>
+  </footer>
+</div>
+
+<aside id="right-sidebar" class="right-sidebar">
+  <div id="keyword-sidebar" class="sidebar-panel"></div>
+  <div id="trend-sidebar" class="sidebar-panel"></div>
+</aside>
+
+<template id="tpl-error">
+  <div class="empty-state">
+    <p>데이터를 불러오지 못했습니다.</p>
+    <p class="empty-state-detail"></p>
+  </div>
+</template>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

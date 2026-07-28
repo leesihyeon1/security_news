@@ -1,0 +1,1739 @@
+import hashlib
+import ipaddress
+import math
+import os
+import json
+import re
+import requests
+import smtplib
+import time
+from collections import Counter
+from datetime import datetime, timedelta
+from pathlib import Path
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import urllib.parse
+import urllib.request
+import html
+
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent if BASE_DIR.name.lower() == "scripts" else BASE_DIR
+STATE_DIR = PROJECT_ROOT / "state"
+ASSETS_DIR = PROJECT_ROOT / "assets"
+INVENTORY_FILE = ASSETS_DIR / "inventory.yml"
+DATA_DIR = PROJECT_ROOT / "data"
+EVENTS_FILE = DATA_DIR / "events.jsonl"
+FEEDBACK_FILE = DATA_DIR / "feedback.jsonl"
+SEARCH_LOG_FILE = DATA_DIR / "search_log.jsonl"
+LEARNED_WEIGHTS_FILE = DATA_DIR / "learned_weights.json"
+
+# 소스 코드명 -> 사람이 읽을 표시명. generate_report.py(리포트)와
+# publish_web_dashboard.py(검색 인덱스) 둘 다 이벤트를 사람이 읽을 형태로
+# 직렬화해야 해서 공용 모듈에 둔다.
+SOURCE_LABELS = {
+    "nvd": "NVD CVE",
+    "cisa_kev": "CISA KEV",
+    "kisa": "KISA/KrCERT",
+    "asec": "안랩 ASEC",
+    "msrc": "Microsoft 패치",
+    "github_advisory": "GitHub Advisory",
+    "boannews": "보안뉴스",
+    "thehackernews": "The Hacker News",
+    "bleepingcomputer": "BleepingComputer",
+    "sans_isc": "SANS ISC",
+    "krebsonsecurity": "Krebs on Security",
+    "therecord": "The Record",
+    "securityweek": "SecurityWeek",
+    "darkreading": "Dark Reading",
+    "talos": "Cisco Talos",
+    "unit42": "Unit 42",
+    "checkpoint_research": "Check Point Research",
+    "thedfirreport": "The DFIR Report",
+    "securelist": "Securelist",
+    "google_security": "Google Security Blog",
+    "microsoft_security": "Microsoft Security Blog",
+    "mandiant": "Google TI (Mandiant)",
+    "crowdstrike": "CrowdStrike",
+    "sentinelone": "SentinelOne Labs",
+    "welivesecurity": "ESET WeLiveSecurity",
+    "sophos": "Sophos News",
+    "trendmicro": "Trend Micro Research",
+    "rapid7": "Rapid7",
+    "elastic_security": "Elastic Security Labs",
+    "volexity": "Volexity",
+    "jpcert": "JPCERT/CC",
+    "cyberscoop": "CyberScoop",
+    "infosecurity_magazine": "Infosecurity Magazine",
+    "theregister_security": "The Register",
+    "helpnetsecurity": "Help Net Security",
+    "securityaffairs": "Security Affairs",
+    "dailysecu": "데일리시큐",
+    "estsecurity_alyac": "알약 블로그",
+    "plainbit": "플레인비트",
+    "inca_isarc": "잉카 ISARC",
+    "s2w": "S2W",
+    "nshc_threatrecon": "NSHC ThreatRecon",
+    "genians": "지니언스 시큐리티 센터",
+    "proofpoint": "Proofpoint",
+    "malwarebytes": "Malwarebytes Labs",
+    "reddit_netsec": "Reddit r/netsec",
+    "reddit_cybersecurity": "Reddit r/cybersecurity",
+    "reddit_reverseengineering": "Reddit r/ReverseEngineering",
+    "reddit_asknetsec": "Reddit r/AskNetsec",
+    "exploit_db": "Exploit-DB",
+}
+
+
+def source_label(source):
+    return SOURCE_LABELS.get(source, source or "unknown")
+
+
+# 순수 CVE/공지 피드 소스 — 제목이 "CVE-XXXX" 식이라 "기사"로 보기 어려워
+# 뉴스 목록(top_items)·검색 인덱스에서 제외한다. CVE 카드·소스별 전용
+# 알림이 이 소스들의 내용을 이미 별도로 다룬다.
+NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa", "exploit_db"}
+
+def load_env_file(dotenv_path=None):
+    if dotenv_path is None:
+        dotenv_path = PROJECT_ROOT / ".env"
+    else:
+        dotenv_path = Path(dotenv_path)
+    
+    if not dotenv_path.exists():
+        return
+    
+    with dotenv_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, val = line.split("=", 1)
+                val = val.strip()
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                    val = val[1:-1]
+                os.environ[key.strip()] = val
+
+# 모듈 로드 시 즉시 .env 파일을 읽어 환경 변수에 적재합니다.
+load_env_file()
+
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SENDER_EMAIL = os.environ.get("EMAIL_ADDRESS", "")
+SENDER_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
+DEFAULT_TO_EMAIL = os.environ.get("TO_EMAIL") or SENDER_EMAIL
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
+SLACK_WEBHOOK_URGENT = os.environ.get("SLACK_WEBHOOK_URGENT")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
+NVIDIA_API_URL = os.environ.get("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
+NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+
+def clean_text(value):
+    if value is None:
+        return ""
+    return " ".join(html.unescape(str(value)).split())
+
+def _parse_inline_list(value):
+    value = value.strip()
+    if not value.startswith("[") or not value.endswith("]"):
+        return []
+
+    items = []
+    for item in value[1:-1].split(","):
+        item = item.strip().strip("'\"")
+        if item:
+            items.append(item)
+    return items
+
+def _load_inventory_items(path):
+    """inventory.yml을 [{name, aliases, criticality}]로 파싱.
+
+    criticality: high(기본 — 노출·핵심 자산) | low(내부·저중요 자산).
+    low로 표시된 자산만 실악용 시 P1 대신 P2로 판정된다. 미지정은 high 취급이라
+    기존 인벤토리 파일은 동작이 바뀌지 않는다.
+    """
+    items = []
+    current = None
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            for line_no, raw_line in enumerate(file, start=1):
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("- name:"):
+                    if current and current["name"]:
+                        items.append(current)
+                    current = {
+                        "name": line.split(":", 1)[1].strip().strip("'\""),
+                        "aliases": [],
+                        "criticality": "high",
+                    }
+                elif current is not None and line.startswith("aliases:"):
+                    current["aliases"] = _parse_inline_list(line.split(":", 1)[1])
+                elif current is not None and line.startswith("criticality:"):
+                    value = line.split(":", 1)[1].strip().strip("'\"").lower()
+                    if value in ("high", "low"):
+                        current["criticality"] = value
+                elif current is not None:
+                    # 엔트리 진입 후(`- name:` 이후)에는 `aliases:`/`criticality:`만 인식한다.
+                    # 형식이 바뀐 줄이 조용히 버려지면 자산 매칭이 소리 없이 새므로, 눈에 띄게 경고한다.
+                    print(
+                        "[!] {}:{} 인식 못한 형식 — 자산 매칭에서 무시됨: {}".format(
+                            path.name, line_no, line
+                        )
+                    )
+                # current가 None이면(첫 엔트리 이전, 예: 최상위 `products:` 키) 조용히 건너뛴다.
+    except OSError:
+        return []
+    if current and current["name"]:
+        items.append(current)
+    return items
+
+
+def inventory_criticality_map(inventory_file=None):
+    """정규화된 자산 용어(이름·별칭) → criticality 매핑"""
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    if not path.exists():
+        return {}
+    mapping = {}
+    for item in _load_inventory_items(path):
+        for term in [item["name"]] + item["aliases"]:
+            normalized = clean_text(term).lower()
+            if normalized:
+                mapping.setdefault(normalized, item["criticality"])
+    return mapping
+
+
+def load_inventory_terms(inventory_file=None):
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    if not path.exists():
+        return []
+
+    terms = []
+    for item in _load_inventory_items(path):
+        terms.append(item["name"])
+        terms.extend(item["aliases"])
+
+    seen = set()
+    unique_terms = []
+    for term in terms:
+        normalized = clean_text(term).lower()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique_terms.append(term)
+    return unique_terms
+
+def match_inventory_terms(values, inventory_file=None):
+    if isinstance(values, (str, bytes)):
+        values = [values]
+
+    haystack = " ".join(clean_text(value).lower() for value in values if value is not None)
+    if not haystack:
+        return []
+
+    matched = []
+    for term in load_inventory_terms(inventory_file):
+        normalized = clean_text(term).lower()
+        if not normalized:
+            continue
+        # 단어 경계 매칭: "ADC"가 "broadcast", "Arbor"가 "arboretum"에 매칭되는 오탐 방지
+        pattern = r"(?<![0-9a-z가-힣])" + re.escape(normalized) + r"(?![0-9a-z가-힣])"
+        if re.search(pattern, haystack):
+            matched.append(term)
+    return matched
+
+# ===== 인텔 참조 데이터 (assets/intel/ — update_intel_data.py로 갱신) =====
+INTEL_DIR = ASSETS_DIR / "intel"
+_intel_cache = {}
+
+def _load_intel(name):
+    """assets/intel/<name>.json을 읽어 캐시. 파일이 없거나 깨졌으면 None (기능 자동 비활성)."""
+    if name in _intel_cache:
+        return _intel_cache[name]
+    data = None
+    try:
+        with (INTEL_DIR / (name + ".json")).open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        pass
+    _intel_cache[name] = data
+    return data
+
+def normalize_threat_actor(name):
+    """위협그룹 명칭을 MISP Galaxy 공식 명칭으로 정규화 (예: Hidden Cobra → Lazarus Group).
+
+    앨리어스 사전에 없으면 원문 그대로 반환. 참조 데이터가 없어도 동작한다.
+    """
+    name = clean_text(name)
+    if not name:
+        return ""
+    aliases = (_load_intel("threat_actor_aliases") or {}).get("aliases") or {}
+    return aliases.get(name.lower(), name)
+
+def validate_attack_techniques(candidates):
+    """LLM이 제시한 ATT&CK 기법 ID 후보를 공식 카탈로그로 검증해 환각을 차단.
+
+    카탈로그(assets/intel/attack_techniques.json)가 없으면 전부 폐기한다 —
+    검증 불가능한 LLM 출력을 통과시키는 것보다 놓치는 쪽이 안전하다.
+    """
+    catalog = (_load_intel("attack_techniques") or {}).get("techniques") or {}
+    if not catalog or not isinstance(candidates, list):
+        return []
+    validated = []
+    seen = set()
+    for candidate in candidates:
+        match = ATTACK_TECHNIQUE_RE.search(str(candidate).upper().strip())
+        technique = match.group(0) if match else ""
+        if technique and technique in catalog and technique not in seen:
+            seen.add(technique)
+            validated.append(technique)
+    return validated
+
+def _benign_ioc_sets():
+    """warninglists 기반 벤인 인프라 조회 구조 (ips set / CIDR 네트워크 / domains set)"""
+    if "_benign_parsed" in _intel_cache:
+        return _intel_cache["_benign_parsed"]
+    data = _load_intel("benign_iocs")
+    parsed = None
+    if data:
+        networks = []
+        for cidr in data.get("cidrs") or []:
+            try:
+                networks.append(ipaddress.ip_network(cidr))
+            except ValueError:
+                continue
+        parsed = {
+            "ips": set(data.get("ips") or []),
+            "networks": networks,
+            "domains": set(data.get("domains") or []),
+        }
+    _intel_cache["_benign_parsed"] = parsed
+    return parsed
+
+def _is_benign_domain(domain, benign):
+    domain = domain.lower().strip(".")
+    return domain in benign["domains"] or any(
+        domain.endswith("." + suffix) for suffix in benign["domains"]
+    )
+
+def is_benign_ioc(ioc_type, value):
+    """공용 DNS·CDN·대형 벤더 도메인 등 차단 지표로 무의미한 값인지 판별 (MISP warninglists)"""
+    benign = _benign_ioc_sets()
+    if not benign:
+        return False
+    if ioc_type == "ipv4":
+        if value in benign["ips"]:
+            return True
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            return False
+        return any(address in network for network in benign["networks"])
+    if ioc_type == "domain":
+        return _is_benign_domain(value, benign)
+    if ioc_type == "url":
+        host = urllib.parse.urlparse(value).hostname or ""
+        return bool(host) and _is_benign_domain(host, benign)
+    return False
+
+CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
+# MITRE ATT&CK Enterprise 기법 ID (T1566, T1566.001 등). LLM 환각을 피하기 위해 정규식으로만 추출.
+# re.ASCII: 한글 조사("T1059를")가 \b에 걸리지 않는 문제 방지
+ATTACK_TECHNIQUE_RE = re.compile(r"\bT1\d{3}(?:\.\d{3})?\b", re.ASCII)
+
+def extract_attack_techniques(*texts):
+    """텍스트에 명시된 MITRE ATT&CK 기법 ID를 추출해 중복 제거한 목록 반환"""
+    found = []
+    seen = set()
+    for text in texts:
+        if not text:
+            continue
+        for match in ATTACK_TECHNIQUE_RE.findall(str(text)):
+            if match not in seen:
+                seen.add(match)
+                found.append(match)
+    return found
+
+def extract_cves(*texts):
+    """텍스트(기사 제목·요약·본문 등)에서 CVE 번호를 추출해 정규화·중복 제거한 목록 반환"""
+    found = []
+    seen = set()
+    for text in texts:
+        if not text:
+            continue
+        for match in CVE_ID_RE.findall(str(text)):
+            cve = match.upper()
+            if cve not in seen:
+                seen.add(cve)
+                found.append(cve)
+    return found
+
+# ===== IOC 추출 (기사·블로그 본문에서 파일 해시 / 공인 IP / 디팽된 도메인·URL) =====
+MD5_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
+SHA1_RE = re.compile(r"\b[a-fA-F0-9]{40}\b")
+SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
+IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b")
+# re.ASCII: 한글 조사("...net을")가 \w·\b에 걸려 도메인에 붙어 나오는 것을 방지
+DEFANGED_DOMAIN_RE = re.compile(
+    r"\b[A-Za-z0-9][A-Za-z0-9-]*(?:(?:\.|\[\.\])[A-Za-z0-9-]+)*\[\.\][A-Za-z]{2,}\b",
+    re.ASCII,
+)
+HXXP_URL_RE = re.compile(r"\bhxxps?://[^\s\"'<>]+", re.IGNORECASE)
+
+_PRIVATE_IP_PREFIXES = ("0.", "10.", "127.", "169.254.", "192.168.", "224.", "255.")
+
+def _is_public_ip(ip):
+    if ip.startswith(_PRIVATE_IP_PREFIXES) or ip.endswith(".0"):
+        return False
+    octets = ip.split(".")
+    if octets[0] == "172" and 16 <= int(octets[1]) <= 31:
+        return False
+    return True
+
+def extract_iocs(*texts, limit=50):
+    """텍스트에서 IOC를 추출해 [{"type": "sha256|sha1|md5|ipv4|domain|url", "value": ...}]로 반환.
+
+    MISP/STIX 관행대로 타입을 함께 저장해 리포트에서 타입별 분류·차단 목록 변환이 가능하다.
+    일반 도메인·URL은 뉴스 본문 오탐이 많아 제외하고, 작성자가 의도적으로
+    디팽(defang)한 것(example[.]com, hxxp://)만 IOC로 간주한다.
+    공용 DNS·CDN 등 벤인 인프라(MISP warninglists)는 걸러낸다.
+    """
+    found = []
+    seen = set()
+
+    def add(ioc_type, value):
+        value = value.strip().strip(".,;:)]}")
+        key = value.lower()
+        if not value or key in seen:
+            return
+        seen.add(key)
+        if is_benign_ioc(ioc_type, value):
+            return
+        found.append({"type": ioc_type, "value": value})
+
+    for text in texts:
+        if not text:
+            continue
+        text = str(text)
+
+        for match in HXXP_URL_RE.findall(text):
+            add("url", re.sub(r"^hxxp", "http", match.replace("[.]", "."), flags=re.IGNORECASE))
+        # URL로 이미 수집된 구간은 제외하고 디팽된 도메인만 스캔 (중복 방지)
+        for match in DEFANGED_DOMAIN_RE.findall(HXXP_URL_RE.sub(" ", text)):
+            add("domain", match.replace("[.]", "."))
+
+        refanged = text.replace("[.]", ".")
+        for pattern, ioc_type in ((SHA256_RE, "sha256"), (SHA1_RE, "sha1"), (MD5_RE, "md5")):
+            for match in pattern.findall(refanged):
+                add(ioc_type, match.lower())
+        for match in IPV4_RE.findall(refanged):
+            if _is_public_ip(match):
+                add("ipv4", match)
+
+    return found[:limit]
+
+# ===== PIR (우선 정보 요구사항 — assets/pir.json) =====
+PIR_FILE = ASSETS_DIR / "pir.json"
+
+def load_pirs():
+    """PIR 정의를 {"PIR-1": {"question", "weight"}}로 반환. 파일이 없으면 빈 dict."""
+    if "_pirs" not in _intel_cache:
+        pirs = {}
+        try:
+            with PIR_FILE.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+            for entry in data.get("pirs") or []:
+                pid = clean_text(entry.get("id")).upper()
+                question = clean_text(entry.get("question"))
+                if pid and question:
+                    pirs[pid] = {
+                        "question": question,
+                        "weight": str(entry.get("weight") or "medium").lower(),
+                    }
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+        _intel_cache["_pirs"] = pirs
+    return _intel_cache["_pirs"]
+
+def validate_pirs(candidates):
+    """LLM이 판정한 PIR ID 후보를 정의 목록으로 검증·정규화"""
+    pir_defs = load_pirs()
+    validated = []
+    if not isinstance(candidates, list):
+        return validated
+    for candidate in candidates:
+        pid = clean_text(candidate).upper().replace(" ", "")
+        if pid in pir_defs and pid not in validated:
+            validated.append(pid)
+    return validated
+
+# ===== LLM 호출 공용 계층 (LLM_PROVIDER: nvidia = NVIDIA NIM API, ollama = 로컬) =====
+THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+def _generate_nvidia(prompt, timeout):
+    payload = {
+        "model": NVIDIA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": 8192,
+        "stream": False,
+    }
+    headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
+    for attempt in (1, 2):
+        response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
+        if response.status_code == 429 and attempt == 1:
+            # 무료 티어 40 RPM 제한 — 한 번만 대기 후 재시도
+            time.sleep(15)
+            continue
+        break
+    if response.status_code != 200:
+        raise RuntimeError("HTTP {}".format(response.status_code))
+    choices = (response.json() or {}).get("choices") or []
+    if not choices:
+        raise RuntimeError("빈 choices 응답")
+    return (choices[0].get("message") or {}).get("content") or ""
+
+def _generate_ollama(prompt, timeout, json_format):
+    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
+    if json_format:
+        payload["format"] = "json"
+    response = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError("HTTP {}".format(response.status_code))
+    return (response.json() or {}).get("response", "")
+
+def llm_generate(prompt, timeout=120, json_format=False):
+    """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
+
+    LLM_PROVIDER=nvidia 이면 NVIDIA NIM을 먼저 시도하고 실패 시 로컬 Ollama로 폴백한다.
+    """
+    providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
+    for provider in providers:
+        try:
+            if provider == "nvidia":
+                if not NVIDIA_API_KEY:
+                    raise RuntimeError("NVIDIA_API_KEY 미설정")
+                text = _generate_nvidia(prompt, timeout)
+            else:
+                text = _generate_ollama(prompt, timeout, json_format)
+            text = THINK_TAG_RE.sub("", text).strip()
+            if text:
+                return text
+            raise RuntimeError("빈 응답")
+        except Exception as error:
+            print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
+    return None
+
+# ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
+
+ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 분석가이다.
+아래 보안 기사를 분석해 JSON 하나만 출력하라. JSON 외 다른 텍스트를 출력하지 마라.
+
+형식:
+{{"summary": "핵심 내용 3문장 이내 요약(한국어)",
+  "severity": "critical|high|medium|low|info 중 하나",
+  "category": "취약점|악성코드|침해사고|개인정보유출|공격캠페인|공급망공격|피싱사기|정책규제|기술동향|제품행사|기타 중 하나",
+  "category_reason": "이 카테고리를 고른 근거 한 문장(한국어) — 아래 기준 중 어느 것에 해당하는지 명시",
+  "affected_products": ["영향받는 제품·서비스명. 영문 공식 명칭으로 정규화 (예: Fortinet FortiGate, Apache Tomcat)"],
+  "affected_versions": ["영향받는 버전·버전 범위. 기사에 명시된 것만 (예: 7.2.0~7.2.4, 3.x 전체). 없으면 빈 배열"],
+  "threat_actor": "언급된 공격 그룹명(영문 공식 명칭, 예: Lazarus). 없으면 빈 문자열",
+  "malware_family": "언급된 악성코드·랜섬웨어 패밀리명(영문). 없으면 빈 문자열",
+  "attack_techniques": ["기사에 서술된 공격 기법의 MITRE ATT&CK Enterprise 기법 ID (예: T1566, T1059.001). 기사 내용상 명확한 것만, 최대 5개. 불확실하면 빈 배열"],
+  "exploitation": "기사가 보도 시점 기준으로 전하는 악용 상태: active(현재 실제 악용·공격 진행 중을 보도)|poc(공격 코드·PoC 공개까지만 보도)|none(그 외. 과거 사건 회고, 일반 동향, 연구 결과 소개는 none)",
+  "fix_available": "패치·수정본 상태: yes(패치 배포됨을 보도)|no(패치가 아직 없음이 명시됨)|unknown(언급 없음) 중 하나",
+  "patch_info": "패치 버전·완화책 한 줄 (예: 7.2.5로 업데이트, 워크어라운드로 SSL-VPN 비활성화). 없으면 빈 문자열",
+  "novelty": "정보의 새로움: new(새 위협·기법·캠페인의 최초 보도)|update(알려진 위협의 새 전개·변형)|known(기존에 알려진 내용의 정리·재보도) 중 하나",
+{pir_field}
+  "relevance": "국내 IT·게임 기업 보안팀 관점의 중요도: high|medium|low 중 하나",
+  "content_depth": "기사 유형: analysis(자체 조사·기술 분석을 담은 심층 분석)|report(보고서·통계·조사 결과 전달)|news(사건·발표 단신)|opinion(칼럼·의견) 중 하나",
+  "analyst_review": {{"technical_detail": "이 기사가 제공하는 구체적 기술 정보(공격 경로, 사용된 기법, 설정값, IOC 등)를 서술. 사실 전달뿐이면 '기술적 디테일 없음'이라고 명시",
+    "technical_substance": "위 서술에 근거해 0~3점: 0=사실 전달만(기술 디테일 없음) / 1=기술 용어는 있으나 피상적 / 2=구체적 공격경로·기법 명시 / 3=IOC·설정값·재현절차 등 검증 가능한 상세 분석",
+    "actionable_guidance": "보안담당자가 이 기사만 보고 실제로 취할 수 있는 조치를 서술. 막연하면 '막연함'이라고 명시",
+    "actionability": "위 서술에 근거해 0~3점: 0=조치사항 없음/막연 / 1=일반적 권고(버전 등 명시 없음) / 2=구체적 조치(특정 버전·설정·차단할 IOC 명시) / 3=즉시 실행 가능한 상세 가이드(탐지룰·정확한 패치경로 등)",
+    "credibility_note": "출처의 신뢰성 근거(1차 소스 인용, 벤더·당국 확인, 복수 소스 교차확인 여부 등)를 서술",
+    "credibility": "위 서술에 근거해 0~2점: 0=출처 불명/익명 / 1=단일 소스의 자체 주장(교차확인 없음) / 2=공식 확인 또는 복수 소스 교차확인"}},
+  "confidence": "위 분석에 대한 확신도: high|medium|low 중 하나 (기사 정보가 모호하면 low)",
+  "recommended_actions": ["보안담당자 권고 조치(최대 3개)"]}}
+
+카테고리 기준:
+- 개인정보유출: 개인정보·고객정보 유출이 핵심인 사고 (시스템 침해가 있어도 유출이 본질이면 이쪽)
+- 침해사고: 유출 외의 기업·기관 시스템 침해·해킹 피해
+- 공급망공격: 오픈소스 패키지·벤더·업데이트 경로를 통한 공격
+- 공격캠페인: 조직을 노리는 표적형 캠페인·APT 활동
+- 피싱사기: 일반 소비자 대상 스미싱·보이스피싱·사기 (조직 표적 피싱은 공격캠페인)
+- 기술동향: 신기술 담론·연구 보고서·통계·컨퍼런스 논의 (양자보안, AI 보안 등)
+- 제품행사: 제품 홍보·전시회·수상·인터뷰 기사
+- 정책규제: 법·제도·규제·컴플라이언스
+
+헷갈리기 쉬운 경계 사례 예시:
+- "쇼핑몰 해킹으로 회원 10만 명 개인정보 유출" → 개인정보유출 (시스템 침해가 있었지만 기사의 본질은 유출된 개인정보 그 자체)
+- "쇼핑몰 서버 침해, 관리자 권한 탈취 확인(유출 언급 없음)" → 침해사고 (침해는 있으나 유출이 핵심이 아님)
+- "APT 그룹이 npm 패키지에 악성코드 심어 유포" → 공급망공격 (공격 경로가 오픈소스 패키지)
+- "APT 그룹이 특정 방산업체를 스피어피싱으로 표적 공격" → 공격캠페인 (조직을 노린 표적형 캠페인이 본질, 수단이 피싱이어도)
+- "문자로 택배 미수령 사칭해 개인정보 요구" → 피싱사기 (불특정 소비자 대상 스미싱)
+주의: 기사에 없는 사실을 만들어내지 마라. 해당 정보가 없으면 빈 배열/빈 문자열 또는 "info"를 사용하라.
+{pir_block}
+제목: {title}
+
+본문:
+{body}
+"""
+
+ENRICH_SEVERITIES = ("critical", "high", "medium", "low", "info")
+ENRICH_CATEGORIES = (
+    "취약점", "악성코드", "침해사고", "개인정보유출", "공격캠페인", "공급망공격",
+    "피싱사기", "정책규제", "기술동향", "제품행사", "기타",
+)
+ENRICH_RELEVANCES = ("high", "medium", "low")
+ENRICH_DEPTHS = ("analysis", "report", "news", "opinion")
+ENRICH_NOVELTIES = ("new", "update", "known")
+ENRICH_BODY_MAX_CHARS = 4000
+
+def _clean_str_list(value, limit):
+    if not isinstance(value, list):
+        return []
+    return [clean_text(item) for item in value if clean_text(item)][:limit]
+
+def _build_enrich_prompt(title, body):
+    """PIR 정의(있으면)를 프롬프트에 주입해 완성한다"""
+    pirs = load_pirs()
+    if pirs:
+        pir_field = '  "pirs": ["기사가 명확히 답하는 PIR ID 목록 (아래 정의 참조, 예: PIR-1). 해당 없으면 빈 배열"],'
+        pir_block = "\n조직의 우선 정보 요구사항(PIR) — 기사가 아래 질문에 답하는 경우에만 해당 ID를 부여하라:\n{}\n".format(
+            "\n".join("{}: {}".format(pid, pir["question"]) for pid, pir in pirs.items())
+        )
+    else:
+        pir_field = ""
+        pir_block = ""
+    return ENRICH_PROMPT.format(
+        title=title, body=body[:ENRICH_BODY_MAX_CHARS],
+        pir_field=pir_field, pir_block=pir_block,
+    )
+
+def _clamp_rubric_score(value, max_value):
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        return None
+    return score if 0 <= score <= max_value else None
+
+def _parse_analyst_review(raw):
+    """사람 분석가의 검토 과정을 흉내낸 rubric(기술적 실체·실행가능성·신뢰성) 파싱.
+
+    각 점수는 근거 서술(reasoning)에서 도출되게 강제해 LLM이 근거 없이 바로
+    라벨부터 뱉는 것을 막는다. 세 점수 중 하나라도 유효하면 반환하고, 근거
+    텍스트는 사람이 나중에 라벨링할 때 "왜 이 점수인지" 확인할 수 있게 남긴다.
+    """
+    if not isinstance(raw, dict):
+        return None
+    technical_substance = _clamp_rubric_score(raw.get("technical_substance"), 3)
+    actionability = _clamp_rubric_score(raw.get("actionability"), 3)
+    credibility = _clamp_rubric_score(raw.get("credibility"), 2)
+    if technical_substance is None and actionability is None and credibility is None:
+        return None
+    return {
+        "technical_substance": technical_substance,
+        "actionability": actionability,
+        "credibility": credibility,
+        "reasoning": {
+            "technical_detail": clean_text(raw.get("technical_detail"))[:300] or None,
+            "actionable_guidance": clean_text(raw.get("actionable_guidance"))[:300] or None,
+            "credibility_note": clean_text(raw.get("credibility_note"))[:200] or None,
+        },
+    }
+
+def ai_enrich_article(title, body):
+    """기사 본문을 LLM으로 분석해 구조화된 enrichment를 반환. 실패 시 None."""
+    if not body:
+        return None
+
+    text = llm_generate(_build_enrich_prompt(title, body), timeout=120, json_format=True)
+    if not text:
+        return None
+
+    try:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        data = json.loads(text[start:end + 1])
+
+        severity = str(data.get("severity") or "").lower()
+        category = clean_text(data.get("category"))
+        relevance = str(data.get("relevance") or "").lower()
+        confidence = str(data.get("confidence") or "").lower()
+        exploitation = str(data.get("exploitation") or "").lower()
+        content_depth = str(data.get("content_depth") or "").lower()
+        novelty = str(data.get("novelty") or "").lower()
+        fix_raw = str(data.get("fix_available") or "").lower()
+        return {
+            "summary": clean_text(data.get("summary"))[:500] or None,
+            "severity": severity if severity in ENRICH_SEVERITIES else None,
+            "exploitation": exploitation if exploitation in ("active", "poc", "none") else None,
+            "content_depth": content_depth if content_depth in ENRICH_DEPTHS else None,
+            "novelty": novelty if novelty in ENRICH_NOVELTIES else None,
+            "analyst_review": _parse_analyst_review(data.get("analyst_review")),
+            "fix_available": True if fix_raw == "yes" else (False if fix_raw == "no" else None),
+            "patch_info": clean_text(data.get("patch_info"))[:200] or None,
+            "category": category if category in ENRICH_CATEGORIES else ("기타" if category else None),
+            "category_reason": clean_text(data.get("category_reason"))[:200] or None,
+            "affected_products": _clean_str_list(data.get("affected_products"), 10),
+            "affected_versions": _clean_str_list(data.get("affected_versions"), 10),
+            "threat_actor": clean_text(data.get("threat_actor")) or None,
+            "malware_family": clean_text(data.get("malware_family")) or None,
+            "attack_techniques": validate_attack_techniques(data.get("attack_techniques")),
+            "pirs": validate_pirs(data.get("pirs")),
+            "relevance": relevance if relevance in ENRICH_RELEVANCES else None,
+            "confidence": confidence if confidence in ENRICH_RELEVANCES else None,
+            "recommended_actions": _clean_str_list(data.get("recommended_actions"), 3),
+        }
+    except Exception as error:
+        print("[-] AI enrichment 실패: {}".format(error))
+        return None
+
+def enrichment_response_bits(enrichment):
+    """알림 메시지에 붙일 대응 판단 정보 조각(영향 버전, 패치 상태). 없으면 빈 리스트."""
+    enrichment = enrichment or {}
+    bits = []
+    versions = enrichment.get("affected_versions") or []
+    if versions:
+        products = enrichment.get("affected_products") or []
+        prefix = "{} ".format(products[0]) if products else ""
+        bits.append("영향: {}{}".format(prefix, ", ".join(versions[:3])))
+    patch = enrichment.get("patch_info") or ""
+    fix = enrichment.get("fix_available")
+    if patch or fix is True:
+        bits.append("조치: {}".format(patch or "패치 배포됨"))
+    elif fix is False:
+        bits.append("조치: 패치 미출시 — 완화책 검토 필요")
+    return bits
+
+# ===== 긴급도 분류 (CISA SSVC 간소화: 악용 상태 → 자산 매칭 → 기술 영향) =====
+EPSS_API_URL = "https://api.first.org/data/v1/epss"
+EPSS_POC_THRESHOLD = float(os.environ.get("EPSS_POC_THRESHOLD", "0.1"))
+EPSS_ACTIVE_THRESHOLD = float(os.environ.get("EPSS_ACTIVE_THRESHOLD", "0.5"))
+
+EXPLOIT_ACTIVE_KEYWORDS = [
+    "actively exploited", "exploitation detected", "exploited in the wild",
+    "in the wild", "known exploited", "제로데이 공격", "실제 악용", "악용 확인",
+    "악용 사례", "악용되고", "실제 공격", "공격 확산", "유포 중",
+]
+EXPLOIT_POC_KEYWORDS = [
+    "proof of concept", "proof-of-concept", "poc released", "poc 공개",
+    "exploit code", "exploit available", "metasploit", "공격 코드 공개",
+    "익스플로잇 공개",
+]
+TOTAL_IMPACT_KEYWORDS = [
+    "remote code execution", "원격 코드 실행", "원격코드실행",
+    "elevation of privilege", "privilege escalation", "권한 상승",
+    "authentication bypass", "인증 우회", "unauthenticated",
+]
+
+def fetch_epss_scores(cve_ids, timeout=20):
+    """FIRST.org EPSS API에서 CVE별 '30일 내 악용될 확률'(0~1)을 일괄 조회. 실패 시 빈 dict."""
+    ids = sorted({cve for cve in (cve_ids or []) if cve})
+    scores = {}
+    for start in range(0, len(ids), 100):
+        batch = ids[start:start + 100]
+        url = "{}?cve={}".format(EPSS_API_URL, ",".join(urllib.parse.quote(cve) for cve in batch))
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "boannews-mail-triage/1.0"})
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            for row in data.get("data", []):
+                try:
+                    scores[row["cve"]] = float(row["epss"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+        except Exception as error:
+            print("[-] EPSS 조회 실패({}건): {}".format(len(batch), error))
+    return scores
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_SEARCH_REPOS_URL = "https://api.github.com/search/repositories"
+
+def check_github_poc(cve_id, timeout=15):
+    """GitHub 저장소 검색으로 해당 CVE의 PoC/exploit 리포짓 공개 여부를 확인한다.
+
+    MSRC 등 일부 소스만 갖고 있던 'PoC 공개' 신호를 소스 불문 모든 CVE로 확장한다.
+    실패 시 None(호출부는 항상 폴백 가능해야 함). GITHUB_TOKEN 있으면 인증 사용(레이트리밋 완화),
+    없어도 동작(비인증 검색 API 분당 10회 제한 — 카드 상위 몇 건에만 쓰는 용도라 충분).
+    """
+    if not cve_id:
+        return None
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = "Bearer {}".format(GITHUB_TOKEN)
+    # 따옴표로 구문 검색 강제 — 안 그러면 GitHub가 토큰 단위로 느슨하게 매칭해서
+    # 존재하지 않는 CVE에도 무관한 저장소가 잡히는 오탐이 난다.
+    params = {"q": '"{}"'.format(cve_id), "sort": "updated", "order": "desc", "per_page": 5}
+    try:
+        response = requests.get(GITHUB_SEARCH_REPOS_URL, headers=headers, params=params, timeout=timeout)
+        if response.status_code != 200:
+            raise RuntimeError("HTTP {}".format(response.status_code))
+        items = (response.json() or {}).get("items") or []
+        if not items:
+            return {"count": 0, "latest_url": "", "latest_created_at": ""}
+        latest = items[0]
+        return {
+            "count": len(items),
+            "latest_url": latest.get("html_url") or "",
+            "latest_created_at": (latest.get("created_at") or "")[:10],
+        }
+    except Exception as error:
+        print("[-] GitHub PoC 검색 실패 ({}): {}".format(cve_id, error))
+        return None
+
+HN_ALGOLIA_SEARCH_URL = "https://hn.algolia.com/api/v1/search"
+HN_BUZZ_CACHE_FILE = DATA_DIR / "hn_buzz_cache.json"
+HN_BUZZ_CACHE_TTL_DAYS = 3  # 이 기간 내 재조회분은 캐시로 대체. 실패(False)는 캐싱하지 않고 다음 실행에서 재시도
+HN_BUZZ_CACHE_RETENTION_DAYS = 14  # 이보다 오래된 항목은 캐시에서도 삭제 — 주간 리포트가 보는
+                                    # 최대 집계 기간(7일)보다 오래된 기사는 다시 후보가 될 일이
+                                    # 없어 캐시에 남겨둘 이유가 없다(sent_ids류 리스트 트리밍과
+                                    # 달리 URL 키 딕셔너리라 개수가 아닌 나이 기준으로 정리)
+
+def _hn_buzz_cache():
+    """실행(run) 간 영속 캐시 — 프로세스 내에서는 1회만 로드해 재사용."""
+    if "_hn_buzz_cache" not in _intel_cache:
+        _intel_cache["_hn_buzz_cache"] = load_json_state(HN_BUZZ_CACHE_FILE)
+    return _intel_cache["_hn_buzz_cache"]
+
+def _prune_hn_buzz_cache(cache):
+    cutoff = datetime.utcnow() - timedelta(days=HN_BUZZ_CACHE_RETENTION_DAYS)
+    stale_urls = []
+    for url, entry in cache.items():
+        try:
+            checked_at = datetime.fromisoformat(str(entry.get("checked_at")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            stale_urls.append(url)
+            continue
+        if checked_at < cutoff:
+            stale_urls.append(url)
+    for url in stale_urls:
+        del cache[url]
+
+def check_hn_buzz(url, timeout=10):
+    """Hacker News에서 해당 URL이 논의됐는지 조회 — 무료·무인증 공개 API.
+
+    내부 휴리스틱만으로는 못 잡는 '지금 업계가 주목하는 것' 신호를 보완한다.
+    반환값 3가지: dict(발견), None(정상 조회했지만 논의 없음), False(조회 자체가
+    실패 — 호출부가 이 경우만 서킷브레이커로 구분해서 반복 실패를 피할 수 있게).
+
+    curator(4시간마다)·일간·주간 리포트가 같은 이벤트를 반복해서 후보로 보는
+    경우가 많아, 조회 결과를 파일에 캐싱해 HN_BUZZ_CACHE_TTL_DAYS 동안 재사용한다.
+    """
+    if not url:
+        return None
+
+    cache = _hn_buzz_cache()
+    cached = cache.get(url)
+    if cached:
+        try:
+            checked_at = datetime.fromisoformat(str(cached.get("checked_at")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            checked_at = None
+        if checked_at and datetime.utcnow() - checked_at < timedelta(days=HN_BUZZ_CACHE_TTL_DAYS):
+            return cached.get("result")
+
+    try:
+        response = requests.get(
+            HN_ALGOLIA_SEARCH_URL,
+            params={"query": url, "restrictSearchableAttributes": "url", "tags": "story"},
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            raise RuntimeError("HTTP {}".format(response.status_code))
+        hits = (response.json() or {}).get("hits") or []
+        if not hits:
+            result = None
+        else:
+            top = max(hits, key=lambda hit: hit.get("points") or 0)
+            result = {
+                "points": top.get("points") or 0,
+                "num_comments": top.get("num_comments") or 0,
+                "hn_url": "https://news.ycombinator.com/item?id={}".format(top.get("objectID")),
+            }
+    except Exception as error:
+        print("[-] HN 화제성 조회 실패: {}".format(error))
+        return False
+
+    cache[url] = {"result": result, "checked_at": utc_now_iso()}
+    _prune_hn_buzz_cache(cache)
+    save_json_state(HN_BUZZ_CACHE_FILE, cache)
+    return result
+
+def classify_urgency(match_values, cvss_score=None, kev=False, exploited=False, poc_public=False, epss=None,
+                     exclude_assets=None):
+    """SSVC 간소화 트리로 P1/P2/P3 판정.
+
+    P1: 실제 악용 중 + 자사 자산 매칭
+    P2: 실제 악용 중 / (PoC 공개 또는 Critical 영향) + 자산 매칭
+    P3: 그 외
+
+    exclude_assets: 자산 매칭에서 무시할 용어 목록. 벤더 리서치 블로그가
+    본문에 항상 자사명을 넣어(예: Unit 42 → "Palo Alto Networks") 생기는
+    상시 오탐을 소스별로 걸러낼 때 사용한다.
+    """
+    if isinstance(match_values, (str, bytes)):
+        match_values = [match_values]
+    text = " ".join(clean_text(value).lower() for value in (match_values or []) if value is not None)
+    reasons = []
+
+    # 결정점 1: 악용 상태 (none / poc / active).
+    # basis는 판정 근거 구분 — fact(KEV/MSRC/EPSS/공식 플래그)는 LLM 판정으로도
+    # 뒤집히지 않고, keyword는 refine_triage_with_enrichment에서 LLM 판정이 대체한다.
+    exploitation = "none"
+    basis = "none"
+    if kev:
+        exploitation, basis = "active", "fact"
+        reasons.append("실제 악용 확인(CISA KEV)")
+    elif exploited:
+        exploitation, basis = "active", "fact"
+        reasons.append("실제 악용 확인(MSRC)")
+    elif any(keyword in text for keyword in EXPLOIT_ACTIVE_KEYWORDS):
+        exploitation, basis = "active", "keyword"
+        reasons.append("악용 정황 키워드")
+    elif epss is not None and epss >= EPSS_ACTIVE_THRESHOLD:
+        exploitation, basis = "active", "fact"
+        reasons.append("악용 확률 높음(EPSS {:.0%})".format(epss))
+    elif poc_public:
+        exploitation, basis = "poc", "fact"
+        reasons.append("공격 코드 공개")
+    elif epss is not None and epss >= EPSS_POC_THRESHOLD:
+        exploitation, basis = "poc", "fact"
+        reasons.append("악용 확률 주의(EPSS {:.0%})".format(epss))
+    elif any(keyword in text for keyword in EXPLOIT_POC_KEYWORDS):
+        exploitation, basis = "poc", "keyword"
+        reasons.append("PoC 공개 키워드")
+
+    # 결정점 2: 자사 자산 매칭 (+ 자산 중요도 — low 자산만 매칭이면 P1 대신 P2)
+    matched_assets = match_inventory_terms(match_values or [])
+    if exclude_assets:
+        excluded = {clean_text(term).lower() for term in exclude_assets}
+        matched_assets = [term for term in matched_assets if clean_text(term).lower() not in excluded]
+    criticality_map = inventory_criticality_map() if matched_assets else {}
+    asset_high_value = any(
+        criticality_map.get(clean_text(term).lower(), "high") == "high" for term in matched_assets
+    )
+    if matched_assets:
+        note = "" if asset_high_value else " — 중요도 low"
+        reasons.append("자사 자산 매칭({}){}".format(", ".join(matched_assets), note))
+
+    # 결정점 3: 기술 영향 (partial / total)
+    impact = "partial"
+    try:
+        score_value = float(cvss_score) if cvss_score not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        score_value = 0.0
+    if score_value >= 9.0:
+        impact = "total"
+        reasons.append("CVSS {}".format(cvss_score))
+    elif any(keyword in text for keyword in TOTAL_IMPACT_KEYWORDS):
+        impact = "total"
+        reasons.append("고위험 유형(RCE/권한상승 등)")
+
+    return {
+        "level": _urgency_level(exploitation, matched_assets, impact, asset_high_value),
+        "exploitation": exploitation,
+        "exploitation_basis": basis,
+        "impact": impact,
+        "matched_assets": matched_assets,
+        "asset_high_value": asset_high_value,
+        "epss": epss,
+        "reasons": reasons,
+    }
+
+def refine_triage_with_enrichment(triage, enrichment):
+    """LLM 악용 판정(enrichment.exploitation)을 반영해 갱신된 트리아지를 반환.
+
+    사실 신호(KEV/MSRC/EPSS/공식 PoC 플래그) 판정은 유지한다. 키워드 판정은
+    문맥을 모르므로(과거 사건 회고 기사도 매칭) LLM 판정이 있으면 상향·하향
+    모두 LLM을 따르고, LLM 판정이 없으면(실패 등) 키워드 판정이 폴백으로 남는다.
+    """
+    triage = triage or {}
+    llm = str((enrichment or {}).get("exploitation") or "").lower()
+    if llm not in ("active", "poc", "none"):
+        return triage
+    if triage.get("exploitation_basis") == "fact" or llm == triage.get("exploitation"):
+        return triage
+
+    updated = dict(triage)
+    reasons = [r for r in (triage.get("reasons") or []) if r not in ("악용 정황 키워드", "PoC 공개 키워드")]
+    if llm != "none":
+        reasons.insert(0, "악용 정황(LLM 판정: {})".format(llm))
+    elif triage.get("exploitation") != "none":
+        reasons.append("키워드 악용 신호를 LLM이 비진행형(회고·동향)으로 판정 — 하향")
+    updated["exploitation"] = llm
+    updated["exploitation_basis"] = "llm" if llm != "none" else "none"
+    updated["reasons"] = reasons
+    updated["level"] = _urgency_level(
+        llm, triage.get("matched_assets"), triage.get("impact"),
+        triage.get("asset_high_value", True),
+    )
+    return updated
+
+def _urgency_level(exploitation, matched_assets, impact, asset_high_value=True):
+    """SSVC 판정 매트릭스 — classify_urgency와 refine_triage_with_enrichment가 공유.
+
+    asset_high_value: 매칭 자산 중 criticality high가 있는가. low 자산만
+    매칭된 실악용 건은 P1 대신 P2 (알림은 되지만 긴급 채널 승격 없음).
+    """
+    if exploitation == "active" and matched_assets and asset_high_value:
+        return "P1"
+    if exploitation == "active":
+        return "P2"
+    if matched_assets and (exploitation == "poc" or impact == "total"):
+        return "P2"
+    return "P3"
+
+# ===== 피드백 라벨 (알림 유용성 학습용 — feedback.py / slack_feedback_poller.py가 기록) =====
+def event_ref(event_id):
+    """이벤트 ID의 10자리 참조 해시. 슬랙 메시지·CLI에서 긴 ID 대신 사용한다."""
+    return hashlib.sha1(str(event_id).encode("utf-8")).hexdigest()[:10]
+
+CLICK_TRACK_BASE_URL = os.environ.get("CLICK_TRACK_BASE_URL", "").rstrip("/")
+
+def tracking_url(event_id, url):
+    """리포트/알림 링크를 클릭 추적 서버(Vercel) 경유 URL로 변환.
+
+    CLICK_TRACK_BASE_URL이 설정 안 돼 있으면(기본값) 원본 URL을 그대로 반환 —
+    추적 인프라 없이도 항상 정상 동작한다. click_feedback_puller.py가 나중에
+    이 ref로 클릭 로그를 이벤트에 역매핑해 useful 라벨을 자동 기록한다.
+    """
+    if not CLICK_TRACK_BASE_URL or not url:
+        return url
+    ref = event_ref(event_id) if event_id else ""
+    return "{}/api/click?ref={}&url={}".format(
+        CLICK_TRACK_BASE_URL.rstrip("/"), ref, urllib.parse.quote(url, safe=""),
+    )
+
+def load_feedback(feedback_file=None):
+    """피드백 라벨을 {event_id: 최신 레코드}로 반환 (같은 이벤트는 마지막 라벨 우선)"""
+    path = Path(feedback_file) if feedback_file else FEEDBACK_FILE
+    labels = {}
+    if not path.exists():
+        return labels
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("event_id") and record.get("label") in ("useful", "noise"):
+                labels[record["event_id"]] = record
+    return labels
+
+def feedback_confidence_weight(record):
+    """via=click(자동, 약한 신호)은 슬랙 반응·수동 라벨(via=slack/manual 등, 강한 신호)보다
+    낮은 가중치로 취급한다 — 클릭은 "읽고 싶어서 눌렀다"는 신호일 뿐, 슬랙 이모지의
+    "읽어보니 유용했다"는 명시적 판단과 같은 무게로 두면 안 되기 때문. click_count(같은
+    기사가 여러 번 클릭된 횟수)가 쌓일수록 신뢰도를 조금씩 올리되, 명시적 판단(1.0)에는
+    못 미치도록 상한을 둔다. train_weights.py(학습 반영 비중)와 generate_report.py
+    (추천기사 insight_score 가산)가 함께 쓴다."""
+    if record.get("via") != "click":
+        return 1.0
+    click_count = record.get("click_count") or 1
+    return min(0.8, 0.4 + 0.1 * (click_count - 1))
+
+def load_recent_search_terms(days=7, search_log_file=None, min_count=1):
+    """최근 N일간 대시보드 검색창에 입력된 검색어 중 min_count회 이상 반복 검색된 것만,
+    검색어별 단어 리스트로 반환.
+
+    search_log.jsonl은 search_log_puller.py가 append-only로 쌓으며 대체로 시간순이라
+    (Redis에서 온 순서 그대로) 끝에서부터 거슬러 읽다가 cutoff보다 오래된 로그를 만나면
+    멈춘다. 각 검색어는 공백 기준으로 토큰화한다 — generate_report.py의 추천기사
+    가산(search_interest)이 "이 검색어의 모든 단어가 기사 텍스트에 있는가"로 매칭하는데,
+    이게 대시보드 History 탭 자체의 다중 단어 AND 검색과 같은 방식이라 일관성이 있다.
+    2자 미만 토큰(조사·잡음)은 제외한다.
+
+    min_count(기본 1=문턱 없음)를 올리면 한 번만 입력된 검색어(우연한 호기심일 수 있음)는
+    빼고, 같은 검색어(정규화된 문자열 기준)가 반복 입력된 것만 "관심사"로 인정한다 —
+    feedback_confidence_weight가 클릭 1회를 약한 신호로 보는 것과 같은 취지.
+    """
+    path = Path(search_log_file) if search_log_file else SEARCH_LOG_FILE
+    if not path.exists():
+        return []
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    counts = Counter()
+    words_by_query = {}
+    for line in iter_lines_reverse(path):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(record.get("ts")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            continue
+        if ts < cutoff:
+            break  # append-only, 대체로 시간순 — 이 지점부터는 전부 더 오래된 로그
+        query = str(record.get("query") or "").strip().lower()
+        if not query:
+            continue
+        counts[query] += 1
+        words_by_query.setdefault(query, [w for w in query.split() if len(w) >= 2])
+    return [words for query, words in words_by_query.items() if words and counts[query] >= min_count]
+
+def append_feedback(records, feedback_file=None):
+    path = Path(feedback_file) if feedback_file else FEEDBACK_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+# ===== 중요도 스코어링 (뉴스 소스 확대에 따른 알림 필터링) =====
+# 점수 미달 기사는 즉시 알림을 생략하고 events.jsonl에만 적재해 일간 리포트에서 다룬다.
+# 기본 45: Moderate 밴드 상한(64)에 신뢰도 C 배수(x0.75)가 적용되면 48이 되므로,
+# 50이면 C 소스는 점수로 알림이 불가능해진다. 45는 "Moderate 상단을 채운 C 소스
+# 기사"를 알림 경계에 둔다.
+IMPORTANCE_ALERT_THRESHOLD = int(os.environ.get("NEWS_ALERT_MIN_SCORE", "45"))
+
+# Recorded Future식 밴드 스코어링: 가장 강한 규칙이 밴드(하한~상한)를 결정하고,
+# 나머지 규칙은 밴드 안에서 점수를 밀어올린다. 약한 신호가 아무리 쌓여도
+# 강한 신호 없이는 High 밴드(65+)에 못 들어가므로, "65점 이상 = 강한 신호 실재"가 보장된다.
+IMPORTANCE_BANDS = {"high": (65, 100), "moderate": (30, 64), "info": (5, 24)}
+IMPORTANCE_PUSH = {"high": 15, "moderate": 8, "info": 3}
+_BAND_ORDER = {"high": 0, "moderate": 1, "info": 2}
+PRODUCT_EVENT_SCORE_CAP = 20  # 제품행사 기사는 다른 신호와 무관하게 이 점수를 넘지 못한다
+
+# Admiralty 간소화(3단계) 소스 신뢰도 → 점수 배수.
+# A: 당국·당사자 1차 소스 / B: 자체 텔레메트리 기반 벤더 리서치 / C: 2차 전달 매체.
+# 미지정 소스는 중립(1.0)으로 둔다. P1/P2 판정은 사실 신호 기반이라 배수와 무관하게 알림된다.
+RELIABILITY_MULTIPLIERS = {"A": 1.0, "B": 0.9, "C": 0.75}
+
+# 학습 모델(train_weights.py)과 규칙 스코어링이 공유하는 이진 특징 정의.
+# 새 특징을 추가하면 두 경로 모두 자동 반영되도록 여기서만 정의한다.
+IMPORTANCE_FEATURE_LABELS = {
+    "exploitation_active": "실제 악용 정황",
+    "exploitation_poc": "PoC/악용 가능성",
+    "asset_match": "자사 자산 매칭",
+    "impact_total": "고위험 유형(RCE/권한상승 등)",
+    "severity_critical": "심각도 critical",
+    "severity_high": "심각도 high",
+    "severity_medium": "심각도 medium",
+    "relevance_high": "관련성 high",
+    "relevance_medium": "관련성 medium",
+    "category_취약점": "분류 취약점",
+    "category_악성코드": "분류 악성코드",
+    "category_침해사고": "분류 침해사고",
+    "category_개인정보유출": "분류 개인정보유출",
+    "category_공격캠페인": "분류 공격캠페인",
+    "category_공급망공격": "분류 공급망공격",
+    "category_피싱사기": "분류 피싱사기",
+    "category_정책규제": "분류 정책규제",
+    "category_기술동향": "분류 기술동향",
+    "category_제품행사": "분류 제품행사",
+    "has_cve": "CVE 언급",
+    "has_actor": "위협 그룹/악성코드 특정",
+    "confidence_low": "LLM 확신도 low",
+    "reliability_a": "소스 신뢰도 A",
+    "reliability_b": "소스 신뢰도 B",
+    "reliability_c": "소스 신뢰도 C",
+    "pir_high": "PIR 매칭(high)",
+    "pir_other": "PIR 매칭(medium)",
+}
+
+def importance_features(exploitation="none", asset_matched=False, impact="", severity="",
+                        relevance="", category="", has_cve=False, has_actor=False, reliability="",
+                        pir_ids=(), confidence=""):
+    """중요도 판단에 쓰는 신호를 0/1 특징 벡터(dict)로 변환"""
+    severity = str(severity or "").lower()
+    relevance = str(relevance or "").lower()
+    category = clean_text(category)
+    reliability = str(reliability or "").strip().upper()
+    confidence = str(confidence or "").lower()
+    pir_defs = load_pirs()
+    pir_weights = {(pir_defs.get(pid) or {}).get("weight") for pid in (pir_ids or ())}
+    features = {
+        "pir_high": "high" in pir_weights,
+        "pir_other": bool(pir_weights - {"high", None}),
+        "exploitation_active": exploitation == "active",
+        "exploitation_poc": exploitation == "poc",
+        "asset_match": bool(asset_matched),
+        "impact_total": impact == "total",
+        "severity_critical": severity == "critical",
+        "severity_high": severity == "high",
+        "severity_medium": severity == "medium",
+        "relevance_high": relevance == "high",
+        "relevance_medium": relevance == "medium",
+        "has_cve": bool(has_cve),
+        "has_actor": bool(has_actor),
+        "confidence_low": confidence == "low",
+        "reliability_a": reliability == "A",
+        "reliability_b": reliability == "B",
+        "reliability_c": reliability == "C",
+    }
+    for name in ENRICH_CATEGORIES:
+        key = "category_{}".format(name)
+        if key in IMPORTANCE_FEATURE_LABELS:
+            features[key] = category == name
+    return {name: int(value) for name, value in features.items()}
+
+def load_learned_weights():
+    """train_weights.py가 생성한 학습 가중치. 없으면 None (규칙 기반으로 동작)."""
+    if "_learned_weights" not in _intel_cache:
+        data = None
+        try:
+            with LEARNED_WEIGHTS_FILE.open("r", encoding="utf-8") as file:
+                loaded = json.load(file)
+            if isinstance(loaded.get("weights"), dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+        _intel_cache["_learned_weights"] = data
+    return _intel_cache["_learned_weights"]
+
+def _score_with_learned(features, learned, reliability):
+    """학습된 로지스틱 회귀로 '유용할 확률'을 0~100 점수로 환산"""
+    weights = learned["weights"]
+    z = float(learned.get("bias") or 0.0)
+    reasons = []
+    for name, active in features.items():
+        weight = float(weights.get(name) or 0.0)
+        if active and weight:
+            z += weight
+            reasons.append("{}({:+.2f})".format(IMPORTANCE_FEATURE_LABELS.get(name, name), weight))
+    score = int(round(100.0 / (1.0 + math.exp(-z))))
+    reasons.append("학습 모델 적용(라벨 {}건)".format(learned.get("samples") or "?"))
+    return {"score": score, "reasons": reasons, "reliability": reliability, "mode": "learned"}
+
+def _triage_evidence(triage, prefixes):
+    """classify_urgency가 남긴 상세 근거(EPSS 수치, 매칭 자산명 등)에서 해당 항목을 찾는다"""
+    for reason in (triage or {}).get("reasons") or []:
+        if any(reason.startswith(prefix) for prefix in prefixes):
+            return reason
+    return ""
+
+def _collect_risk_rules(triage, enrichment, cves):
+    """트리거된 위험 규칙 목록을 [{"id", "criticality", "label", "evidence"}]로 반환.
+
+    evidence에는 판단 근거 값(EPSS 수치, 매칭된 자산명, LLM 판정값 등)을 담아
+    알림·리포트에서 "왜 이 점수인가"를 추적할 수 있게 한다.
+    """
+    rules = []
+
+    def add(rule_id, criticality, label, evidence=""):
+        rules.append({"id": rule_id, "criticality": criticality, "label": label, "evidence": evidence})
+
+    exploitation = triage.get("exploitation") or "none"
+    if exploitation == "active":
+        add("active_exploitation", "high", "실제 악용 정황",
+            _triage_evidence(triage, ("실제 악용", "악용 정황", "악용 확률 높음")))
+    elif exploitation == "poc":
+        add("poc_available", "moderate", "PoC/악용 가능성",
+            _triage_evidence(triage, ("공격 코드", "PoC", "악용 확률 주의")))
+
+    if triage.get("matched_assets"):
+        add("asset_match", "moderate", "자사 자산 매칭", ", ".join(triage["matched_assets"]))
+
+    if triage.get("impact") == "total":
+        add("impact_total", "moderate", "고위험 유형",
+            _triage_evidence(triage, ("CVSS",)) or "RCE/권한상승 등")
+
+    severity = str(enrichment.get("severity") or "").lower()
+    if severity in ("critical", "high"):
+        add("severity_{}".format(severity), "moderate", "심각도 {}".format(severity), "LLM 판정")
+    elif severity == "medium":
+        add("severity_medium", "info", "심각도 medium", "LLM 판정")
+
+    relevance = str(enrichment.get("relevance") or "").lower()
+    if relevance == "high":
+        add("relevance_high", "moderate", "관련성 high", "LLM 판정")
+    elif relevance == "medium":
+        add("relevance_medium", "info", "관련성 medium", "LLM 판정")
+
+    category = clean_text(enrichment.get("category"))
+    if category == "공급망공격":
+        # 자산 매칭이 구조적으로 안 되는 유형이라 카테고리 자체를 moderate 신호로 취급
+        add("category_supply_chain", "moderate", "분류 공급망공격")
+    elif category in ("취약점", "악성코드", "침해사고", "개인정보유출", "공격캠페인"):
+        add("category_threat", "info", "분류 {}".format(category))
+    elif category in ("정책규제", "피싱사기"):
+        add("category_{}".format("policy" if category == "정책규제" else "consumer_scam"),
+            "penalty", "분류 {}".format(category))
+    elif category == "제품행사":
+        add("category_product_event", "suppress", "분류 제품행사")
+
+    if cves:
+        cve_list = [cve for cve in cves if cve]
+        evidence = ", ".join(cve_list[:3]) + (" 외 {}건".format(len(cve_list) - 3) if len(cve_list) > 3 else "")
+        add("cve_present", "info", "CVE 언급", evidence)
+
+    actor = enrichment.get("threat_actor") or ""
+    malware = enrichment.get("malware_family") or ""
+    if actor or malware:
+        add("named_threat", "info", "위협 그룹/악성코드 특정", ", ".join(filter(None, [actor, malware])))
+
+    pir_defs = load_pirs()
+    for pid in enrichment.get("pirs") or []:
+        pir = pir_defs.get(pid)
+        if pir is None:
+            continue
+        criticality = "moderate" if pir["weight"] == "high" else "info"
+        add("pir_{}".format(pid.lower()), criticality, "PIR 매칭 {}".format(pid), pir["question"][:40])
+
+    if str(enrichment.get("confidence") or "").lower() == "low":
+        add("confidence_low", "penalty", "LLM 확신도 low")
+
+    return rules
+
+def score_importance(triage=None, enrichment=None, cves=None, reliability=None):
+    """기사 중요도를 0~100 점수로 산정해 {"score", "reasons", "reliability", "mode"}를 반환.
+
+    기본은 규칙 기반 밴드 스코어링(Recorded Future식): 트리거된 규칙 중 가장 강한
+    것이 밴드를 결정하고(High 65~100 / Moderate 30~64 / Info 5~24), 나머지 규칙이
+    밴드 안에서 점수를 밀어올린다. 약한 신호 누적만으로는 High 밴드에 못 들어간다.
+    각 근거에는 판단 상세(EPSS 수치, 매칭 자산명 등)가 붙는다.
+
+    학습 가중치(data/learned_weights.json — 피드백 라벨로 훈련)가 있으면 규칙 대신
+    로지스틱 회귀의 '유용 확률 x100'을 점수로 쓴다. 신뢰도는 특징으로 포함되므로
+    학습 모드에서는 배수를 따로 곱하지 않는다.
+    """
+    triage = triage or {}
+    enrichment = enrichment or {}
+
+    normalized_reliability = str(reliability or "").strip().upper() or None
+    learned = load_learned_weights()
+    if learned:
+        features = importance_features(
+            exploitation=triage.get("exploitation") or "none",
+            asset_matched=bool(triage.get("matched_assets")),
+            impact=triage.get("impact") or "",
+            severity=enrichment.get("severity"),
+            relevance=enrichment.get("relevance"),
+            category=enrichment.get("category"),
+            has_cve=bool(cves),
+            has_actor=bool(enrichment.get("threat_actor") or enrichment.get("malware_family")),
+            reliability=normalized_reliability or "",
+            pir_ids=enrichment.get("pirs") or (),
+            confidence=enrichment.get("confidence") or "",
+        )
+        return _score_with_learned(features, learned, normalized_reliability)
+
+    rules = _collect_risk_rules(triage, enrichment, cves)
+    reasons = []
+    positive = sorted(
+        (rule for rule in rules if rule["criticality"] in IMPORTANCE_BANDS),
+        key=lambda rule: _BAND_ORDER[rule["criticality"]],
+    )
+
+    score = 0
+    if positive:
+        band = positive[0]["criticality"]
+        floor, cap = IMPORTANCE_BANDS[band]
+        score = floor + sum(IMPORTANCE_PUSH[rule["criticality"]] for rule in positive[1:])
+        score = min(score, cap)
+        for rule in positive:
+            reasons.append(
+                "{} — {}".format(rule["label"], rule["evidence"]) if rule["evidence"] else rule["label"]
+            )
+        reasons.append("판정 밴드 {}({}~{})".format(band.capitalize(), floor, cap))
+
+    for rule in rules:
+        if rule["criticality"] == "penalty":
+            score = max(0, score - 5)
+            reasons.append("{}(-5)".format(rule["label"]))
+        elif rule["criticality"] == "suppress":
+            score = min(score, PRODUCT_EVENT_SCORE_CAP)
+            reasons.append("{} — 점수 상한 {}".format(rule["label"], PRODUCT_EVENT_SCORE_CAP))
+
+    multiplier = RELIABILITY_MULTIPLIERS.get(normalized_reliability)
+    if multiplier is not None and multiplier != 1.0 and score > 0:
+        score = int(round(score * multiplier))
+        reasons.append("소스 신뢰도 {}(x{})".format(normalized_reliability, multiplier))
+
+    return {"score": score, "reasons": reasons, "reliability": normalized_reliability, "mode": "rules"}
+
+def should_alert(importance, triage=None, min_score=None):
+    """즉시 알림 여부 판정. P1/P2는 점수와 무관하게 항상 알림."""
+    if (triage or {}).get("level") in ("P1", "P2"):
+        return True
+    threshold = IMPORTANCE_ALERT_THRESHOLD if min_score is None else int(min_score)
+    return (importance or {}).get("score", 0) >= threshold
+
+def iter_lines_reverse(path, chunk_size=65536):
+    """텍스트 파일을 끝에서부터 청크 단위로 거슬러 읽어 한 줄씩(최신 줄 먼저) 반환.
+
+    events.jsonl류 append-only 로그는 시간순으로 계속 쌓이기만 하는데, 여태
+    소비처들이 readlines()[-N:]으로 "최근 것만 본다"고 흉내냈지만 그건 파일
+    전체를 메모리에 다 읽은 "다음에" 자르는 거라 파일이 커질수록 매번 전체를
+    읽는 비용이 그대로였다. 이 제너레이터는 파일 끝에서부터 실제로 필요한
+    만큼만 읽으므로, 호출부가 원하는 시점에 break하면 그 이후는 아예 안 읽는다.
+
+    UTF-8 멀티바이트 문자가 청크 경계에서 잘릴 수 있어 완결된 줄 단위로만
+    디코드한다(마지막 미완성 조각은 다음 청크와 합쳐서 처리). 텍스트 모드로 쓰인
+    파일은 Windows에서 줄바꿈이 \r\n으로 저장되므로 \r도 함께 벗겨낸다.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+    with path.open("rb") as file:
+        file.seek(0, 2)
+        remaining = file.tell()
+        buffer = b""
+        while remaining > 0:
+            read_size = min(chunk_size, remaining)
+            remaining -= read_size
+            file.seek(remaining)
+            buffer = file.read(read_size) + buffer
+            lines = buffer.split(b"\n")
+            buffer = lines[0]  # 청크 경계에서 잘렸을 수 있으니 다음 청크와 합칠 몫으로 남겨둠
+            for line in reversed(lines[1:]):
+                line = line.rstrip(b"\r")
+                if line:
+                    yield line.decode("utf-8", errors="replace")
+        buffer = buffer.rstrip(b"\r")
+        if buffer:
+            yield buffer.decode("utf-8", errors="replace")
+
+# ===== 크로스소스 클러스터링 (수집 시점 — 같은 사건의 중복 알림 억제 + 교차 보도 가점) =====
+CLUSTER_WINDOW_HOURS = int(os.environ.get("CLUSTER_WINDOW_HOURS", "72"))
+CLUSTER_CVE_CONTAINMENT = 0.5   # 겹친 CVE 수 / min(양쪽 CVE 수) — 대형 종합기사의 체인 병합 방지
+CLUSTER_TITLE_JACCARD = 0.5     # 제목 토큰 유사도 — 오병합이 미병합보다 해로우므로 보수적
+CORROBORATION_CAP = 20
+
+# 취약점 카탈로그형 소스는 "보도"가 아니므로 클러스터링에서 제외
+# (NVD는 모든 CVE를 수록하므로 교차 확인 신호가 아니고, 뉴스 알림을 억제해서도 안 된다)
+CATALOG_SOURCES = {"nvd", "github_advisory", "exploit_db"}
+
+# events.jsonl에 importance.reliability가 없는 소스의 신뢰도 폴백 (교차 보도 가점용)
+SOURCE_RELIABILITY_FALLBACK = {
+    "cisa_kev": "A", "msrc": "A", "kisa": "A", "asec": "B", "boannews": "C",
+}
+
+_TITLE_STOPWORDS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "from", "by", "at", "as", "is", "are", "its", "new", "via", "after",
+    "amid", "under", "over", "how", "what", "why", "now",
+}
+
+def _title_tokens(title):
+    tokens = re.findall(r"[0-9a-z가-힣]{2,}", clean_text(title).lower())
+    return {token for token in tokens if token not in _TITLE_STOPWORDS}
+
+def _read_recent_events(hours, events_file=None):
+    """events.jsonl 뒤쪽에서 시간 창 안의 이벤트만 파싱 (카탈로그형 소스 제외).
+
+    append-only라 시간순으로 쌓인다는 전제하에 끝에서부터 거슬러 읽다가 cutoff보다
+    오래된 이벤트를 만나면 즉시 멈춘다 — 파일 전체 크기와 무관하게 창 크기만큼만 읽는다.
+    """
+    path = Path(events_file) if events_file else EVENTS_FILE
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    events = []
+    for line in iter_lines_reverse(path):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        try:
+            fetched = datetime.fromisoformat(str(event.get("fetched_at")).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            continue
+        if fetched < cutoff:
+            break  # 이 지점부터는 전부 더 오래된 이벤트 — 조기 종료
+        if (event.get("source") or "") in CATALOG_SOURCES:
+            continue
+        events.append(event)
+    return events
+
+def find_related_events(cves, title, hours=None, exclude_source=None, events_file=None):
+    """최근 이벤트 중 같은 사건으로 판단되는 것들을 반환.
+
+    매칭 기준(둘 중 하나):
+    - CVE containment: 겹친 CVE 수 / min(양쪽 CVE 수) >= 0.5
+    - 제목 토큰 Jaccard >= 0.5 (CVE 없는 침해사고·캠페인 보도용)
+    같은 소스의 후속 기사는 교차 확인이 아니므로 exclude_source로 제외한다.
+    """
+    cve_set = {str(cve).upper() for cve in (cves or []) if cve}
+    tokens = _title_tokens(title)
+    related = []
+    for event in _read_recent_events(hours or CLUSTER_WINDOW_HOURS, events_file):
+        if exclude_source and event.get("source") == exclude_source:
+            continue
+
+        matched = False
+        event_cves = {str(cve).upper() for cve in (event.get("cves") or []) if cve}
+        if cve_set and event_cves:
+            overlap = len(cve_set & event_cves)
+            if overlap and overlap / min(len(cve_set), len(event_cves)) >= CLUSTER_CVE_CONTAINMENT:
+                matched = True
+        if not matched and tokens:
+            event_tokens = _title_tokens(event.get("title"))
+            union = tokens | event_tokens
+            if union and len(tokens & event_tokens) / len(union) >= CLUSTER_TITLE_JACCARD:
+                matched = True
+        if matched:
+            related.append(event)
+    return related
+
+def _event_reliability(event):
+    reliability = str((event.get("importance") or {}).get("reliability") or "").upper()
+    return reliability or SOURCE_RELIABILITY_FALLBACK.get(event.get("source") or "", "")
+
+def _event_delivered(event):
+    delivery = event.get("delivery") or {}
+    return bool(delivery.get("email_sent") or delivery.get("slack_sent"))
+
+def build_cluster_context(related_events, triage=None):
+    """관련 이벤트들로부터 교차 보도 가점과 중복 알림 억제 여부를 판정.
+
+    - bonus: 소스별 최고 신뢰도 기준 A/B +10, C·미상 +5 (순환 보도 할인), 상한 20
+    - already_alerted: 클러스터에서 이미 알림이 나갔는가
+    - escalated: 새 기사의 트리아지가 기존 알림보다 높으면(P3→P1 등) 억제하지 않고 재알림
+    """
+    sources = {}
+    for event in related_events or []:
+        source = event.get("source") or "unknown"
+        reliability = _event_reliability(event)
+        if reliability in ("A", "B"):
+            sources[source] = 10
+        else:
+            sources.setdefault(source, 5)
+    bonus = min(sum(sources.values()), CORROBORATION_CAP)
+
+    alerted = [event for event in related_events or [] if _event_delivered(event)]
+    level_rank = {"P1": 0, "P2": 1}
+    current_rank = level_rank.get((triage or {}).get("level"), 2)
+    best_alerted_rank = min(
+        (level_rank.get(((event.get("triage") or {}).get("level")), 2) for event in alerted),
+        default=2,
+    )
+    return {
+        "related_ids": [event.get("id") for event in related_events or []],
+        "corroborating_sources": sorted(sources),
+        "bonus": bonus,
+        "already_alerted": bool(alerted),
+        "escalated": bool(alerted) and current_rank < best_alerted_rank,
+    }
+
+def triage_marker(triage):
+    level = (triage or {}).get("level")
+    if level == "P1":
+        return "🚨 *P1* "
+    if level == "P2":
+        return "⚠️ P2 "
+    return ""
+
+def triage_note(triage):
+    triage = triage or {}
+    if triage.get("level") in ("P1", "P2") and triage.get("reasons"):
+        return "\n> 판정: {}".format("; ".join(triage["reasons"]))
+    return ""
+
+def pick_webhook(default_webhook, triages):
+    """P1 항목이 하나라도 있으면 긴급 채널로 라우팅"""
+    p1_triages = [t for t in (triages or []) if (t or {}).get("level") == "P1"]
+    if p1_triages and SLACK_WEBHOOK_URGENT:
+        reasons = sorted({reason for t in p1_triages for reason in t.get("reasons", [])})
+        print("[!] P1 {}건 → 긴급 채널로 발송 ({})".format(len(p1_triages), "; ".join(reasons)))
+        return SLACK_WEBHOOK_URGENT
+    return default_webhook
+
+def load_json_state(state_file, default_factory=dict):
+    path = Path(state_file)
+    if not path.exists():
+        return default_factory()
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            state = json.load(file)
+            if state is None:
+                return default_factory()
+            return state
+    except (json.JSONDecodeError, OSError):
+        return default_factory()
+
+def save_json_state(state_file, state_data, max_items=None, keys_to_trim=None):
+    path = Path(state_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # 리스트 데이터의 크기 제한 처리
+    if max_items:
+        if isinstance(state_data, list):
+            state_data = state_data[-max_items:]
+        elif isinstance(state_data, dict) and keys_to_trim:
+            for key in keys_to_trim:
+                if key in state_data and isinstance(state_data[key], list):
+                    state_data[key] = state_data[key][-max_items:]
+
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(state_data, file, ensure_ascii=False, indent=2)
+
+def utc_now_iso():
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+def make_event(source, item_id, title, url="", summary="", severity="", score=None,
+               cves=None, published_at="", ai_summary=None, email_sent=False, slack_sent=False,
+               triage=None, category="", affected_products=None, epss=None,
+               threat_actor="", malware_family="", kev=False, iocs=None, relevance="",
+               references=None, fix_available=None, remediation="", due_date="",
+               ransomware_use=None, confidence="", attack_techniques=None, importance=None,
+               cluster=None, pirs=None, content_depth="", body_chars=None,
+               recommended_actions=None, affected_versions=None, novelty="", category_reason="",
+               analyst_review=None):
+    """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
+
+    epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
+    iocs는 [{"type": "sha256|sha1|md5|ipv4|domain|url", "value": ...}] 형식(extract_iocs 산출물).
+    confidence는 LLM enrichment 분석의 확신도(high/medium/low) — API 소스 사실 필드에는 사용하지 않는다.
+    """
+    if triage:
+        matched_assets = triage.get("matched_assets") or []
+        if epss is None:
+            epss = triage.get("epss")
+    else:
+        matched_assets = match_inventory_terms([title, summary])
+    return {
+        "id": "{}:{}".format(source, item_id),
+        "source": source,
+        "title": clean_text(title),
+        "url": url,
+        "summary": clean_text(summary),
+        "severity": clean_text(severity),
+        "score": score,
+        "cves": [cve for cve in (cves or []) if cve],
+        "matched_assets": matched_assets,
+        "category": clean_text(category),
+        "category_reason": clean_text(category_reason),
+        "affected_products": [clean_text(p) for p in (affected_products or []) if clean_text(p)],
+        "epss": epss,
+        "exploitation_status": (triage or {}).get("exploitation") or "none",
+        "kev": bool(kev) or source == "cisa_kev",
+        "ransomware_use": ransomware_use,
+        "threat_actor": normalize_threat_actor(threat_actor),
+        "malware_family": clean_text(malware_family),
+        "attack_techniques": [t for t in (attack_techniques or []) if t],
+        "pirs": [p for p in (pirs or []) if p],
+        "iocs": [ioc for ioc in (iocs or []) if ioc],
+        "relevance": clean_text(relevance).lower(),
+        "content_depth": clean_text(content_depth).lower(),
+        "novelty": clean_text(novelty).lower(),
+        "affected_versions": _clean_str_list(affected_versions or [], 10),
+        "body_chars": body_chars,
+        "analyst_review": analyst_review or None,
+        "recommended_actions": _clean_str_list(recommended_actions or [], 3),
+        "references": [r for r in (references or []) if r],
+        "fix_available": fix_available,
+        "remediation": clean_text(remediation),
+        "due_date": clean_text(due_date),
+        "confidence": clean_text(confidence).lower(),
+        "published_at": published_at or "",
+        "fetched_at": utc_now_iso(),
+        "ai_summary": ai_summary,
+        "triage": triage,
+        "importance": importance,
+        "cluster": cluster,
+        "delivery": {"email_sent": bool(email_sent), "slack_sent": bool(slack_sent)},
+    }
+
+def append_events(events, events_file=None):
+    if not events:
+        return
+    path = Path(events_file) if events_file else EVENTS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        for event in events:
+            file.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+def send_email_message(subject, text_body, html_body=None, to_email=None):
+    to_email = to_email or DEFAULT_TO_EMAIL
+
+    if not SENDER_EMAIL or not SENDER_PASSWORD or not to_email:
+        print("[-] Email skipped: EMAIL_ADDRESS, EMAIL_APP_PASSWORD, or TO_EMAIL is not configured.")
+        return False
+    
+    message = MIMEMultipart("alternative") if html_body else MIMEMultipart()
+    message["From"] = SENDER_EMAIL
+    message["To"] = to_email
+    message["Subject"] = subject
+
+    if text_body:
+        message.attach(MIMEText(text_body, "plain", "utf-8"))
+    if html_body:
+        message.attach(MIMEText(html_body, "html", "utf-8"))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.sendmail(SENDER_EMAIL, to_email, message.as_string())
+        print(f"[+] 메일 발송 성공 -> {to_email}")
+        return True
+    except Exception as e:
+        print(f"[-] 메일 발송 실패: {e}")
+        return False
+
+# Slack 메시지 하드 리밋: 블록 50개, section 텍스트 3,000자 초과 시 발송 자체가 400으로 실패합니다.
+SLACK_MAX_BLOCKS = 50
+SLACK_MAX_SECTION_TEXT = 3000
+
+def _sanitize_slack_payload(payload):
+    if not isinstance(payload, dict):
+        return payload
+    blocks = payload.get("blocks")
+    if not isinstance(blocks, list):
+        return payload
+
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        text = block.get("text")
+        if isinstance(text, dict) and isinstance(text.get("text"), str):
+            if len(text["text"]) > SLACK_MAX_SECTION_TEXT:
+                text["text"] = text["text"][:SLACK_MAX_SECTION_TEXT - 1] + "…"
+
+    if len(blocks) > SLACK_MAX_BLOCKS:
+        omitted = len(blocks) - (SLACK_MAX_BLOCKS - 1)
+        payload["blocks"] = blocks[:SLACK_MAX_BLOCKS - 1] + [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "⚠️ 메시지 한도 초과로 {}개 블록이 생략되었습니다.".format(omitted),
+                },
+            }
+        ]
+    return payload
+
+def send_slack_webhook(payload, webhook_url=None):
+    url = webhook_url or SLACK_WEBHOOK_URL
+    if not url:
+        print("[-] 슬랙 알림 실패: Webhook URL이 설정되지 않았습니다.")
+        return False
+
+    payload = _sanitize_slack_payload(payload)
+    # 링크 미리보기(unfurl) 끄기 — 안 끄면 Slack이 메시지 속 링크(click-tracker 경유)를
+    # 사람이 열어보기 전에 자동으로 미리 가져와서, 클릭 피드백에 가짜 "클릭"이 찍힌다.
+    payload.setdefault("unfurl_links", False)
+    payload.setdefault("unfurl_media", False)
+
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            url, 
+            data=data, 
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req) as response:
+            if response.status == 200:
+                print("[+] 슬랙 메시지 발송 성공")
+                return True
+            else:
+                print(f"[-] 슬랙 메시지 발송 실패 (Status Code: {response.status})")
+                return False
+    except Exception as e:
+        print(f"[-] 슬랙 발송 중 오류 발생: {e}")
+        return False
