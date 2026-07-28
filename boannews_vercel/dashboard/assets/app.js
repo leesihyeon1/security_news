@@ -5,6 +5,7 @@
   const SUMMARY_HIGHLIGHTS_LIMIT = 10; // 요약 탭은 빠른 개요가 목적 — 전체는 국내/해외(일간) 또는 History 탭 검색(주간)에서
   const SEARCH_LOG_URL = "https://click-tracker-two.vercel.app/api/search-log";
   const SEARCH_LOG_DEBOUNCE_MS = 1000;
+  const ANALYZE_URL = "https://click-tracker-two.vercel.app/api/analyze";
 
   // 탭 구성이 기간별로 다르다 — 일간은 기사 원문을 국내/해외로 나눠 계속 보여주고,
   // 주간은 그 대신 통계(분포·주간 동향·순위)를 보여준다. 인사이트는 아직 내용 미정인
@@ -133,6 +134,19 @@
     return '<div class="pagination">' + buttons + "</div>";
   }
 
+  // 심층분석 버튼 — opts.analyzable로 켜진 곳(인사이트·추천기사 탭)에서만 표시된다.
+  // event.ref가 없으면(구버전 payload 캐시 등) 버튼 자체를 안 만든다.
+  function renderAnalyzeBox(event) {
+    if (!event.ref) return "";
+    return (
+      '<div class="analyze-box" data-ref="' + esc(event.ref) + '" data-url="' + esc(event.url || "") +
+      '" data-title="' + esc(event.title || "") + '">' +
+      '<button type="button" class="analyze-btn">심층분석 보기</button>' +
+      '<div class="analyze-result"></div>' +
+      "</div>"
+    );
+  }
+
   function renderItem(event, opts) {
     opts = opts || {};
     const metaBits = [];
@@ -148,15 +162,16 @@
       '<div class="item-title"><a href="' + href + '" target="_blank" rel="noopener">' + esc(event.title) + "</a></div>" +
       (metaBits.length ? '<div class="item-meta">' + metaBits.map((b) => "<span>" + b + "</span>").join("") + "</div>" : "") +
       (event.summary ? '<div class="item-summary">' + esc(event.summary) + "</div>" : "") +
+      (opts.analyzable ? renderAnalyzeBox(event) : "") +
       "</div>"
     );
   }
 
-  function renderItemList(events) {
+  function renderItemList(events, opts) {
     if (!events || !events.length) {
       return '<div class="empty-state">해당 없음</div>';
     }
-    return '<div class="item-list">' + events.map((e) => renderItem(e)).join("") + "</div>";
+    return '<div class="item-list">' + events.map((e) => renderItem(e, opts)).join("") + "</div>";
   }
 
   function groupBySource(events) {
@@ -176,8 +191,10 @@
   }
 
   // pageKey를 주면 그 목록을 PAGE_SIZE 단위로 잘라서 보여주고 페이지 번호를 붙인다
-  // (국내/해외 탭용) — 안 주면(추천기사 탭) 예전처럼 전부 보여준다.
-  function renderBySource(events, pageKey) {
+  // (국내/해외 탭용) — 안 주면(추천기사 탭) 예전처럼 전부 보여준다. opts.analyzable를
+  // 켜면(추천기사 탭) 각 항목에 심층분석 버튼이 붙는다.
+  function renderBySource(events, pageKey, opts) {
+    opts = opts || {};
     if (!events || !events.length) {
       return '<div class="empty-state">해당 없음</div>';
     }
@@ -191,7 +208,9 @@
     const groupsHtml = groupBySource(items).map((group) =>
       '<div class="source-group">' +
       '<div class="source-group-head">' + esc(group.source) + ' <span class="count">' + group.items.length + '건</span></div>' +
-      '<div class="item-list">' + group.items.map((e) => renderItem(e, { hideSource: true })).join("") + "</div>" +
+      '<div class="item-list">' +
+      group.items.map((e) => renderItem(e, { hideSource: true, analyzable: opts.analyzable })).join("") +
+      "</div>" +
       "</div>"
     ).join("");
     return groupsHtml + paginationHtml;
@@ -547,10 +566,10 @@
         renderItemList(topHighlights) +
         "</div>";
     } else if (state.tab === "recommended") {
-      // 추천기사 탭: 읽을만한 동향(국내+해외 통합)을 소스별로 묶어서 표시
+      // 추천기사 탭: 읽을만한 동향(국내+해외 통합)을 소스별로 묶어서 표시 + 심층분석 버튼
       html +=
         '<div class="section"><div class="section-title">추천 기사 <span class="count">' + (data.trend_reads || []).length + "건</span></div>" +
-        renderBySource(data.trend_reads) +
+        renderBySource(data.trend_reads, null, { analyzable: true }) +
         "</div>";
     } else if (state.tab === "cve") {
       // CVE 탭: 크로스소스 상관관계 카드(요약 탭의 "핵심 취약점"과 동일 데이터)만 모아서 표시
@@ -563,8 +582,14 @@
       // 통계 탭: 카테고리·소스 전체 분포 + 주간 동향(전주 대비 급증, 주간 리포트에만 존재) + TOP 순위
       html += renderStatsTab(payload);
     } else if (state.tab === "insight") {
-      // 인사이트 탭: 자리만 마련 — 내용은 추후 결정
-      html += '<div class="section"><div class="section-title">인사이트</div><div class="empty-state">준비 중입니다.</div></div>';
+      // 인사이트 탭: 요약 탭과 같은 "주요 뉴스" 상위 N건에 심층분석 버튼을 붙여서 보여준다.
+      const insightHighlights = ((payload.domestic.highlights || []).concat(payload.overseas.highlights || []))
+        .slice(0, SUMMARY_HIGHLIGHTS_LIMIT);
+      html +=
+        '<div class="section"><div class="section-title">인사이트 <span class="count">주요 뉴스 심층분석 · ' +
+        insightHighlights.length + "건</span></div>" +
+        renderItemList(insightHighlights, { analyzable: true }) +
+        "</div>";
     } else if (state.tab === "history") {
       // History 탭: 검색어가 있으면 전체 기간 검색 결과, 없으면 월별 아카이브 브라우저
       html += renderHistorySection();
@@ -587,6 +612,10 @@
         }
         render(payload);
       });
+    });
+
+    $app.querySelectorAll(".analyze-btn").forEach((btn) => {
+      btn.addEventListener("click", () => runAnalysis(btn));
     });
 
     $app.querySelectorAll(".history-month-toggle").forEach((btn) => {
@@ -634,6 +663,43 @@
         refresh();
       });
     });
+  }
+
+  // "심층분석 보기" 버튼 클릭 시 analyze.js를 호출한다. 서버가 캐시·요청 제한을
+  // 관리하므로 여기서는 로딩 상태 표시와 에러 메시지 노출만 신경 쓰면 된다.
+  async function runAnalysis(btn) {
+    const box = btn.closest(".analyze-box");
+    const resultEl = box.querySelector(".analyze-result");
+    const payload = { ref: box.dataset.ref, url: box.dataset.url, title: box.dataset.title };
+
+    btn.disabled = true;
+    btn.textContent = "분석 중…";
+    resultEl.innerHTML = "";
+
+    let res, data;
+    try {
+      res = await fetch(ANALYZE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (error) {
+      resultEl.innerHTML = '<div class="analyze-error">분석 요청에 실패했습니다.</div>';
+      btn.disabled = false;
+      btn.textContent = "심층분석 보기";
+      return;
+    }
+
+    if (!res.ok) {
+      resultEl.innerHTML = '<div class="analyze-error">' + esc(data.error || "분석에 실패했습니다.") + "</div>";
+      btn.disabled = false;
+      btn.textContent = "심층분석 보기";
+      return;
+    }
+
+    resultEl.innerHTML = '<div class="analyze-text">' + esc(data.analysis || "").replace(/\n/g, "<br>") + "</div>";
+    btn.remove(); // 결과가 나오면 버튼은 치우고 재클릭(=중복 요청) 여지를 없앤다
   }
 
   // 검색어 입력이 멈춘 뒤(SEARCH_LOG_DEBOUNCE_MS) 한 번만 기록한다 — 관심사 파악·

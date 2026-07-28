@@ -6,6 +6,10 @@ Vercel 서버리스 함수 모음(`api/click.js`, `api/search-log.js`). 둘 다 
 주기적으로 읽어가 각각 `data/feedback.jsonl`(`useful` 라벨) / `data/search_log.jsonl`에
 기록한다.
 
+`api/analyze.js`는 성격이 다르다 — 대시보드 인사이트/추천기사 탭의 "심층분석 보기"
+버튼이 호출하며, 기사 원문을 서버에서 다시 가져와 LLM으로 분석해 반환한다(Redis
+기록용이 아니라 즉시 응답하는 API). 자세한 설정은 아래 "심층분석(analyze.js)" 절 참고.
+
 `boannews_vercel` 저장소 안의 하위 프로젝트 중 하나다(다른 하나는 `../dashboard/`).
 같은 저장소를 공유하지만 **완전히 별도의 Vercel 프로젝트**로 배포한다(Root Directory
 설정으로 구분) — 환경변수도 프로젝트별로 분리되므로 여기 등록한 Redis 자격증명이
@@ -71,3 +75,37 @@ IP당 요청 빈도 제한(`click.js` 분당 60회, `search-log.js` 분당 30회
 걸려도 로깅만 건너뛰고 **리다이렉트는 항상 수행**한다(추적 실패가 열람을 막으면 안
 됨). `search-log.js`는 제한에 걸리면 `429`를 반환하는데, 클라이언트(`app.js`)가
 어차피 실패를 조용히 무시하므로 사용자 경험에는 영향 없다.
+
+## 심층분석(`api/analyze.js`)
+
+대시보드가 정적 사이트라 title/summary만 갖고 있어서, 이 함수가 기사 URL을 서버에서
+다시 가져와 LLM(NVIDIA NIM API)으로 심층 분석한 뒤 반환한다. 공개 엔드포인트라
+아무나 호출할 수 있다는 전제로 비용을 세 겹으로 통제한다:
+
+1. **영구에 가까운 캐싱** — 같은 기사(ref)는 한 번 분석되면 결과를 90일간 Redis에
+   저장해두고 재사용한다. 같은 기사를 몇 명이 눌러도 LLM 호출은 한 번만 나간다 —
+   가장 큰 비용 방어선.
+2. **IP당 요청 제한** — 캐시 미스(=실제 LLM 호출로 이어지는 요청)에만 분당 5회 적용.
+3. **하루 총 "신규" 분석 건수 상한**(기본 20건) — 여러 사람이 동시에 서로 다른 기사를
+   눌러도 하루 최대 비용이 예측 가능한 선에서 막히는 최종 방어선.
+
+세 장치 다 Redis가 없거나 장애면 통과시킨다(다른 함수들과 같은 fail-open 철학)지만,
+이 경우 비용 방어가 전혀 없어지므로 **`REDIS_URL`은 필수로 설정할 것**.
+
+### 필요 환경변수 (이 Vercel 프로젝트에 추가 등록)
+
+- `REDIS_URL` — 위 `click.js`와 동일한 값
+- `NVIDIA_API_KEY` — NVIDIA NIM API 키. 메인 프로젝트(`scripts/common_utils.py`)가
+  쓰는 키를 그대로 써도 되고, 이 공개 엔드포인트 전용으로 별도 발급받아 사용량을
+  분리 추적해도 된다.
+- `NVIDIA_MODEL` — 선택. 기본값은 메인 프로젝트와 동일(`nvidia/nemotron-3-ultra-550b-a55b`)
+
+### 동작 확인
+
+```
+curl -X POST "https://your-project.vercel.app/api/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{"ref":"test1234ab","url":"https://example.com/article","title":"테스트 기사"}'
+```
+`{"analysis": "...", "cached": false}`가 오면 정상(첫 호출은 LLM을 실제로 부르므로
+몇 초 걸릴 수 있음). 같은 요청을 한 번 더 보내면 `"cached": true`로 즉시 응답돼야 함.

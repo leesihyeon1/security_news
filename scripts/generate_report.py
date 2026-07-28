@@ -1741,6 +1741,9 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         # matched_assets는 의도적으로 뺀다 — 공개 웹 대시보드에 자사 보유 자산/제품명이
         # 노출되면 안 되므로(이메일/슬랙 리포트는 내부용이라 그대로 유지, 여기만 예외).
         return {
+            # 대시보드의 "심층분석" 버튼이 이 값으로 분석 결과를 캐싱·식별한다(클릭
+            # 추적용 ref와 같은 해시 함수 — tracking_url 설정 여부와 무관하게 항상 존재).
+            "ref": common_utils.event_ref(event.get("id")),
             "title": event.get("title") or "(제목 없음)",
             "url": common_utils.tracking_url(event.get("id"), event.get("url") or "") or "",
             "source": event.get("source") or "",
