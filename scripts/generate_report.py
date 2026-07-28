@@ -50,6 +50,12 @@ MAX_TOP_ITEMS_IN_REPORT = 10
 MAX_CVE_CARDS = 5
 MAX_ITEMS_PER_PIR = 5
 
+# 주간 리포트 전용 "전주 대비 급증" 집계 — 표본이 너무 적은 항목의 등락은 노이즈이므로
+# 이번 주 건수가 이 값 미만이면 아예 비교 대상에서 제외한다(예: 1건->3건을 "3배 증가"로
+# 보여주지 않음).
+MIN_WEEKLY_TREND_COUNT = 3
+MAX_WEEKLY_TREND_ITEMS = 5
+
 # CVE 카드 필드별 길이 상한 — 소비처마다 예산이 달라 값이 다르다:
 # 요약·영향은 전 채널 공통(카드 생성 시 한 번만 자르면 됨), 조치문은 LLM
 # 프롬프트(토큰 절약) < Slack(블록 길이 제한) < 이메일/텍스트(가장 여유) 순.
@@ -201,6 +207,16 @@ def load_events(since):
     append-only 로그를 끝에서부터 거슬러 읽다가 since보다 오래된 이벤트를 만나면
     멈춘다 — 로그 전체 크기와 무관하게 이번 집계 기간만큼만 읽는다.
     """
+    return load_events_between(since, None)
+
+
+def load_events_between(since, until):
+    """load_events(since)와 같은 방식이지만 [since, until) 구간만 남긴다.
+
+    주간 리포트의 "전주 대비" 비교처럼 과거의 특정 구간만 필요할 때 쓴다(until=None이면
+    load_events(since)와 동일). since보다 오래된 이벤트를 만나면 조기 종료하는 성질은
+    그대로 유지된다.
+    """
     events = {}
 
     for path, legacy in ((common_utils.EVENTS_FILE, False), (LEGACY_BOANNEWS_EVENTS_FILE, True)):
@@ -222,6 +238,8 @@ def load_events(since):
                 continue
             if fetched < since:
                 break  # 이 지점부터는 전부 더 오래된 이벤트 — 조기 종료
+            if until is not None and fetched >= until:
+                continue  # 구간 상한 이후 이벤트는 건너뛰되, 더 오래된 것을 계속 찾는다
             recent.append(event)
 
         for event in reversed(recent):  # 시간순으로 되돌려 기존 dedup(첫 등장 우선) 순서 유지
@@ -229,6 +247,27 @@ def load_events(since):
             events.setdefault(key, event)
 
     return list(events.values())
+
+
+def _entity_counters(events):
+    """threat_actor/malware_family/ATT&CK 기법/자산매칭 이름별 등장 횟수.
+
+    build_stats()와 compute_weekly_trends()(주간 리포트의 전주 대비 비교)가 같은
+    집계 로직을 공유하기 위해 분리했다."""
+    actor_counter = Counter()
+    malware_counter = Counter()
+    technique_counter = Counter()
+    asset_counter = Counter()
+    for event in events:
+        if event.get("threat_actor"):
+            actor_counter[event["threat_actor"]] += 1
+        if event.get("malware_family"):
+            malware_counter[event["malware_family"]] += 1
+        for technique in event.get("attack_techniques") or []:
+            technique_counter[technique] += 1
+        for term in event.get("matched_assets") or []:
+            asset_counter[term] += 1
+    return actor_counter, malware_counter, technique_counter, asset_counter
 
 
 def build_stats(events):
@@ -243,28 +282,16 @@ def build_stats(events):
             if cve:
                 cve_counter[cve] += 1
 
-    asset_counter = Counter()
-    for event in asset_hits:
-        for term in event["matched_assets"]:
-            asset_counter[term] += 1
+    actor_counter, malware_counter, technique_counter, asset_counter = _entity_counters(events)
 
     by_category = Counter(
         event.get("category") or "미분류" for event in events
     )
     by_pir = Counter(pid for event in events for pid in event.get("pirs") or [])
 
-    actor_counter = Counter()
-    malware_counter = Counter()
-    technique_counter = Counter()
     ioc_seen = set()
     iocs = []
     for event in events:
-        if event.get("threat_actor"):
-            actor_counter[event["threat_actor"]] += 1
-        if event.get("malware_family"):
-            malware_counter[event["malware_family"]] += 1
-        for technique in event.get("attack_techniques") or []:
-            technique_counter[technique] += 1
         for ioc in event.get("iocs") or []:
             # 신규 형식은 {"type", "value"} — 구형 문자열도 방어적으로 수용
             if not isinstance(ioc, dict):
@@ -297,6 +324,65 @@ def build_stats(events):
         "top_techniques": technique_counter.most_common(10),
         "iocs": iocs,
     }
+
+
+def compute_weekly_trends(events, previous_events,
+                           min_count=MIN_WEEKLY_TREND_COUNT, max_items=MAX_WEEKLY_TREND_ITEMS):
+    """이번 주 vs 전주 위협 행위자/악성코드/ATT&CK 기법/자산매칭 언급 건수를 비교해
+    급증(또는 신규 등장)한 항목을 뽑는다 — 주간 리포트 전용.
+
+    표본이 너무 적은 항목은 등락을 봐도 의미가 없으므로(1건->3건을 "3배 증가"라 부르면
+    오해만 부름) 이번 주 건수가 min_count 미만인 항목은 아예 비교하지 않는다.
+    """
+    curr_counters = _entity_counters(events)
+    prev_counters = _entity_counters(previous_events)
+
+    def surges(curr_counter, prev_counter):
+        result = []
+        for name, count in curr_counter.items():
+            if count < min_count:
+                continue
+            previous = prev_counter.get(name, 0)
+            delta = count - previous
+            if delta <= 0:
+                continue
+            result.append({"name": name, "count": count, "previous": previous, "delta": delta})
+        result.sort(key=lambda item: item["delta"], reverse=True)
+        return result[:max_items]
+
+    keys = ("actors", "malware", "techniques", "assets")
+    result = {key: surges(curr, prev) for key, curr, prev in zip(keys, curr_counters, prev_counters)}
+    result["categories"] = _category_share_surges(events, previous_events, min_count, max_items)
+    return result
+
+
+def _category_share_surges(events, previous_events, min_count, max_items):
+    """카테고리별 비중(전체 대비 %) 변화 — raw count가 아니라 비중으로 비교해야 피드
+    추가/삭제나 수집량 변동 같은 인프라 변화가 "위협 증가"로 착시되는 걸 막는다.
+    미분류(카테고리 없는 이벤트, 예: NVD 등 API 소스)는 분모·분자 모두에서 제외한다."""
+    curr_cat = Counter(event.get("category") for event in events if event.get("category"))
+    prev_cat = Counter(event.get("category") for event in previous_events if event.get("category"))
+    curr_total = sum(curr_cat.values())
+    prev_total = sum(prev_cat.values())
+    if not curr_total:
+        return []
+
+    result = []
+    for name, count in curr_cat.items():
+        if count < min_count:
+            continue
+        curr_share = count / curr_total * 100
+        prev_count = prev_cat.get(name, 0)
+        prev_share = (prev_count / prev_total * 100) if prev_total else 0.0
+        delta = curr_share - prev_share
+        if delta <= 0:
+            continue
+        result.append({
+            "name": name, "count": count, "share": curr_share,
+            "previous_share": prev_share, "delta": delta,
+        })
+    result.sort(key=lambda item: item["delta"], reverse=True)
+    return result[:max_items]
 
 
 def event_sort_key(event):
@@ -1170,8 +1256,42 @@ def ai_narrative(period_label, digest):
     return narrative, keywords
 
 
+def _format_weekly_trend_item(item):
+    """단일 항목을 '이름 N건 (전주 M건, +D)' 또는 '이름 N건 (신규)' 텍스트로."""
+    if item["previous"] == 0:
+        return "{} {}건 (신규)".format(item["name"], item["count"])
+    return "{} {}건 (전주 {}건, +{})".format(item["name"], item["count"], item["previous"], item["delta"])
+
+
+def _format_category_trend_item(item):
+    """단일 항목을 '이름 비중 M%→N% (+D%p)' 텍스트로 — 카테고리는 건수가 아니라 비중으로 비교한다."""
+    return "{} 비중 {:.0f}%→{:.0f}% (+{:.0f}%p)".format(
+        item["name"], item["previous_share"], item["share"], item["delta"]
+    )
+
+
+WEEKLY_TREND_GROUPS = (
+    ("actors", "위협 행위자", _format_weekly_trend_item),
+    ("malware", "악성코드", _format_weekly_trend_item),
+    ("techniques", "ATT&CK 기법", _format_weekly_trend_item),
+    ("assets", "자산 매칭", _format_weekly_trend_item),
+    ("categories", "기사 분류", _format_category_trend_item),
+)
+
+
+def _weekly_trend_groups(weekly_trends):
+    """compute_weekly_trends() 결과에서 항목이 있는 그룹만 (라벨, 항목 리스트, 포맷 함수) 순서로 반환."""
+    if not weekly_trends:
+        return []
+    return [
+        (label, weekly_trends[key], formatter)
+        for key, label, formatter in WEEKLY_TREND_GROUPS
+        if weekly_trends.get(key)
+    ]
+
+
 def build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups,
-                      trend_reads):
+                      trend_reads, weekly_trends=None):
     lines = [
         title,
         "기간: {}".format(period_label),
@@ -1189,6 +1309,15 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
         lines.append("- 카테고리: {}".format(
             ", ".join("{} {}건".format(category, count) for category, count in category_counts)
         ))
+
+    weekly_trend_groups = _weekly_trend_groups(weekly_trends)
+    if weekly_trend_groups:
+        lines.append("")
+        lines.append("[주간 동향 — 전주 대비 급증]")
+        for label, items, formatter in weekly_trend_groups:
+            lines.append("- {}: {}".format(
+                label, " · ".join(formatter(item) for item in items)
+            ))
 
     if narrative:
         lines.append("")
@@ -1273,7 +1402,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
 
 
 def build_html_report(title, period_label, stats, narrative, highlights, cards, pir_groups,
-                      trend_reads):
+                      trend_reads, weekly_trends=None):
     parts = [
         "<html><body>",
         "<h2>{}</h2>".format(html.escape(title)),
@@ -1294,6 +1423,17 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             ", ".join("{} {}건".format(category, count) for category, count in category_counts)
         )))
     parts.append("</ul>")
+
+    weekly_trend_groups = _weekly_trend_groups(weekly_trends)
+    if weekly_trend_groups:
+        parts.append("<h3>주간 동향 — 전주 대비 급증</h3>")
+        parts.append("<ul>")
+        for label, items, formatter in weekly_trend_groups:
+            parts.append("<li>{}: {}</li>".format(
+                html.escape(label),
+                html.escape(" · ".join(formatter(item) for item in items)),
+            ))
+        parts.append("</ul>")
 
     if narrative:
         parts.append("<h3>AI 분석</h3>")
@@ -1420,7 +1560,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
 
 
 def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, pir_groups,
-                       trend_reads):
+                       trend_reads, weekly_trends=None):
     stat_text = "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`".format(
         stats["total"], len(stats["p1"]), len(stats["p2"]),
         len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
@@ -1436,6 +1576,18 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
         {"type": "divider"},
         {"type": "section", "text": {"type": "mrkdwn", "text": stat_text}},
     ]
+
+    weekly_trend_groups = _weekly_trend_groups(weekly_trends)
+    if weekly_trend_groups:
+        trend_lines = [
+            "*{}*: {}".format(label, " · ".join(formatter(item) for item in items))
+            for label, items, formatter in weekly_trend_groups
+        ]
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "📈 *주간 동향 — 전주 대비 급증*\n" + "\n".join(trend_lines)},
+        })
 
     if narrative:
         blocks.append({"type": "divider"})
@@ -1680,6 +1832,14 @@ def main():
 
     stats = build_stats(events)
 
+    # 주간 리포트 전용: 전주(같은 길이의 직전 구간)와 비교해 급증한 위협 행위자/
+    # 악성코드/ATT&CK 기법/자산매칭을 뽑는다. 일간은 비교 기준(전날 하루)이 표본이
+    # 너무 적어 의미가 없으므로 주간에서만 계산한다.
+    weekly_trends = None
+    if args.period == "weekly":
+        previous_events = load_events_between(since - timedelta(days=days), since)
+        weekly_trends = compute_weekly_trends(events, previous_events)
+
     # CVE 크로스소스 상관관계: 복수 소스 등장 CVE는 카드로 병합하고,
     # 카드에 포함된 이벤트는 개별 TOP 목록에서 제외해 중복 표시를 막는다
     cards = correlate_by_cve(events)
@@ -1718,9 +1878,18 @@ def main():
     if not keywords:
         keywords = fallback_keywords(stats, cards)
 
-    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
-    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
-    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
+    text_body = build_text_report(
+        title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+        weekly_trends=weekly_trends,
+    )
+    html_body = build_html_report(
+        title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+        weekly_trends=weekly_trends,
+    )
+    blocks = build_slack_blocks(
+        title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+        weekly_trends=weekly_trends,
+    )
 
     if args.dry_run:
         print("===== DRY RUN: 발송 생략 =====")
