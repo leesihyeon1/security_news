@@ -1635,7 +1635,9 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "p1": len(stats["p1"]),
             "p2": len(stats["p2"]),
             "info": stats["total"] - len(stats["p1"]) - len(stats["p2"]),
-            "info_by_category": dict(stats["info_by_category"].most_common()),
+            "info_by_category": dict(
+                (c, n) for c, n in stats["info_by_category"].most_common() if c != "미분류"
+            ),
             "by_source": dict(stats["by_source"].most_common()),
         },
         "cards": [serialize_card(card) for card in cards],
