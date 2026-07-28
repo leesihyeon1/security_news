@@ -2,13 +2,22 @@
   "use strict";
 
   const PAGE_SIZE = 30;
-  const SUMMARY_HIGHLIGHTS_LIMIT = 10; // 요약 탭은 빠른 개요가 목적 — 전체는 History 탭 검색에서
+  const SUMMARY_HIGHLIGHTS_LIMIT = 10; // 요약 탭은 빠른 개요가 목적 — 전체는 국내/해외(일간) 또는 History 탭 검색(주간)에서
   const SEARCH_LOG_URL = "https://click-tracker-two.vercel.app/api/search-log";
   const SEARCH_LOG_DEBOUNCE_MS = 1000;
 
+  // 탭 구성이 기간별로 다르다 — 일간은 기사 원문을 국내/해외로 나눠 계속 보여주고,
+  // 주간은 그 대신 통계(분포·주간 동향·순위)를 보여준다. 인사이트는 아직 내용 미정인
+  // 빈 탭으로 양쪽 다 History 바로 왼쪽에 둔다.
+  function tabsForPeriod(period) {
+    return period === "weekly"
+      ? ["all", "recommended", "cve", "stats", "insight", "history"]
+      : ["all", "recommended", "cve", "domestic", "overseas", "insight", "history"];
+  }
+
   const state = {
     period: "daily",
-    tab: "all", // all | recommended | cve | stats | insight | history
+    tab: "all", // all | domestic | overseas | recommended | cve | stats | insight | history
     cache: {}, // period -> payload
     query: "",
     searchIndex: null, // null = 아직 로딩 전, 로드되면 배열
@@ -105,7 +114,7 @@
     return '<span class="level-badge ' + level + '">' + level + "</span>";
   }
 
-  // ===== Pagination (History 검색·월별 아카이브에서 공용) =====
+  // ===== Pagination (국내/해외, History 검색·월별 아카이브에서 공용) =====
   function paginate(items, page) {
     const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
     const clamped = Math.min(Math.max(1, page), totalPages);
@@ -166,8 +175,8 @@
       .sort((a, b) => b.items.length - a.items.length);
   }
 
-  // pageKey를 주면 그 목록을 PAGE_SIZE 단위로 잘라서 보여주고 페이지 번호를 붙인다 —
-  // 안 주면(추천기사 탭) 예전처럼 전부 보여준다.
+  // pageKey를 주면 그 목록을 PAGE_SIZE 단위로 잘라서 보여주고 페이지 번호를 붙인다
+  // (국내/해외 탭용) — 안 주면(추천기사 탭) 예전처럼 전부 보여준다.
   function renderBySource(events, pageKey) {
     if (!events || !events.length) {
       return '<div class="empty-state">해당 없음</div>';
@@ -414,9 +423,11 @@
     return query ? renderHistorySearchResults(state.searchIndex, query) : renderHistoryBrowser(state.searchIndex);
   }
 
-  // 탭별로 필요한 데이터만 추려서 반환. 읽을만한 동향(trend_reads)은 요약 탭에 섞이지
-  // 않고 recommended 탭에서만 다룬다 — 같은 기사가 여러 탭에 중복 노출되지 않게.
+  // 탭별로 필요한 데이터만 추려서 반환. 읽을만한 동향(trend_reads)은 요약/국내/해외에
+  // 섞이지 않고 recommended 탭에서만 다룬다 — 같은 기사가 여러 탭에 중복 노출되지 않게.
   function tabData(payload) {
+    if (state.tab === "domestic") return { highlights: payload.domestic.highlights || [] };
+    if (state.tab === "overseas") return { highlights: payload.overseas.highlights || [] };
     if (state.tab === "recommended") {
       return { trend_reads: (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []) };
     }
@@ -490,6 +501,11 @@
   }
 
   function render(payload) {
+    // 기간이 바뀌면 이전 탭이 새 기간에 없을 수 있다(예: 주간 "통계" 탭 상태에서 일간으로
+    // 전환) — 그럴 땐 요약 탭으로 되돌린다.
+    if (!tabsForPeriod(payload.period).includes(state.tab)) {
+      state.tab = "all";
+    }
     const data = tabData(payload);
     $generatedAt.textContent = payload.title + " · 기간: " + payload.period_label + " · 생성: " + fmtDate(payload.generated_at);
     renderKeywordSidebar(payload);
@@ -500,8 +516,9 @@
 
     html +=
       '<div class="region-tabs">' +
-      ["all", "recommended", "cve", "stats", "insight", "history"].map((t) => {
-        const label = t === "all" ? "요약" : t === "stats" ? "통계" : t === "insight" ? "인사이트" :
+      tabsForPeriod(payload.period).map((t) => {
+        const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" :
+          t === "stats" ? "통계" : t === "insight" ? "인사이트" :
           t === "cve" ? "CVE" : t === "history" ? "History" : "추천기사";
         const active = state.tab === t ? " is-active" : "";
         return '<button type="button" class="region-tab' + active + '" data-region="' + t + '">' + label + "</button>";
@@ -520,12 +537,13 @@
           '<div class="card-list">' + payload.cards.map(renderCveCard).join("") + "</div></div>";
       }
 
-      // 전체(캡 없음)는 History 탭 검색 몫 — 요약은 상위 N건만 보여주는 빠른 개요로 유지
+      // 전체(캡 없음)는 일간=국내/해외 탭, 주간=History 탭 검색 몫 — 요약은 상위 N건만 보여주는 빠른 개요로 유지
       const allHighlights = data.highlights || [];
       const topHighlights = allHighlights.slice(0, SUMMARY_HIGHLIGHTS_LIMIT);
+      const seeAllHint = payload.period === "weekly" ? "History 탭 검색에서" : "국내/해외 탭에서";
       html +=
         '<div class="section"><div class="section-title">주요 뉴스 <span class="count">상위 ' +
-        topHighlights.length + "건 · 전체 " + allHighlights.length + '건은 History 탭 검색에서</span></div>' +
+        topHighlights.length + "건 · 전체 " + allHighlights.length + '건은 ' + seeAllHint + '</span></div>' +
         renderItemList(topHighlights) +
         "</div>";
     } else if (state.tab === "recommended") {
@@ -550,6 +568,12 @@
     } else if (state.tab === "history") {
       // History 탭: 검색어가 있으면 전체 기간 검색 결과, 없으면 월별 아카이브 브라우저
       html += renderHistorySection();
+    } else if (state.tab === "domestic" || state.tab === "overseas") {
+      // 국내/해외 탭(일간 전용): AI 총평·핵심 취약점 없이, 주요 뉴스만 소스별로 묶어서 나열(30건씩 페이지네이션)
+      html +=
+        '<div class="section"><div class="section-title">기사 <span class="count">' + (data.highlights || []).length + "건</span></div>" +
+        renderBySource(data.highlights, "region-" + state.tab) +
+        "</div>";
     }
 
     $app.innerHTML = html;
