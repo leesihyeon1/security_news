@@ -1053,6 +1053,14 @@ def _extract_keywords(narrative, header=KEYWORD_HEADER, max_items=MAX_KEYWORDS):
     return keywords
 
 
+def _keywords_grounded_in_digest(keywords, digest):
+    """LLM이 실제 데이터에 없는 용어를 지어내는 걸 거른다 — attack_techniques를 공식
+    카탈로그로 검증하는 것과 같은 목적의 환각 방지 장치. 그 기간 실제 소스 데이터인
+    digest에 문자열로(대소문자 무관) 등장하지 않는 키워드는 제외한다."""
+    digest_lower = digest.lower()
+    return [kw for kw in keywords if kw.lower() in digest_lower]
+
+
 def _remove_bare_markers(narrative):
     """번호("1.")나 불릿("-")만 있고 내용이 없는 줄을, 어느 섹션에 있든 통째로 제거하는
     마지막 안전망. _truncate_numbered_items()가 섹션별로 이미 같은 일을 하지만, 그
@@ -1157,6 +1165,7 @@ def ai_narrative(period_label, digest):
     narrative = _truncate_numbered_items(narrative, "권고 조치", max_items=3)
     narrative = _remove_bare_markers(narrative)
     keywords = _extract_keywords(narrative)
+    keywords = _keywords_grounded_in_digest(keywords, digest)
     narrative = _strip_narrative_section(narrative, KEYWORD_HEADER)
     return narrative, keywords
 
