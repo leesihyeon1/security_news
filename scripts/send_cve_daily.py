@@ -605,6 +605,8 @@ def main():
                 email_sent=email_sent,
                 slack_sent=slack_sent,
                 triage=item.get("triage"),
+                category="취약점",
+                category_reason="NVD API 소스 — CVE 취약점 정보이므로 카테고리 고정(LLM 판단 아님)",
             )
             for item in new_nvd_items
         ]
