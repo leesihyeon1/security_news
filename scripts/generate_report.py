@@ -1714,7 +1714,8 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
     return blocks
 
 
-def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads, keywords=None):
+def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads,
+                             keywords=None, weekly_trends=None):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
 
     이메일/슬랙/텍스트 리포트는 지면이 한정돼 있어 highlights·cards를 상위 N개로
@@ -1785,6 +1786,13 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
     highlight_domestic, highlight_overseas = split_by_region(highlights)
     trend_domestic, trend_overseas = split_by_region(trend_reads)
 
+    # 주간 동향(전주 대비 급증)의 "자산 매칭" 그룹은 자사 보유 자산/제품명을 그대로
+    # 노출하므로, PIR·자산매칭 정보를 안 담는 것과 같은 원칙으로 공개 대시보드에서 뺀다
+    # (위협 행위자·악성코드·ATT&CK 기법·카테고리는 자사 정보가 아니라 그대로 노출해도 됨).
+    dashboard_weekly_trends = None
+    if weekly_trends:
+        dashboard_weekly_trends = {key: value for key, value in weekly_trends.items() if key != "assets"}
+
     return {
         "title": title,
         "period": period,
@@ -1800,11 +1808,15 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
                 (c, n) for c, n in stats["info_by_category"].most_common() if c != "미분류"
             ),
             "by_source": dict(stats["by_source"].most_common()),
+            "top_actors": stats.get("top_actors") or [],
+            "top_malware": stats.get("top_malware") or [],
+            "top_cves": stats.get("top_cves") or [],
         },
         "cards": [serialize_card(card) for card in cards],
         "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
         "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
         "keywords": keywords or [],
+        "weekly_trends": dashboard_weekly_trends,
     }
 
 
@@ -1907,6 +1919,7 @@ def main():
 
     dashboard_payload = build_dashboard_payload(
         title, args.period, period_label, stats, narrative, all_highlights, cards, all_trend_reads, keywords,
+        weekly_trends=weekly_trends,
     )
     publish_web_dashboard.publish(dashboard_payload)
 

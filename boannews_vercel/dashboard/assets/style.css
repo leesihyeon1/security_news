@@ -310,6 +310,34 @@ html, body {
   box-shadow: var(--shadow);
 }
 
+/* ===== 통계 탭: 주간 동향 / 순위 ===== */
+.trend-group { margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trend-group:last-child { margin-bottom: 0; }
+.trend-group-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+.rank-list { display: flex; flex-direction: column; gap: 6px; }
+.rank-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+.rank-num {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-faint);
+  min-width: 1.4em;
+}
+.rank-name { flex: 1; font-size: 0.86rem; }
+.rank-count { font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+
 /* ===== Cards / items ===== */
 .card-list, .item-list {
   display: flex;

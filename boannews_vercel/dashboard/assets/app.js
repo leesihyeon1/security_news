@@ -2,13 +2,13 @@
   "use strict";
 
   const PAGE_SIZE = 30;
-  const SUMMARY_HIGHLIGHTS_LIMIT = 10; // 요약 탭은 빠른 개요가 목적 — 전체는 국내/해외 탭에서
+  const SUMMARY_HIGHLIGHTS_LIMIT = 10; // 요약 탭은 빠른 개요가 목적 — 전체는 History 탭 검색에서
   const SEARCH_LOG_URL = "https://click-tracker-two.vercel.app/api/search-log";
   const SEARCH_LOG_DEBOUNCE_MS = 1000;
 
   const state = {
     period: "daily",
-    tab: "all", // all | domestic | overseas | recommended | cve | history
+    tab: "all", // all | recommended | cve | stats | insight | history
     cache: {}, // period -> payload
     query: "",
     searchIndex: null, // null = 아직 로딩 전, 로드되면 배열
@@ -105,7 +105,7 @@
     return '<span class="level-badge ' + level + '">' + level + "</span>";
   }
 
-  // ===== Pagination (국내/해외, History 검색·월별 아카이브에서 공용) =====
+  // ===== Pagination (History 검색·월별 아카이브에서 공용) =====
   function paginate(items, page) {
     const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
     const clamped = Math.min(Math.max(1, page), totalPages);
@@ -166,8 +166,8 @@
       .sort((a, b) => b.items.length - a.items.length);
   }
 
-  // pageKey를 주면 그 목록을 PAGE_SIZE 단위로 잘라서 보여주고 페이지 번호를 붙인다
-  // (국내/해외 탭용) — 안 주면(추천기사 탭) 예전처럼 전부 보여준다.
+  // pageKey를 주면 그 목록을 PAGE_SIZE 단위로 잘라서 보여주고 페이지 번호를 붙인다 —
+  // 안 주면(추천기사 탭) 예전처럼 전부 보여준다.
   function renderBySource(events, pageKey) {
     if (!events || !events.length) {
       return '<div class="empty-state">해당 없음</div>';
@@ -206,6 +206,95 @@
       (links ? '<div class="cve-card-links">' + links + "</div>" : "") +
       "</div>"
     );
+  }
+
+  // ===== 통계 탭 =====
+  const WEEKLY_TREND_GROUP_LABELS = [
+    ["actors", "위협 행위자"],
+    ["malware", "악성코드"],
+    ["techniques", "ATT&CK 기법"],
+    ["categories", "기사 분류"],
+  ]; // "자산 매칭"은 자사 보유 자산/제품명이라 대시보드 payload 자체에서 이미 제외됨
+
+  function renderDistTiles(entries) {
+    if (!entries.length) return '<div class="empty-state">해당 없음</div>';
+    return (
+      '<div class="stat-strip">' +
+      entries.map(([name, count]) =>
+        '<div class="stat-tile"><div class="num">' + esc(count) + '</div><div class="label">' + esc(name) + "</div></div>"
+      ).join("") +
+      "</div>"
+    );
+  }
+
+  function formatWeeklyTrendItem(key, item) {
+    if (key === "categories") {
+      return esc(item.name) + " 비중 " + item.previous_share.toFixed(0) + "%→" + item.share.toFixed(0) + "% (+" + item.delta.toFixed(0) + "%p)";
+    }
+    return item.previous === 0
+      ? esc(item.name) + " " + item.count + "건 (신규)"
+      : esc(item.name) + " " + item.count + "건 (전주 " + item.previous + "건, +" + item.delta + ")";
+  }
+
+  function renderWeeklyTrendSection(weeklyTrends) {
+    if (!weeklyTrends) return ""; // 주간 리포트에만 존재 — 일간에서는 섹션 자체를 안 보여줌
+    const groupsHtml = WEEKLY_TREND_GROUP_LABELS.map(([key, label]) => {
+      const items = weeklyTrends[key] || [];
+      if (!items.length) return "";
+      return (
+        '<div class="trend-group"><span class="trend-group-label">' + esc(label) + "</span>" +
+        items.map((item) => '<span class="pill">' + formatWeeklyTrendItem(key, item) + "</span>").join("") +
+        "</div>"
+      );
+    }).filter(Boolean).join("");
+
+    return (
+      '<div class="section"><div class="section-title">주간 동향 <span class="count">전주 대비 급증</span></div>' +
+      (groupsHtml || '<div class="empty-state">전주 대비 특이 변화 없음</div>') +
+      "</div>"
+    );
+  }
+
+  function renderRankList(items) {
+    if (!items.length) return '<div class="empty-state">해당 없음</div>';
+    return (
+      '<div class="rank-list">' +
+      items.map(([name, count], idx) =>
+        '<div class="rank-item"><span class="rank-num">' + (idx + 1) + '</span>' +
+        '<span class="rank-name">' + esc(name) + '</span>' +
+        '<span class="rank-count">' + esc(count) + "건</span></div>"
+      ).join("") +
+      "</div>"
+    );
+  }
+
+  function renderStatsTab(payload) {
+    const stats = payload.stats || {};
+    let html = "";
+
+    html +=
+      '<div class="section"><div class="section-title">카테고리별 분포 <span class="count">' +
+      Object.keys(stats.info_by_category || {}).length + "종</span></div>" +
+      renderDistTiles(Object.entries(stats.info_by_category || {})) +
+      "</div>";
+
+    html +=
+      '<div class="section"><div class="section-title">소스별 분포 <span class="count">' +
+      Object.keys(stats.by_source || {}).length + "개</span></div>" +
+      renderDistTiles(Object.entries(stats.by_source || {})) +
+      "</div>";
+
+    html += renderWeeklyTrendSection(payload.weekly_trends);
+
+    [["top_actors", "TOP 위협 행위자"], ["top_malware", "TOP 악성코드"], ["top_cves", "TOP CVE"]].forEach(([key, label]) => {
+      const items = stats[key] || [];
+      html +=
+        '<div class="section"><div class="section-title">' + esc(label) + ' <span class="count">' + items.length + "건</span></div>" +
+        renderRankList(items) +
+        "</div>";
+    });
+
+    return html;
   }
 
   // ===== History tab (검색 + 월별 아카이브) =====
@@ -325,16 +414,14 @@
     return query ? renderHistorySearchResults(state.searchIndex, query) : renderHistoryBrowser(state.searchIndex);
   }
 
-  // 탭별로 필요한 데이터만 추려서 반환. 읽을만한 동향(trend_reads)은 요약/국내/해외에
-  // 섞이지 않고 recommended 탭에서만 다룬다 — 같은 기사가 여러 탭에 중복 노출되지 않게.
+  // 탭별로 필요한 데이터만 추려서 반환. 읽을만한 동향(trend_reads)은 요약 탭에 섞이지
+  // 않고 recommended 탭에서만 다룬다 — 같은 기사가 여러 탭에 중복 노출되지 않게.
   function tabData(payload) {
-    if (state.tab === "domestic") return { highlights: payload.domestic.highlights || [] };
-    if (state.tab === "overseas") return { highlights: payload.overseas.highlights || [] };
     if (state.tab === "recommended") {
       return { trend_reads: (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []) };
     }
     if (state.tab === "cve") return { cards: payload.cards || [] };
-    if (state.tab === "history") return {};
+    if (state.tab === "stats" || state.tab === "insight" || state.tab === "history") return {};
     return { highlights: (payload.domestic.highlights || []).concat(payload.overseas.highlights || []) };
   }
 
@@ -413,8 +500,8 @@
 
     html +=
       '<div class="region-tabs">' +
-      ["all", "recommended", "cve", "domestic", "overseas", "history"].map((t) => {
-        const label = t === "all" ? "요약" : t === "domestic" ? "국내" : t === "overseas" ? "해외" :
+      ["all", "recommended", "cve", "stats", "insight", "history"].map((t) => {
+        const label = t === "all" ? "요약" : t === "stats" ? "통계" : t === "insight" ? "인사이트" :
           t === "cve" ? "CVE" : t === "history" ? "History" : "추천기사";
         const active = state.tab === t ? " is-active" : "";
         return '<button type="button" class="region-tab' + active + '" data-region="' + t + '">' + label + "</button>";
@@ -433,12 +520,12 @@
           '<div class="card-list">' + payload.cards.map(renderCveCard).join("") + "</div></div>";
       }
 
-      // 전체(캡 없음)는 국내/해외 탭 몫 — 요약은 상위 N건만 보여주는 빠른 개요로 유지
+      // 전체(캡 없음)는 History 탭 검색 몫 — 요약은 상위 N건만 보여주는 빠른 개요로 유지
       const allHighlights = data.highlights || [];
       const topHighlights = allHighlights.slice(0, SUMMARY_HIGHLIGHTS_LIMIT);
       html +=
         '<div class="section"><div class="section-title">주요 뉴스 <span class="count">상위 ' +
-        topHighlights.length + "건 · 전체 " + allHighlights.length + '건은 국내/해외 탭에서</span></div>' +
+        topHighlights.length + "건 · 전체 " + allHighlights.length + '건은 History 탭 검색에서</span></div>' +
         renderItemList(topHighlights) +
         "</div>";
     } else if (state.tab === "recommended") {
@@ -454,15 +541,15 @@
         '<div class="section"><div class="section-title">CVE <span class="count">복수 소스 교차 확인 · ' + cards.length + "건</span></div>" +
         (cards.length ? '<div class="card-list">' + cards.map(renderCveCard).join("") + "</div>" : '<div class="empty-state">해당 없음</div>') +
         "</div>";
+    } else if (state.tab === "stats") {
+      // 통계 탭: 카테고리·소스 전체 분포 + 주간 동향(전주 대비 급증, 주간 리포트에만 존재) + TOP 순위
+      html += renderStatsTab(payload);
+    } else if (state.tab === "insight") {
+      // 인사이트 탭: 자리만 마련 — 내용은 추후 결정
+      html += '<div class="section"><div class="section-title">인사이트</div><div class="empty-state">준비 중입니다.</div></div>';
     } else if (state.tab === "history") {
       // History 탭: 검색어가 있으면 전체 기간 검색 결과, 없으면 월별 아카이브 브라우저
       html += renderHistorySection();
-    } else {
-      // 국내/해외 탭: AI 총평·핵심 취약점 없이, 주요 뉴스만 소스별로 묶어서 나열(30건씩 페이지네이션)
-      html +=
-        '<div class="section"><div class="section-title">기사 <span class="count">' + (data.highlights || []).length + "건</span></div>" +
-        renderBySource(data.highlights, "region-" + state.tab) +
-        "</div>";
     }
 
     $app.innerHTML = html;
