@@ -148,13 +148,16 @@ def fetch_article_body(feed, url):
 
     soup = BeautifulSoup(resp.content, "html.parser")
 
-    container = None
-    if feed.get("body_selector"):
-        container = soup.select_one(feed["body_selector"])
-    if container is None:
-        container = soup.find("article")
-    if container is not None:
-        return common_utils.clean_text(container.get_text(" ", strip=True))[:BODY_MAX_CHARS]
+    # body_selector가 본문을 여러 조각(문단/섹션 div)으로 나눠 반환하는 사이트가 있다
+    # (예: CrowdStrike 블로그 — 이미지·인용구 사이사이로 본문이 여러 div에 쪼개져 있음).
+    # select_one으로 첫 조각만 가져오면 본문이 잘려버리므로 매칭되는 조각을 전부 합친다.
+    containers = soup.select(feed["body_selector"]) if feed.get("body_selector") else []
+    if not containers:
+        article = soup.find("article")
+        containers = [article] if article is not None else []
+    if containers:
+        text = " ".join(container.get_text(" ", strip=True) for container in containers)
+        return common_utils.clean_text(text)[:BODY_MAX_CHARS]
 
     print("[-] 본문 컨테이너를 찾지 못해 RSS 내용으로 대체합니다: {}".format(url))
     return ""
