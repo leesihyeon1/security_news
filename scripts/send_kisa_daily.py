@@ -314,7 +314,9 @@ def send_to_slack(items):
 
         else:
              ai_result = "본문을 가져오지 못했습니다."
-             item["enrichment"] = {}
+             # 본문이 없어도 제목만으로 최소한의 카테고리 분류는 시도한다 — 여기서
+             # 완전히 건너뛰면 이 기사가 카테고리별/PIR 집계에서 통째로 빠진다.
+             item["enrichment"] = common_utils.ai_enrich_article(item["title"], "") or {}
              item["iocs"] = []
              item["attack_techniques"] = []
              item["body_chars"] = 0

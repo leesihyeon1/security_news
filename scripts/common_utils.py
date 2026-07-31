@@ -646,8 +646,13 @@ def _parse_analyst_review(raw):
     }
 
 def ai_enrich_article(title, body):
-    """기사 본문을 LLM으로 분석해 구조화된 enrichment를 반환. 실패 시 None."""
-    if not body:
+    """기사 본문을 LLM으로 분석해 구조화된 enrichment를 반환. 실패 시 None.
+
+    본문을 못 가져온 경우(스크래핑 실패·RSS에 요약 자체가 없는 소스 등)에도 제목만으로
+    최소한의 분류는 시도한다 — 여기서 바로 포기하면 카테고리를 포함한 모든 필드가
+    통째로 비어 리포트에서 "기타"와 구분이 안 되는 진짜 분류 실패가 돼버린다.
+    """
+    if not title and not body:
         return None
 
     text = llm_generate(_build_enrich_prompt(title, body), timeout=120, json_format=True)

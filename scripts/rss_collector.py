@@ -24,6 +24,7 @@ import html
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
@@ -137,13 +138,35 @@ def fetch_feed_items(feed):
     return items
 
 
+ARTICLE_FETCH_RETRIES = 2
+ARTICLE_FETCH_RETRY_DELAY_SECONDS = 3
+
+
 def fetch_article_body(feed, url):
-    """기사 페이지에서 본문 텍스트 추출. 실패 시 ""(RSS 내용으로 대체)."""
-    try:
-        resp = requests.get(url, headers=REQUEST_HEADERS, timeout=20)
-        resp.raise_for_status()
-    except Exception as error:
-        print("[-] 본문 페이지 수집 실패({}): {}".format(url, error))
+    """기사 페이지에서 본문 텍스트 추출. 실패 시 ""(RSS 내용으로 대체).
+
+    일부 사이트(예: CrowdStrike)는 RSS에 본문 요약이 아예 없어 이 스크래핑이
+    실패하면 대체할 텍스트가 없다 — 봇 차단 등 일시적 네트워크 실패가 흔하므로
+    재시도 없이 바로 포기하지 않는다(선택자 불일치 등 구조적 실패는 재시도해도
+    안 바뀌므로 대상이 아니다).
+    """
+    resp = None
+    last_error = None
+    for attempt in range(1, ARTICLE_FETCH_RETRIES + 1):
+        try:
+            resp = requests.get(url, headers=REQUEST_HEADERS, timeout=20)
+            resp.raise_for_status()
+            last_error = None
+            break
+        except Exception as error:
+            last_error = error
+            resp = None
+            if attempt < ARTICLE_FETCH_RETRIES:
+                print("[-] 본문 페이지 수집 실패({}, {}차 시도): {} — 재시도".format(url, attempt, error))
+                time.sleep(ARTICLE_FETCH_RETRY_DELAY_SECONDS)
+
+    if resp is None:
+        print("[-] 본문 페이지 수집 실패({}): {}".format(url, last_error))
         return ""
 
     soup = BeautifulSoup(resp.content, "html.parser")

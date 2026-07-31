@@ -37,7 +37,14 @@ MAX_NVD_ITEMS_PER_EMAIL = int(os.environ.get("MAX_NVD_ITEMS_PER_EMAIL", "10"))
 MAX_KEV_ITEMS_PER_EMAIL = int(os.environ.get("MAX_KEV_ITEMS_PER_EMAIL", "10"))
 MIN_NVD_CVSS_SCORE = float(os.environ.get("MIN_NVD_CVSS_SCORE", "7.0"))
 CRITICAL_CVSS_SCORE = float(os.environ.get("CRITICAL_CVSS_SCORE", "9.0"))
-MAX_STORED_SENT_IDS = 1000
+# NVD는 lastModified가 갱신되기만 해도(오래된 CVE의 메타데이터 보정 등) "modified" 조회창에
+# 다시 걸린다 — MSRC 문서처럼 "이 창을 벗어나면 다시는 안 나온다"는 안전한 경계가 없어서,
+# 캡을 조회창 기준으로 pruning할 수 없다. 대신 실측 수요(48시간에 CVSS>=7.0 후보 2,070건,
+# 그중 순수 신규 발행분만도 415건 — 연간 수만 건 규모)보다 캡(기존 1,000)이 훨씬 작아서
+# sent_nvd_ids가 며칠 만에 밀려나 CVE가 실제로 중복 발송됐다(events.jsonl에서 591건 확인,
+# 492건은 이메일도 실제로 두 번 발송됨). 연간 발생량 대비 여유 있게 크게 잡아 사실상
+# 영구 기억에 가깝게 만든다.
+MAX_STORED_SENT_IDS = 50000
 
 
 def clean_text(value):
