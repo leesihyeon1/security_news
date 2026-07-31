@@ -136,8 +136,44 @@ def _rebuild_search_index_from_events(repo):
         json.dump(entries, file, ensure_ascii=False, indent=2)
 
 
+PUBLISH_RETRIES = 3
+
+
+def _sync_to_remote_head(repo, branch):
+    """로컬 클론을 원격 HEAD에 강제로 맞춘다.
+
+    이 클론은 generate_report.py가 실행마다 새로 만들어내는 데이터 전용이라
+    로컬에만 있는 지켜야 할 변경사항이 없다는 전제다 — 이전 실행이 실패해 남긴
+    미푸시 커밋이나, 다른 환경에서 origin이 앞서나가 생긴 어긋남을 여기서 정리한다.
+    이렇게 안 하면 오래된 로컬 상태 위에 커밋해봐야 push가 매번 거부된다.
+    """
+    _run_git(["fetch", "origin", branch], cwd=repo)
+    _run_git(["reset", "--hard", "origin/{}".format(branch)], cwd=repo)
+
+
+def _write_and_commit(repo, payload, period, date_stamp, data_dir):
+    """데이터 파일을 쓰고 변경사항이 있으면 커밋. 커밋했으면 True, 변경 없으면 False."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    latest_path = data_dir / "{}-latest.json".format(period)
+    history_path = data_dir / "{}-{}.json".format(period, date_stamp)
+    for path in (latest_path, history_path):
+        with path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+    _rebuild_search_index_from_events(repo)
+
+    _run_git(["add", "dashboard/data"], cwd=repo)
+    if not _has_staged_changes("dashboard/data", cwd=repo):
+        return False
+    _run_git(["commit", "-m", "Update {} report ({})".format(period, date_stamp)], cwd=repo)
+    return True
+
+
 def publish(payload, repo_path=None):
     """payload(generate_report.build_dashboard_payload 결과)를 로컬 clone에 쓰고 커밋·푸시.
+
+    다른 환경에서 이미 발행했거나 원격 쪽만 갱신된 경우 로컬 클론이 뒤처져 push가
+    거부될 수 있다 — 매 시도 전 원격 HEAD로 강제 동기화 후 다시 쓰고 커밋·푸시하는
+    과정을 최대 PUBLISH_RETRIES번 반복해 race를 흡수한다.
 
     성공하면 True, 발행을 건너뛰었거나 실패하면 False — 어느 쪽이든 예외는 던지지 않는다.
     """
@@ -153,27 +189,32 @@ def publish(payload, repo_path=None):
 
     period = payload.get("period") or "daily"
     date_stamp = (payload.get("generated_at") or "")[:10] or "unknown"
-
     data_dir = repo / "dashboard" / "data"
 
     try:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        latest_path = data_dir / "{}-latest.json".format(period)
-        history_path = data_dir / "{}-{}.json".format(period, date_stamp)
-        for path in (latest_path, history_path):
-            with path.open("w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2)
-        _rebuild_search_index_from_events(repo)
-
-        _run_git(["add", "dashboard/data"], cwd=repo)
-        if not _has_staged_changes("dashboard/data", cwd=repo):
-            print("[*] 변경사항 없음 — 커밋 생략")
-            return True
-
-        _run_git(["commit", "-m", "Update {} report ({})".format(period, date_stamp)], cwd=repo)
-        _run_git(["push"], cwd=repo)
-        print("[+] {} 리포트를 boannews_vercel에 발행했습니다({})".format(period, date_stamp))
-        return True
+        branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).strip()
     except Exception as error:
-        print("[-] 웹 대시보드 발행 실패(리포트 발송 자체에는 영향 없음): {}".format(error))
+        print("[-] 웹 대시보드 발행 실패(브랜치 확인 불가): {}".format(error))
         return False
+
+    last_error = None
+    for attempt in range(1, PUBLISH_RETRIES + 1):
+        try:
+            _sync_to_remote_head(repo, branch)
+
+            if not _write_and_commit(repo, payload, period, date_stamp, data_dir):
+                print("[*] 변경사항 없음 — 커밋 생략")
+                return True
+
+            _run_git(["push", "origin", branch], cwd=repo)
+            print("[+] {} 리포트를 boannews_vercel에 발행했습니다({})".format(period, date_stamp))
+            return True
+        except Exception as error:
+            last_error = error
+            if attempt < PUBLISH_RETRIES:
+                print("[-] 발행 시도 {}/{} 실패({}) — 원격과 재동기화 후 재시도".format(
+                    attempt, PUBLISH_RETRIES, error
+                ))
+
+    print("[-] 웹 대시보드 발행 실패(리포트 발송 자체에는 영향 없음): {}".format(last_error))
+    return False

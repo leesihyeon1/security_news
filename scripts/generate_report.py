@@ -386,18 +386,24 @@ def _category_share_surges(events, previous_events, min_count, max_items):
 
 
 def event_sort_key(event):
-    """P1 > P2 > 자산 매칭 > KEV > CVSS 점수 순 우선순위 키"""
+    """P1 > P2 > 자산 매칭 > 중요도 점수 순 우선순위 키.
+
+    이전엔 3·4번째 기준이 KEV 소스 여부·CVSS 점수였는데, top_items()의 대상
+    범위에서 NON_NEWS_SOURCES(cisa_kev 포함)를 이미 제외하고 뉴스 소스는 score를
+    안 채워서 둘 다 죽은 기준이었다(항상 동일값이라 동률을 못 갈랐음). 이미 계산돼
+    있는 importance.score(악용 정황·심각도·관련성·PIR 등 종합 0~100점)로 대체해
+    같은 등급·자산매칭 안에서도 실질적인 우선순위가 매겨지도록 한다.
+    """
     level_rank = {"P1": 0, "P2": 1}.get(event_level(event), 2)
     return (
         level_rank,
         0 if event.get("matched_assets") else 1,
-        0 if event.get("source") == "cisa_kev" else 1,
-        -event_score(event),
+        -importance_score(event),
     )
 
 
 def top_items(events, limit=MAX_TOP_ITEMS_IN_REPORT):
-    """P1 > P2 > 자산 매칭 > KEV > CVSS 점수 순으로 우선순위 정렬"""
+    """P1 > P2 > 자산 매칭 > 중요도 점수 순으로 우선순위 정렬"""
     return sorted(events, key=event_sort_key)[:limit]
 
 
@@ -797,6 +803,10 @@ def correlate_by_cve(events):
     복수 소스 동시 등장 자체가 가장 강한 중요도 신호다:
     NVD 단독 = 배경 소음, +KEV = 실제 악용, +국내 뉴스·ASEC = 국내에서 문제되는 위협.
 
+    예외로 CISA KEV는 단독 등장이어도 카드를 만든다 — "미 연방기관이 실제 악용을
+    공식 확인"이라는 신호 자체가 다른 매체의 corroboration보다도 강해서, 그날
+    다른 소스가 안 다뤘다는 이유로 TOP 3·총평에서 통째로 안 보이면 안 된다.
+
     완전히 같은 이벤트 집합(동일한 기사들이 여러 CVE를 함께 보도)에 걸린 CVE는
     같은 취약점 체인·공지의 일부이므로 카드 하나로 합쳐 반복 노출을 없앤다.
     """
@@ -808,7 +818,7 @@ def correlate_by_cve(events):
     clusters = {}
     for cve, group in groups.items():
         sources = sorted({event.get("source") or "unknown" for event in group})
-        if len(sources) < 2:
+        if len(sources) < 2 and "cisa_kev" not in sources:
             continue
         key = frozenset(event.get("id") for event in group)
         cluster = clusters.setdefault(key, {"cves": [], "group": group, "sources": sources})
@@ -971,7 +981,8 @@ def build_digest(period_label, stats, events, cards):
     if cards:
         lines.append("")
         lines.append(
-            "[크로스소스 상관관계 — 복수 소스에 동시 등장한 CVE (신뢰도 높은 핵심 위협, 우선순위 순으로 이미 정렬됨)]"
+            "[크로스소스 상관관계 — 복수 소스에 동시 등장했거나 CISA KEV(실제 악용 공식 확인)에 등재된 CVE"
+            " (신뢰도 높은 핵심 위협, 우선순위 순으로 이미 정렬됨)]"
         )
         for idx, card in enumerate(cards[:MAX_CVE_CARDS], start=1):
             parts = [
@@ -990,6 +1001,28 @@ def build_digest(period_label, stats, events, cards):
             lines.append("{}. ".format(idx) + " | ".join(parts))
             if card["summary"]:
                 lines.append("  요약: {}".format(card["summary"]))
+
+    # [핵심 위협 TOP 3]는 CVE 상관관계 카드에서만 뽑히므로, CVE가 없는 P1 뉴스
+    # (캠페인·악성코드·유출 사고 등)는 여러 소스가 다뤘어도 구조적으로 TOP 3에
+    # 못 들어간다 — [총평]이 이 사각지대를 보완할 수 있게 별도로 짚어준다.
+    covered_ids = set()
+    for card in cards:
+        covered_ids.update(card.get("event_ids") or set())
+    uncovered_p1 = [
+        event for event in events
+        if event_level(event) == "P1"
+        and event.get("id") not in covered_ids
+        and (event.get("source") or "") not in common_utils.NON_NEWS_SOURCES
+    ]
+    if uncovered_p1:
+        # 5건으로 자르기 전에 importance_score 내림차순 정렬 — 안 그러면 수집 순서(임의)
+        # 대로 잘려서, 그날 6번째 이후로 밀린 진짜 중요한 항목이 통째로 프롬프트에서
+        # 빠질 수 있다.
+        uncovered_p1 = sorted(uncovered_p1, key=importance_score, reverse=True)
+        lines.append("")
+        lines.append("[CVE 상관관계 카드에 없는 P1 긴급 항목 — 총평에서 반드시 언급할 것]")
+        for event in uncovered_p1[:5]:
+            lines.append(event_line(event))
 
     grouped = {}
     for event in events:
@@ -1167,6 +1200,40 @@ def _remove_bare_markers(narrative):
     return "\n".join(result).strip()
 
 
+def _renumber_lists(narrative):
+    """번호 목록("1. ...")의 연속 구간을 찾아 항상 1부터 순서대로 다시 매기는 최종 방어선.
+
+    _truncate_numbered_items()가 섹션별로 이미 번호를 재정렬하지만, 실제 리포트에서
+    간헐적으로 [권고 조치] 등이 "2. / 3. "로 시작해 "1."이 빠진 채 나가는 사례가
+    확인됐다 — 원인을 섹션별 파싱 로직 안에서 재현하지 못해서, 어떤 경로로 깨지든
+    최종 출력만큼은 항상 올바르게 나가도록 narrative 전체를 대상으로 한 번 더
+    강제한다. 불릿("-")은 건드리지 않는다(원래 순서가 없는 목록).
+    """
+    lines = narrative.split("\n")
+    i = 0
+    while i < len(lines):
+        if not re.match(r"^\d+\.\s", lines[i]):
+            i += 1
+            continue
+        # 번호 줄들의 연속 구간 — 빈 줄이나 "[다음 섹션]" 줄에서 끊긴다. 번호로
+        # 시작하지 않는 중간 줄은 앞 항목이 여러 줄에 걸친 것으로 보고 구간에는
+        # 포함하되(건너뛰기만) 새 항목으로 세지는 않는다.
+        numbered_positions = []
+        j = i
+        while j < len(lines):
+            stripped = lines[j].strip()
+            if stripped == "" or re.match(r"^\[.+\]\s*$", stripped):
+                break
+            if re.match(r"^\d+\.\s", lines[j]):
+                numbered_positions.append(j)
+            j += 1
+        for order, pos in enumerate(numbered_positions, start=1):
+            rest = re.sub(r"^\d+\.\s", "", lines[pos], count=1)
+            lines[pos] = "{}. {}".format(order, rest)
+        i = j
+    return "\n".join(lines)
+
+
 def fallback_keywords(stats, cards, max_items=MAX_KEYWORDS):
     """LLM이 [핵심 키워드] 섹션을 통째로 빼먹거나 빈 채로 내놓을 때의 안전장치 — 이미
     코드로 집계된 위협 행위자·악성코드(stats)·CVE(cards)에서 기계적으로 뽑는다.
@@ -1205,6 +1272,7 @@ def ai_narrative(period_label, digest):
 출력 형식:
 [총평]
 - 가장 중요한 임팩트만 짧게 서술 (분량 제한이 목적이 아니라 핵심만 압축하는 것이 목적)
+- 데이터에 "[CVE 상관관계 카드에 없는 P1 긴급 항목]" 섹션이 있으면 그 존재를 반드시 한 문장으로라도 언급하라 — [핵심 위협 TOP 3]는 CVE가 있는 사건만 다루므로, 그쪽에서 못 다루는 P1 캠페인·악성코드·유출 사고 등을 짚어줄 수 있는 곳은 총평뿐이다
 - CVE ID, PIR별 세부 수치, MITRE 기법 등 개별 데이터 나열 금지 — 이런 디테일은 아래 다른 섹션과 리포트의 통계 섹션에 이미 있으므로 총평에서 반복하지 말 것
 - 숫자를 쓰더라도 전체 건수 등 꼭 필요한 것 한두 개만, 나열식으로 늘어놓지 말 것
 
@@ -1250,6 +1318,7 @@ def ai_narrative(period_label, digest):
     narrative = _truncate_numbered_items(narrative, "자사 자산 관련")
     narrative = _truncate_numbered_items(narrative, "권고 조치", max_items=3)
     narrative = _remove_bare_markers(narrative)
+    narrative = _renumber_lists(narrative)
     keywords = _extract_keywords(narrative)
     keywords = _keywords_grounded_in_digest(keywords, digest)
     narrative = _strip_narrative_section(narrative, KEYWORD_HEADER)
@@ -1879,8 +1948,13 @@ def main():
     # 쓴다 — 대시보드 국내/해외 탭이 이미 그 기간 전체를 보여주는 아카이브가 된 이상,
     # "추천기사"와 일부 겹치는 건 자연스럽다(오히려 all_highlights 기준으로 제외하면
     # 후보 풀이 거의 안 남아 추천기사가 텅 비어버린다).
+    # include_alerted=True — curator_digest.py와 동일하게, 이미 알림이 나간(P1/P2 등)
+    # 기사도 인사이트 신호가 있으면 추천 후보에 포함한다. 여기서 빼면 "알림 안 된
+    # 것들 중에서만" 추천기사가 뽑혀서, 그날 진짜 중요했던 기사가 오히려 대시보드
+    # 추천기사 탭에서 배제되는 역설이 생긴다 — 하루치 "진짜 추천할 만한 것"을
+    # 보여주는 게 목적이므로 알림 여부와 무관하게 뽑아야 한다.
     all_trend_reads = pick_trend_reads(
-        events, shown_card_event_ids | highlight_ids, max_items=len(events),
+        events, shown_card_event_ids | highlight_ids, max_items=len(events), include_alerted=True,
     )
 
     print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, PIR {}종). AI 해석 생성 중...".format(

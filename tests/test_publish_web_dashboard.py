@@ -108,25 +108,29 @@ def test_publish_writes_json_and_commits(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     import subprocess
+    # publish()가 이제 매 시도 전 origin으로 fetch+reset --hard 동기화를 하므로,
+    # 실제로 fetch할 수 있는 로컬 bare 저장소를 origin으로 둔다(원격 URL 문자열이
+    # EXPECTED_REMOTE_REPO와 안 맞을 것이므로 _validate_publish_repo는 우회한다 —
+    # 이 테스트의 목적은 write/commit/push 동작 검증이지 원격 URL 매칭 검증이 아니다).
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(origin)], capture_output=True, check=True)
+
     subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=True)
-    # 커밋할 브랜치가 있어야 하니 초기 커밋 하나 생성
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=repo, capture_output=True, check=True)
+    # 커밋할 브랜치가 있어야 하니 초기 커밋 하나 생성 후 origin에 푸시해 origin/<branch>를 만든다
     (repo / "README.md").write_text("init", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    subprocess.run(["git", "push", "-u", "origin", branch], cwd=repo, capture_output=True, check=True)
+
+    monkeypatch.setattr(pwd, "_validate_publish_repo", lambda repo: True)
 
     payload = {"period": "daily", "generated_at": "2026-01-02T00:00:00Z", "title": "t"}
-    # push는 원격이 없어 실패할 것이므로 _run_git을 patch해서 push만 건너뛴다
-    original_run_git = pwd._run_git
-
-    def fake_run_git(args, cwd):
-        if args and args[0] == "push":
-            return ""
-        return original_run_git(args, cwd)
-
-    monkeypatch.setattr(pwd, "_run_git", fake_run_git)
-
     result = pwd.publish(payload, repo_path=str(repo))
     assert result is True
 

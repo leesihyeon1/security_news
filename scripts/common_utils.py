@@ -91,7 +91,13 @@ def source_label(source):
 # 순수 CVE/공지 피드 소스 — 제목이 "CVE-XXXX" 식이라 "기사"로 보기 어려워
 # 뉴스 목록(top_items)·검색 인덱스에서 제외한다. CVE 카드·소스별 전용
 # 알림이 이 소스들의 내용을 이미 별도로 다룬다.
-NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa", "exploit_db"}
+#
+# kisa는 여기 없다 — KrCERT 피드 제목은 "Fortinet 제품 보안 업데이트 권고",
+# "국가배후 해킹조직의 우리 국민·기업 해킹 공격 주의 권고"처럼 보안뉴스·ASEC과
+# 똑같은 성격의 기사 헤드라인이라(CVE-ID 나열이 아님) 이 그룹의 제외 사유가
+# 적용되지 않는다. 예전엔 여기 포함돼 있어서 주요 뉴스·검색 인덱스에서
+# 통째로 안 보였다.
+NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "exploit_db"}
 
 def load_env_file(dotenv_path=None):
     if dotenv_path is None:
