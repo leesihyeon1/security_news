@@ -1180,6 +1180,31 @@ def _keywords_grounded_in_digest(keywords, digest):
     return [kw for kw in keywords if kw.lower() in digest_lower]
 
 
+# "Iranian state-sponsored actors"처럼 국적 형용사 + 일반 명사만으로 구성된 키워드 —
+# 프롬프트에 "일반 용어·범주명은 넣지 마라, 구체적 고유명사만"이라고 이미 명시했는데도
+# LLM이 종종 어긴다. _keywords_grounded_in_digest는 digest에 그 문구가 실제로 있는지만
+# 보므로(환각 방지 목적), 이런 서술적 범주 표현이 digest에 그대로 있으면 통과시켜버린다
+# — 그래서 별도로, 키워드를 구성하는 단어 전부가 이 목록(국적·일반 위협 명사)에 속하면
+# "구체적 고유명사가 하나도 없다"고 보고 제외한다. 한 단어라도 목록 밖이면(예: SilverFox,
+# Lazarus) 살아남는다 — 실제 그룹·악성코드명을 잘못 걸러내지 않기 위한 보수적 기준이다.
+_GENERIC_KEYWORD_WORDS = {
+    "north", "korean", "korea", "south", "chinese", "china", "russian", "russia",
+    "iranian", "iran", "dprk", "state-sponsored", "state", "sponsored", "nation-state",
+    "nation", "government-backed", "government", "backed", "advanced", "sophisticated",
+    "unnamed", "unidentified", "linked", "affiliated", "backed", "based",
+    "actors", "actor", "attackers", "attacker", "hackers", "hacker", "group", "groups",
+    "gang", "gangs", "campaign", "campaigns", "operators", "operator", "criminals",
+    "criminal", "threat",
+}
+
+
+def _is_generic_keyword(keyword):
+    tokens = re.findall(r"[a-z0-9-]+", keyword.lower())
+    if not tokens:
+        return True
+    return all(token in _GENERIC_KEYWORD_WORDS for token in tokens)
+
+
 def _remove_bare_markers(narrative):
     """번호("1.")나 불릿("-")만 있고 내용이 없는 줄을, 어느 섹션에 있든 통째로 제거하는
     마지막 안전망. _truncate_numbered_items()가 섹션별로 이미 같은 일을 하지만, 그
@@ -1324,6 +1349,7 @@ def ai_narrative(period_label, digest):
     narrative = _renumber_lists(narrative)
     keywords = _extract_keywords(narrative)
     keywords = _keywords_grounded_in_digest(keywords, digest)
+    keywords = [kw for kw in keywords if not _is_generic_keyword(kw)]
     narrative = _strip_narrative_section(narrative, KEYWORD_HEADER)
     return narrative, keywords
 
