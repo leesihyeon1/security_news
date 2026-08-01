@@ -19,10 +19,12 @@ dashboard/data/search-index.json(대시보드 History 탭·검색용 인덱스)�
     WEB_DASHBOARD_REPO_PATH=C:\\path\\to\\local\\clone\\of\\boannews_vercel
 """
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -137,6 +139,38 @@ def _rebuild_search_index_from_events(repo):
 
 
 PUBLISH_RETRIES = 3
+PUBLISH_RETRY_DELAY_SECONDS = 5
+LOCK_TIMEOUT_SECONDS = 120
+LOCK_POLL_INTERVAL_SECONDS = 2
+LOCK_FILE_NAME = ".dashboard_publish.lock"
+
+
+@contextlib.contextmanager
+def repo_lock(repo):
+    """같은 로컬 클론(repo)에 대한 git 작업이 두 곳(이 스크립트의 일간/주간 발행과
+    publish_trending_titles.py의 30분 주기 발행)에서 동시에 실행되는 걸 막는다 —
+    동시에 fetch/reset/commit/push가 겹치면 재시도를 몇 번을 하든 서로가 서로를
+    "원격이 앞서 있음"으로 계속 보게 되거나 .git/index.lock 충돌이 날 수 있다.
+    파일 하나를 뮤텍스로 써서, 한쪽이 끝날 때까지 다른 쪽은 대기한다.
+    """
+    lock_path = repo / LOCK_FILE_NAME
+    deadline = time.time() + LOCK_TIMEOUT_SECONDS
+    fd = None
+    while fd is None:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.time() > deadline:
+                raise RuntimeError("다른 발행 작업이 잠금을 오래 쥐고 있어 타임아웃: {}".format(lock_path))
+            time.sleep(LOCK_POLL_INTERVAL_SECONDS)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
 
 
 def _sync_to_remote_head(repo, branch):
@@ -192,29 +226,31 @@ def publish(payload, repo_path=None):
     data_dir = repo / "dashboard" / "data"
 
     try:
-        branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).strip()
+        with repo_lock(repo):
+            branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).strip()
+
+            last_error = None
+            for attempt in range(1, PUBLISH_RETRIES + 1):
+                try:
+                    _sync_to_remote_head(repo, branch)
+
+                    if not _write_and_commit(repo, payload, period, date_stamp, data_dir):
+                        print("[*] 변경사항 없음 — 커밋 생략")
+                        return True
+
+                    _run_git(["push", "origin", branch], cwd=repo)
+                    print("[+] {} 리포트를 boannews_vercel에 발행했습니다({})".format(period, date_stamp))
+                    return True
+                except Exception as error:
+                    last_error = error
+                    if attempt < PUBLISH_RETRIES:
+                        print("[-] 발행 시도 {}/{} 실패({}) — {}초 대기 후 원격과 재동기화하여 재시도".format(
+                            attempt, PUBLISH_RETRIES, error, PUBLISH_RETRY_DELAY_SECONDS
+                        ))
+                        time.sleep(PUBLISH_RETRY_DELAY_SECONDS)
+
+            print("[-] 웹 대시보드 발행 실패(리포트 발송 자체에는 영향 없음): {}".format(last_error))
+            return False
     except Exception as error:
-        print("[-] 웹 대시보드 발행 실패(브랜치 확인 불가): {}".format(error))
+        print("[-] 웹 대시보드 발행 실패(잠금/브랜치 확인 불가): {}".format(error))
         return False
-
-    last_error = None
-    for attempt in range(1, PUBLISH_RETRIES + 1):
-        try:
-            _sync_to_remote_head(repo, branch)
-
-            if not _write_and_commit(repo, payload, period, date_stamp, data_dir):
-                print("[*] 변경사항 없음 — 커밋 생략")
-                return True
-
-            _run_git(["push", "origin", branch], cwd=repo)
-            print("[+] {} 리포트를 boannews_vercel에 발행했습니다({})".format(period, date_stamp))
-            return True
-        except Exception as error:
-            last_error = error
-            if attempt < PUBLISH_RETRIES:
-                print("[-] 발행 시도 {}/{} 실패({}) — 원격과 재동기화 후 재시도".format(
-                    attempt, PUBLISH_RETRIES, error
-                ))
-
-    print("[-] 웹 대시보드 발행 실패(리포트 발송 자체에는 영향 없음): {}".format(last_error))
-    return False
