@@ -38,12 +38,15 @@ MAX_KEV_ITEMS_PER_EMAIL = int(os.environ.get("MAX_KEV_ITEMS_PER_EMAIL", "10"))
 MIN_NVD_CVSS_SCORE = float(os.environ.get("MIN_NVD_CVSS_SCORE", "7.0"))
 CRITICAL_CVSS_SCORE = float(os.environ.get("CRITICAL_CVSS_SCORE", "9.0"))
 # NVD는 lastModified가 갱신되기만 해도(오래된 CVE의 메타데이터 보정 등) "modified" 조회창에
-# 다시 걸린다 — MSRC 문서처럼 "이 창을 벗어나면 다시는 안 나온다"는 안전한 경계가 없어서,
-# 캡을 조회창 기준으로 pruning할 수 없다. 대신 실측 수요(48시간에 CVSS>=7.0 후보 2,070건,
-# 그중 순수 신규 발행분만도 415건 — 연간 수만 건 규모)보다 캡(기존 1,000)이 훨씬 작아서
-# sent_nvd_ids가 며칠 만에 밀려나 CVE가 실제로 중복 발송됐다(events.jsonl에서 591건 확인,
-# 492건은 이메일도 실제로 두 번 발송됨). 연간 발생량 대비 여유 있게 크게 잡아 사실상
-# 영구 기억에 가깝게 만든다.
+# 다시 걸린다. 오래된 CVE의 단순 보정까지 발송 후보로 삼으면 노이즈가 커지므로, modified
+# 조회로만 걸린(= published 조회에는 없는) CVE는 최근 RECENT_PUBLISH_DAYS_FOR_MODIFIED일
+# 이내에 발행된 것만 인정한다 — 오래된 CVE가 최근 재수정됐다는 이유만으로는 발송하지 않는다.
+# published 조회로 걸린 CVE는 이 제한 없이 그대로 유지한다.
+RECENT_PUBLISH_DAYS_FOR_MODIFIED = int(os.environ.get("RECENT_PUBLISH_DAYS_FOR_MODIFIED", "7"))
+# 실측 수요(48시간에 CVSS>=7.0 후보 2,070건, 그중 순수 신규 발행분만도 415건 — 연간 수만
+# 건 규모)보다 캡(기존 1,000)이 훨씬 작아서 sent_nvd_ids가 며칠 만에 밀려나 CVE가 실제로
+# 중복 발송됐다(events.jsonl에서 591건 확인, 492건은 이메일도 실제로 두 번 발송됨). 연간
+# 발생량 대비 여유 있게 크게 잡아 사실상 영구 기억에 가깝게 만든다.
 MAX_STORED_SENT_IDS = 50000
 
 
@@ -219,22 +222,42 @@ def parse_nvd_vulnerabilities(vulnerabilities):
 
 def fetch_new_nvd_cves():
     try:
-        published = fetch_nvd_cves_by_date("pubStartDate", "pubEndDate")
+        published_raw = fetch_nvd_cves_by_date("pubStartDate", "pubEndDate")
     except Exception as error:
         print("Failed to fetch NVD published CVEs: {}".format(error))
-        published = []
+        published_raw = []
 
     try:
-        modified = fetch_nvd_cves_by_date("lastModStartDate", "lastModEndDate")
+        modified_raw = fetch_nvd_cves_by_date("lastModStartDate", "lastModEndDate")
     except Exception as error:
         print("Failed to fetch NVD modified CVEs: {}".format(error))
-        modified = []
+        modified_raw = []
 
-    all_raw_cves = parse_nvd_vulnerabilities(published + modified)
+    published_cves = parse_nvd_vulnerabilities(published_raw)
+    modified_cves = parse_nvd_vulnerabilities(modified_raw)
+    published_ids = {item["id"] for item in published_cves}
+
+    now = datetime.utcnow()
+    recent_publish_cutoff = now - timedelta(days=RECENT_PUBLISH_DAYS_FOR_MODIFIED)
+
+    combined_cves = {item["id"]: item for item in published_cves}
+    for item in modified_cves:
+        if item["id"] in published_ids:
+            continue
+        # modified 조회로만 걸린 CVE는 최근에 발행된 것만 인정 (오래된 CVE의 단순 메타데이터
+        # 보정은 제외) — "완전 신규" 위주로 발송량을 줄이기 위한 필터.
+        try:
+            published_at = datetime.fromisoformat(item["published"].replace("Z", "+00:00")).replace(tzinfo=None)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if published_at < recent_publish_cutoff:
+            continue
+        combined_cves[item["id"]] = item
+
+    all_raw_cves = list(combined_cves.values())
 
     # NVD가 조회 구간 밖의 데이터를 섞어 주는 경우가 있어 날짜 필터링을 한 번 더 수행합니다.
     # 최근 수정된 과거 CVE도 유지되도록 published/last_modified 중 최신 시각으로 비교합니다.
-    now = datetime.utcnow()
     limit_time = now - timedelta(hours=LOOKBACK_HOURS)
 
     filtered_cves = []
