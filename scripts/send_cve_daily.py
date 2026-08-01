@@ -334,16 +334,10 @@ def kev_ransomware_flag(value):
     return None
 
 
-def filter_new_items(items, sent_ids, limit):
-    new_items = []
-
-    for item in items:
-        if item["id"] not in sent_ids:
-            new_items.append(item)
-
-        if len(new_items) == limit:
-            break
-
+def filter_new_items(items, sent_ids, limit=None):
+    new_items = [item for item in items if item["id"] not in sent_ids]
+    if limit is not None:
+        new_items = new_items[:limit]
     return new_items
 
 
@@ -585,26 +579,36 @@ def main():
     nvd_items = filter_important_nvd_items(fetch_new_nvd_cves())
     kev_items = fetch_cisa_kev()
 
-    new_nvd_items = filter_new_items(nvd_items, sent_nvd_ids, MAX_NVD_ITEMS_PER_EMAIL)
-    new_kev_items = filter_new_items(kev_items, sent_kev_ids, MAX_KEV_ITEMS_PER_EMAIL)
+    # 이메일/슬랙(상위 N건, 알림 스팸 방지용 캡)과 이벤트 로그(대시보드 CVE 탭이
+    # 그 기간 CVE를 빠짐없이 보여줘야 하므로 캡 없이 전체)를 분리한다 — 예전엔
+    # 이메일에 실리는 상위 N건만 이벤트로도 남겨서, 캡에 걸려 이메일엔 안 실린
+    # CVE가 대시보드에서도 통째로 사라졌었다.
+    all_new_nvd_items = filter_new_items(nvd_items, sent_nvd_ids)
+    all_new_kev_items = filter_new_items(kev_items, sent_kev_ids)
 
-    if not new_nvd_items and not new_kev_items:
+    if not all_new_nvd_items and not all_new_kev_items:
         print("No new high/critical NVD CVEs or new CISA KEV entries. Slack/Email skipped.")
         return
 
-    # 긴급도 분류 (P1/P2/P3): KEV는 악용 확인, NVD는 EPSS 확률 조회 후 판정
-    epss_scores = common_utils.fetch_epss_scores([item["id"] for item in new_nvd_items])
-    for item in new_nvd_items:
+    # 긴급도 분류 (P1/P2/P3): KEV는 악용 확인, NVD는 EPSS 확률 조회 후 판정 — 로그에
+    # 남는 전체 목록 기준으로 계산해야 대시보드 통계(P1/P2 건수 등)가 정확하다.
+    epss_scores = common_utils.fetch_epss_scores([item["id"] for item in all_new_nvd_items])
+    for item in all_new_nvd_items:
         item["triage"] = common_utils.classify_urgency(
             [item["id"], item["description"]],
             cvss_score=item["score"],
             epss=epss_scores.get(item["id"]),
         )
-    for item in new_kev_items:
+    for item in all_new_kev_items:
         item["triage"] = common_utils.classify_urgency(
             [item["cve_id"], item["vendor"], item["product"], item["name"], item["description"]],
             kev=True,
         )
+
+    new_nvd_items = all_new_nvd_items[:MAX_NVD_ITEMS_PER_EMAIL]
+    new_kev_items = all_new_kev_items[:MAX_KEV_ITEMS_PER_EMAIL]
+    emailed_nvd_ids = {item["id"] for item in new_nvd_items}
+    emailed_kev_ids = {item["id"] for item in new_kev_items}
 
     slack_sent = send_to_slack(new_nvd_items, new_kev_items)
     email_sent = send_email(new_nvd_items, new_kev_items)
@@ -614,11 +618,14 @@ def main():
         print("Slack/email delivery failed. State not saved; will retry on next run.")
         return
 
-    updated_nvd_ids = state["sent_nvd_ids"] + [item["id"] for item in new_nvd_items]
-    updated_kev_ids = state["sent_kev_ids"] + [item["id"] for item in new_kev_items]
+    # 이메일 캡에 안 든 나머지도 이번에 "확인함" 처리 — 안 그러면 다음 실행에서
+    # 다시 새 항목으로 잡혀 이벤트가 중복 기록되고, 캡 안에 들면 뒤늦게 이메일도 나간다.
+    updated_nvd_ids = state["sent_nvd_ids"] + [item["id"] for item in all_new_nvd_items]
+    updated_kev_ids = state["sent_kev_ids"] + [item["id"] for item in all_new_kev_items]
     save_state(updated_nvd_ids, updated_kev_ids)
 
-    # 일간/주간 리포트용 통합 이벤트 로그 적재
+    # 일간/주간 리포트용 통합 이벤트 로그 적재 — 이메일 캡과 무관하게 전체를 남긴다.
+    # email_sent/slack_sent는 실제로 그 채널에 실린 항목에만 True.
     common_utils.append_events(
         [
             common_utils.make_event(
@@ -632,13 +639,13 @@ def main():
                 cves=[item["id"]],
                 references=item.get("references"),
                 published_at=item["published"],
-                email_sent=email_sent,
-                slack_sent=slack_sent,
+                email_sent=email_sent and item["id"] in emailed_nvd_ids,
+                slack_sent=slack_sent and item["id"] in emailed_nvd_ids,
                 triage=item.get("triage"),
                 category="취약점",
                 category_reason="NVD API 소스 — CVE 취약점 정보이므로 카테고리 고정(LLM 판단 아님)",
             )
-            for item in new_nvd_items
+            for item in all_new_nvd_items
         ]
         + [
             common_utils.make_event(
@@ -654,19 +661,21 @@ def main():
                 due_date=item["due_date"],
                 ransomware_use=kev_ransomware_flag(item["ransomware"]),
                 published_at=item["date_added"],
-                email_sent=email_sent,
-                slack_sent=slack_sent,
+                email_sent=email_sent and item["id"] in emailed_kev_ids,
+                slack_sent=slack_sent and item["id"] in emailed_kev_ids,
                 triage=item.get("triage"),
                 category="취약점",
                 category_reason="CISA KEV API 소스 — 실제 악용 확인된 취약점이므로 카테고리 고정(LLM 판단 아님)",
             )
-            for item in new_kev_items
+            for item in all_new_kev_items
         ]
     )
 
     print(
-        "Process finished: NVD high/critical CVEs {}, CISA KEV entries {}".format(
+        "Process finished: NVD high/critical CVEs {} (emailed {}), CISA KEV entries {} (emailed {})".format(
+            len(all_new_nvd_items),
             len(new_nvd_items),
+            len(all_new_kev_items),
             len(new_kev_items),
         )
     )
