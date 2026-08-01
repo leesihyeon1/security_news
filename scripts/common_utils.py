@@ -479,7 +479,21 @@ def validate_pirs(candidates):
 # ===== LLM 호출 공용 계층 (LLM_PROVIDER: nvidia = NVIDIA NIM API, ollama = 로컬) =====
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
-def _generate_nvidia(prompt, timeout):
+NVIDIA_RETRY_DELAY_SECONDS = 5
+NVIDIA_RATE_LIMIT_DELAY_SECONDS = 15
+
+def _generate_nvidia(prompt, timeout, max_attempts=2):
+    """예전엔 429(rate limit)만 한 번 재시도하고 그 외(타임아웃·일시적 5xx·연결
+    오류)는 즉시 실패 처리했다 — ai_narrative()처럼 큰 digest를 8192 토큰까지
+    생성하는 호출은 이런 일시적 문제가 드물지 않은데, 한 번 실패하면 바로
+    "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"로 떨어졌다.
+
+    max_attempts 기본값(2)은 예전보다 한 번만 더 시도하는 수준으로 보수적으로
+    잡았다 — 수백 건을 순회하는 기사별 enrichment(enrich_article 등)에서 NVIDIA가
+    통째로 안 되는 날이면 매 건마다 재시도가 쌓여 전체 실행시간이 크게 늘어날 수
+    있어서다. 실패해도 바로 로컬 Ollama로 폴백되니(llm_generate) 기사별 호출은
+    이 기본값으로 충분하고, 실패 시 대체 수단이 없는 총평 같은 단발성 고가치
+    호출만 max_attempts를 더 크게 넘겨서 쓴다."""
     payload = {
         "model": NVIDIA_MODEL,
         "messages": [{"role": "user", "content": prompt}],
@@ -488,19 +502,42 @@ def _generate_nvidia(prompt, timeout):
         "stream": False,
     }
     headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
-    for attempt in (1, 2):
-        response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
-        if response.status_code == 429 and attempt == 1:
-            # 무료 티어 40 RPM 제한 — 한 번만 대기 후 재시도
-            time.sleep(15)
+
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
+        except requests.exceptions.RequestException as error:
+            last_error = error
+            if attempt < max_attempts:
+                print("[-] NVIDIA 호출 실패, 재시도 {}/{}: {}".format(attempt, max_attempts, error))
+                time.sleep(NVIDIA_RETRY_DELAY_SECONDS)
             continue
-        break
-    if response.status_code != 200:
-        raise RuntimeError("HTTP {}".format(response.status_code))
-    choices = (response.json() or {}).get("choices") or []
-    if not choices:
-        raise RuntimeError("빈 choices 응답")
-    return (choices[0].get("message") or {}).get("content") or ""
+
+        if response.status_code == 429:
+            # 무료 티어 40 RPM 제한 — 다른 오류보다 더 오래 대기 후 재시도
+            last_error = RuntimeError("HTTP 429")
+            if attempt < max_attempts:
+                time.sleep(NVIDIA_RATE_LIMIT_DELAY_SECONDS)
+            continue
+
+        if response.status_code != 200:
+            last_error = RuntimeError("HTTP {}".format(response.status_code))
+            if attempt < max_attempts:
+                print("[-] NVIDIA 호출 실패, 재시도 {}/{}: {}".format(attempt, max_attempts, last_error))
+                time.sleep(NVIDIA_RETRY_DELAY_SECONDS)
+            continue
+
+        choices = (response.json() or {}).get("choices") or []
+        if not choices:
+            last_error = RuntimeError("빈 choices 응답")
+            if attempt < max_attempts:
+                time.sleep(NVIDIA_RETRY_DELAY_SECONDS)
+            continue
+
+        return (choices[0].get("message") or {}).get("content") or ""
+
+    raise last_error or RuntimeError("NVIDIA 호출 실패")
 
 def _generate_ollama(prompt, timeout, json_format):
     payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
@@ -511,10 +548,13 @@ def _generate_ollama(prompt, timeout, json_format):
         raise RuntimeError("HTTP {}".format(response.status_code))
     return (response.json() or {}).get("response", "")
 
-def llm_generate(prompt, timeout=120, json_format=False):
+def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
     """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
 
     LLM_PROVIDER=nvidia 이면 NVIDIA NIM을 먼저 시도하고 실패 시 로컬 Ollama로 폴백한다.
+    nvidia_max_attempts는 실패 시 대체 수단이 없는 단발성 고가치 호출(예: 일간/주간
+    AI 총평)에서만 기본값(2)보다 크게 넘겨라 — 기사별 enrichment처럼 대량 호출되는
+    곳에서 크게 잡으면 NVIDIA 장애 시 전체 실행시간이 크게 늘어난다.
     """
     providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
     for provider in providers:
@@ -522,7 +562,7 @@ def llm_generate(prompt, timeout=120, json_format=False):
             if provider == "nvidia":
                 if not NVIDIA_API_KEY:
                     raise RuntimeError("NVIDIA_API_KEY 미설정")
-                text = _generate_nvidia(prompt, timeout)
+                text = _generate_nvidia(prompt, timeout, max_attempts=nvidia_max_attempts)
             else:
                 text = _generate_ollama(prompt, timeout, json_format)
             text = THINK_TAG_RE.sub("", text).strip()

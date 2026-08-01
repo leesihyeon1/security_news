@@ -1310,7 +1310,10 @@ def ai_narrative(period_label, digest):
 {digest}
 """.format(period=period_label, digest=digest)
 
-    narrative = common_utils.llm_generate(prompt, timeout=300) or ""
+    # 실패 시 "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"로 대체할 수단이
+    # 없는 단발성 호출이라(하루/주 1번), 재시도를 넉넉히 줘서 일시적 실패로
+    # 통째로 못 만드는 상황을 줄인다.
+    narrative = common_utils.llm_generate(prompt, timeout=300, nvidia_max_attempts=3) or ""
     if not narrative:
         return narrative, []
     narrative = _truncate_summary_section(narrative)
