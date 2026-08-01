@@ -402,6 +402,12 @@ html, body {
   color: var(--text-muted);
   line-height: 1.5;
 }
+.item-reason {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 
 /* ===== 심층분석 버튼(추천기사 탭) — 결과는 여기 안 보여주고 인사이트 탭/사이드바로 보냄 ===== */
 .analyze-box { margin-top: 10px; }
@@ -436,6 +442,32 @@ html, body {
   color: var(--text);
   white-space: pre-wrap;
 }
+.analyze-links {
+  margin-top: 8px;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.analyze-links-title {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.analyze-links ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.analyze-links li {
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.analyze-links a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.analyze-links a:hover { text-decoration: underline; }
 .analyze-error {
   margin-top: 8px;
   font-size: 0.8rem;

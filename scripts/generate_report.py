@@ -1783,6 +1783,22 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
     return blocks
 
 
+def dashboard_trend_bits(event):
+    """trend_bits()와 같은 "왜 추천됐는지" 근거 조각이지만, PIR 이름은 뺀다 — 공개 대시보드에서
+    PIR·자산매칭 정보를 노출하지 않는 build_dashboard_payload()의 원칙과 동일하게 적용."""
+    bits = []
+    if (event.get("novelty") or "") == "new":
+        bits.append("신규")
+    depth_label = {"analysis": "심층 분석", "report": "보고서"}.get(event.get("content_depth") or "")
+    if depth_label:
+        bits.append(depth_label)
+    if event.get("relevance") == "high":
+        bits.append("관련성 높음")
+    if importance_score(event):
+        bits.append("우선도 {}점".format(importance_score(event)))
+    return bits
+
+
 def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads,
                              keywords=None, weekly_trends=None):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
@@ -1806,10 +1822,10 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
     않을 뿐이다. AI 총평(narrative)의 [자사 자산 관련] 섹션도 같은 이유로 여기서만 잘라낸다
     (이메일/슬랙에 넘어가는 narrative 원본은 그대로 유지).
     """
-    def serialize_event(event):
+    def serialize_event(event, include_reason=False):
         # matched_assets는 의도적으로 뺀다 — 공개 웹 대시보드에 자사 보유 자산/제품명이
         # 노출되면 안 되므로(이메일/슬랙 리포트는 내부용이라 그대로 유지, 여기만 예외).
-        return {
+        payload = {
             # 대시보드의 "심층분석" 버튼이 이 값으로 분석 결과를 캐싱·식별한다(클릭
             # 추적용 ref와 같은 해시 함수 — tracking_url 설정 여부와 무관하게 항상 존재).
             "ref": common_utils.event_ref(event.get("id")),
@@ -1822,12 +1838,19 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "published_at": event.get("published_at") or "",
             "summary": (event.get("ai_summary") or event.get("summary") or "")[:300],
         }
+        if include_reason:
+            # 추천기사(trend_reads) 전용 — 심층분석을 누르기 전에도 "왜 추천됐는지"와
+            # 우선순위 정렬 기준을 보여준다. highlights(국내/해외 전체 목록)는 캡 없이
+            # 수백 건이라 여기서 굳이 계산해 페이로드를 불릴 필요가 없어 대상에서 뺀다.
+            payload["score"] = importance_score(event)
+            payload["reason_bits"] = dashboard_trend_bits(event)
+        return payload
 
-    def split_by_region(events):
+    def split_by_region(events, include_reason=False):
         domestic, overseas = [], []
         for event in events:
             bucket = domestic if source_region(event.get("source")) == "domestic" else overseas
-            bucket.append(serialize_event(event))
+            bucket.append(serialize_event(event, include_reason=include_reason))
         return domestic, overseas
 
     def serialize_card(card):
@@ -1856,7 +1879,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
     # 이 함수의 출력에는 반영하지 않는다.
 
     highlight_domestic, highlight_overseas = split_by_region(highlights)
-    trend_domestic, trend_overseas = split_by_region(trend_reads)
+    trend_domestic, trend_overseas = split_by_region(trend_reads, include_reason=True)
 
     # 주간 동향(전주 대비 급증)의 "자산 매칭" 그룹은 자사 보유 자산/제품명을 그대로
     # 노출하므로, PIR·자산매칭 정보를 안 담는 것과 같은 원칙으로 공개 대시보드에서 뺀다

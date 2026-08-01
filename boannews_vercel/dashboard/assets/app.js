@@ -175,6 +175,9 @@
       "</div>" +
       '<div class="item-title"><a href="' + href + '" target="_blank" rel="noopener">' + esc(event.title) + "</a></div>" +
       (metaBits.length ? '<div class="item-meta">' + metaBits.map((b) => "<span>" + b + "</span>").join("") + "</div>" : "") +
+      ((event.reason_bits || []).length
+        ? '<div class="item-reason">' + event.reason_bits.map((b) => '<span class="pill">' + esc(b) + "</span>").join("") + "</div>"
+        : "") +
       (event.summary ? '<div class="item-summary">' + esc(event.summary) + "</div>" : "") +
       (opts.analyzable ? renderAnalyzeBox(event) : "") +
       "</div>"
@@ -186,6 +189,12 @@
       return '<div class="empty-state">해당 없음</div>';
     }
     return '<div class="item-list">' + events.map((e) => renderItem(e, opts)).join("") + "</div>";
+  }
+
+  // 추천기사(trend_reads)는 소스별 그룹핑 대신 score(importance_score) 내림차순 플랫
+  // 리스트로 보여준다 — "이게 왜 추천됐는지"를 심층분석 클릭 전에도 바로 판단할 수 있게.
+  function sortByScore(events) {
+    return events.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
   }
 
   function groupBySource(events) {
@@ -462,7 +471,7 @@
     if (state.tab === "domestic") return { highlights: payload.domestic.highlights || [] };
     if (state.tab === "overseas") return { highlights: payload.overseas.highlights || [] };
     if (state.tab === "recommended") {
-      return { trend_reads: (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []) };
+      return { trend_reads: sortByScore((payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || [])) };
     }
     if (state.tab === "cve") return { cards: payload.cards || [] };
     if (state.tab === "stats" || state.tab === "insight" || state.tab === "history") return {};
@@ -502,7 +511,7 @@
   // 추천기사 탭과 같은 데이터를 넓은 화면에서 사이드바로도 보여준다(탭은 그대로 유지 —
   // 좁은 화면 사용자는 탭으로 접근). 출처·제목만 보이고 클릭하면 요약이 펼쳐진다.
   function renderTrendSidebar(payload) {
-    const items = (payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []);
+    const items = sortByScore((payload.domestic.trend_reads || []).concat(payload.overseas.trend_reads || []));
     if (!items.length) {
       $trendSidebar.innerHTML = "";
       return;
@@ -516,8 +525,11 @@
         '<span class="trend-item-source">' + esc(item.source_label || "") + "</span>" +
         '<span class="trend-item-title">' + esc(item.title) + "</span>" +
         "</button>" +
-        (item.summary || item.url
+        (item.summary || item.url || (item.reason_bits || []).length
           ? '<div class="trend-item-body">' +
+            ((item.reason_bits || []).length
+              ? '<div class="item-reason">' + item.reason_bits.map((b) => '<span class="pill">' + esc(b) + "</span>").join("") + "</div>"
+              : "") +
             (item.summary ? '<p class="item-summary">' + esc(item.summary) + "</p>" : "") +
             (item.url ? '<a href="' + esc(item.url) + '" target="_blank" rel="noopener" class="trend-item-link">기사 보기</a>' : "") +
             "</div>"
@@ -546,6 +558,13 @@
         "</button>" +
         '<div class="trend-item-body">' +
         '<div class="analyze-text">' + esc(entry.analysis || "").replace(/\n/g, "<br>") + "</div>" +
+        ((entry.links || []).length
+          ? '<div class="analyze-links"><div class="analyze-links-title">원문 내 관련 링크</div><ul>' +
+            entry.links.map((link) =>
+              '<li><a href="' + esc(link.url) + '" target="_blank" rel="noopener">' + esc(link.text) + "</a></li>"
+            ).join("") +
+            "</ul></div>"
+          : "") +
         (entry.url ? '<a href="' + esc(entry.url) + '" target="_blank" rel="noopener" class="trend-item-link">기사 보기</a>' : "") +
         "</div>" +
         "</div>"
@@ -634,10 +653,12 @@
         renderItemList(topHighlights) +
         "</div>";
     } else if (state.tab === "recommended") {
-      // 추천기사 탭: 읽을만한 동향(국내+해외 통합)을 소스별로 묶어서 표시 + 심층분석 버튼
+      // 추천기사 탭: 읽을만한 동향(국내+해외 통합)을 우선순위(score) 내림차순 플랫 리스트로
+      // 표시 + 심층분석 버튼. 소스별 그룹핑을 쓰지 않는 이유: 그룹핑은 그룹 노출 순서를
+      // 소스당 건수로 정렬해(app.js groupBySource) 우선순위와 무관하게 뒤섞어 버린다.
       html +=
         '<div class="section"><div class="section-title">추천 기사 <span class="count">' + (data.trend_reads || []).length + "건</span></div>" +
-        renderBySource(data.trend_reads, null, { analyzable: true }) +
+        renderItemList(data.trend_reads, { analyzable: true }) +
         "</div>";
     } else if (state.tab === "cve") {
       // CVE 탭: 크로스소스 상관관계 카드(요약 탭의 "핵심 취약점"과 동일 데이터)만 모아서 표시
@@ -776,6 +797,7 @@
       url: requestBody.url,
       source_label: box.dataset.sourceLabel,
       analysis: data.analysis || "",
+      links: data.links || [],
     });
     render(state.cache[state.period]);
   }

@@ -27,6 +27,9 @@ const DAILY_NEW_ANALYSIS_LIMIT = 20;
 const ANALYSIS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 90; // 90일 — 사실상 영구 수준이되 Redis가 무한정 자라진 않게
 const BODY_MAX_CHARS = 6000;
 const FETCH_TIMEOUT_MS = 10000;
+const MAX_EXTRACTED_LINKS = 6;
+// 소셜 공유·메신저·앵커 등 본문 참고자료로서 의미 없는 링크는 후보에서 제외한다.
+const NOISE_LINK_PATTERN = /facebook\.com|twitter\.com|x\.com\/|linkedin\.com|t\.me\/|wa\.me\/|whatsapp\.com|pinterest\.com|reddit\.com\/submit|mailto:|javascript:/i;
 
 const NVIDIA_API_URL = process.env.NVIDIA_API_URL || "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "nvidia/nemotron-3-ultra-550b-a55b";
@@ -51,6 +54,35 @@ function stripHtml(html) {
     .trim();
 }
 
+// 원문 HTML의 <a href> 중 본문 참고자료로 볼 만한 것만 결정적으로(LLM 없이) 추출한다.
+// LLM이 "참고 자료가 있다"고 말만 하고 실제 링크는 안 주는 문제를 막기 위한 것 —
+// 원문에 실재하는 링크만 그대로 복사하므로 지어낼 여지가 없다.
+function extractArticleLinks(html, baseUrl) {
+  const links = [];
+  const seen = new Set([baseUrl]);
+  const anchorPattern = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = anchorPattern.exec(html)) && links.length < MAX_EXTRACTED_LINKS) {
+    const rawHref = match[1];
+    if (NOISE_LINK_PATTERN.test(rawHref)) continue;
+
+    let resolved;
+    try {
+      resolved = new URL(rawHref, baseUrl).toString();
+    } catch (error) {
+      continue;
+    }
+    if (!/^https?:\/\//i.test(resolved) || seen.has(resolved)) continue;
+
+    const text = stripHtml(match[2]).trim().slice(0, 120);
+    if (!text) continue;
+
+    seen.add(resolved);
+    links.push({ url: resolved, text: text });
+  }
+  return links;
+}
+
 // body_selector 같은 사이트별 설정 없이 범용으로 시도 — boannews_mail의
 // fetch_article_body()가 <article> 태그로 폴백하는 것과 같은 수준의 best-effort.
 async function fetchArticleText(url) {
@@ -61,12 +93,12 @@ async function fetchArticleText(url) {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; boannews-analyzer/1.0)" },
       signal: controller.signal,
     });
-    if (!response.ok) return "";
+    if (!response.ok) return { text: "", links: [] };
     const html = await response.text();
-    return stripHtml(html).slice(0, BODY_MAX_CHARS);
+    return { text: stripHtml(html).slice(0, BODY_MAX_CHARS), links: extractArticleLinks(html, url) };
   } catch (error) {
     console.error("article fetch failed", error);
-    return "";
+    return { text: "", links: [] };
   } finally {
     clearTimeout(timer);
   }
@@ -78,10 +110,11 @@ function buildPrompt(title, body) {
     "한국어 존댓말로 작성하라.\n\n" +
     "제목: " + title + "\n\n" +
     "본문:\n" + (body || "(본문을 가져오지 못해 제목만으로 분석합니다.)") + "\n\n" +
-    "출력 형식:\n" +
+    "출력 형식(반드시 아래 4개 섹션만 사용하고, 이 외의 섹션을 임의로 추가하지 마라):\n" +
     "[핵심 요약] 2~3문장\n" +
     "[기술적 세부사항] 공격 기법·취약점·IOC 등 본문에 있는 구체적 정보 위주로 서술\n" +
-    "[영향 범위 및 위험도] 무엇이 왜 위험한지\n" +
+    "[영향 범위 및 위험도] 무엇이 왜 위험한지. CVSS 점수나 심각도 등급은 본문에 명시적으로 나온 " +
+    "경우에만 그대로 인용하고, 본문에 없으면 추정치를 지어내지 말고 심각도 자체를 언급하지 마라.\n" +
     "[권장 대응] 실무자가 바로 할 수 있는 구체적 행동 2~3개\n\n" +
     "주의: 본문에 없는 사실을 지어내지 마라. 본문이 부실하면 그 사실을 그대로 밝혀라."
   );
@@ -158,7 +191,14 @@ module.exports = async (req, res) => {
     try {
       const cached = await client.get(cacheKey);
       if (cached) {
-        res.status(200).json({ analysis: cached, cached: true });
+        // 캐시 TTL이 90일이라, 이 기능 배포 전에 저장된 값은 분석 텍스트만 담긴
+        // 순수 문자열이다 — JSON 파싱이 안 되면 links 없이 그 문자열 그대로 반환한다.
+        try {
+          const parsedCache = JSON.parse(cached);
+          res.status(200).json({ analysis: parsedCache.analysis, links: parsedCache.links || [], cached: true });
+        } catch (error) {
+          res.status(200).json({ analysis: cached, links: [], cached: true });
+        }
         return;
       }
     } catch (error) {
@@ -184,7 +224,7 @@ module.exports = async (req, res) => {
     }
   }
 
-  const articleText = await fetchArticleText(url);
+  const { text: articleText, links } = await fetchArticleText(url);
   let analysis;
   try {
     analysis = await callNvidia(buildPrompt(title, articleText));
@@ -196,11 +236,11 @@ module.exports = async (req, res) => {
 
   if (client) {
     try {
-      await client.set(cacheKey, analysis, "EX", ANALYSIS_CACHE_TTL_SECONDS);
+      await client.set(cacheKey, JSON.stringify({ analysis: analysis, links: links }), "EX", ANALYSIS_CACHE_TTL_SECONDS);
     } catch (error) {
       console.error("analysis cache write failed", error);
     }
   }
 
-  res.status(200).json({ analysis: analysis, cached: false });
+  res.status(200).json({ analysis: analysis, links: links, cached: false });
 };
