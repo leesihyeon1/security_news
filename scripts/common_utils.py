@@ -482,6 +482,21 @@ THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 NVIDIA_RETRY_DELAY_SECONDS = 5
 NVIDIA_RATE_LIMIT_DELAY_SECONDS = 15
 
+# LLM 응답 본문에 U+FFFD(치환 문자)가 섞여 오는 일이 있다 — 프로바이더가 멀티바이트
+# 글자를 토큰 경계에서 쪼갠 뒤 조각별로 디코딩하면 한글 한 음절이 "??"(U+FFFD 2개)로
+# 바뀐다. 2026-08-13~14 수집분에서 기사 요약의 약 80%가 이렇게 깨진 채 저장됐다
+# ("윈도우"의 "윈"이 U+FFFD 2개로, "랜섬웨어"의 "랜섬웨"가 6개로). 파이프라인 안에는
+# 문자를 깨뜨릴 지점이 없고(events.jsonl 쓰기는 strict UTF-8이라 깨진 바이트가 있으면
+# 예외가 난다) 응답이 이미 깨진 채 도착하는 것이라, 생성 단계에서 걸러내야 한다.
+REPLACEMENT_CHAR = "\ufffd"
+# 깨진 응답을 받았을 때 같은 프로바이더로 다시 받아볼 횟수. 서빙 계층에서 생기는
+# 산발적 손상이라 같은 프롬프트로 다시 부르면 대개 멀쩡하게 온다.
+BROKEN_RESPONSE_ATTEMPTS = 2
+
+def has_broken_chars(text):
+    """LLM 응답이 깨진 문자를 포함하는지. 정상 텍스트에 U+FFFD가 들어갈 일은 없다."""
+    return REPLACEMENT_CHAR in (text or "")
+
 def _generate_nvidia(prompt, timeout, max_attempts=2):
     """예전엔 429(rate limit)만 한 번 재시도하고 그 외(타임아웃·일시적 5xx·연결
     오류)는 즉시 실패 처리했다 — ai_narrative()처럼 큰 digest를 8192 토큰까지
@@ -555,23 +570,39 @@ def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
     nvidia_max_attempts는 실패 시 대체 수단이 없는 단발성 고가치 호출(예: 일간/주간
     AI 총평)에서만 기본값(2)보다 크게 넘겨라 — 기사별 enrichment처럼 대량 호출되는
     곳에서 크게 잡으면 NVIDIA 장애 시 전체 실행시간이 크게 늘어난다.
+
+    응답에 깨진 문자(U+FFFD)가 섞여 있으면 실패로 보고 같은 프로바이더로 다시 받아본
+    뒤(BROKEN_RESPONSE_ATTEMPTS) 그래도 깨져 있으면 다음 프로바이더로 넘어간다. 모든
+    시도가 깨진 경우에만 마지막 수단으로 깨진 텍스트를 그대로 돌려준다 — 요약이 통째로
+    비면 카테고리까지 "기타"로 떨어져서, 한 음절 깨진 요약보다 손해가 크기 때문이다.
     """
     providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
+    broken_text = None
     for provider in providers:
-        try:
-            if provider == "nvidia":
-                if not NVIDIA_API_KEY:
-                    raise RuntimeError("NVIDIA_API_KEY 미설정")
-                text = _generate_nvidia(prompt, timeout, max_attempts=nvidia_max_attempts)
-            else:
-                text = _generate_ollama(prompt, timeout, json_format)
-            text = THINK_TAG_RE.sub("", text).strip()
-            if text:
-                return text
-            raise RuntimeError("빈 응답")
-        except Exception as error:
-            print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
-    return None
+        for attempt in range(1, BROKEN_RESPONSE_ATTEMPTS + 1):
+            try:
+                if provider == "nvidia":
+                    if not NVIDIA_API_KEY:
+                        raise RuntimeError("NVIDIA_API_KEY 미설정")
+                    text = _generate_nvidia(prompt, timeout, max_attempts=nvidia_max_attempts)
+                else:
+                    text = _generate_ollama(prompt, timeout, json_format)
+                text = THINK_TAG_RE.sub("", text).strip()
+                if not text:
+                    raise RuntimeError("빈 응답")
+                if not has_broken_chars(text):
+                    return text
+                # 처음 받은 것만 남긴다 — 뒤로 갈수록 폴백 프로바이더라 품질이 낮다.
+                broken_text = broken_text or text
+                print("[-] LLM 응답에 깨진 문자 포함 ({}, {}/{}회)".format(
+                    provider, attempt, BROKEN_RESPONSE_ATTEMPTS))
+            except Exception as error:
+                # 호출 자체가 실패한 경우의 재시도는 _generate_nvidia 안에서 이미 했다.
+                print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
+                break
+    if broken_text:
+        print("[-] 모든 시도의 응답에 깨진 문자가 남아 그대로 사용합니다.")
+    return broken_text
 
 # ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
 
