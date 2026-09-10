@@ -1,0 +1,2047 @@
+{
+  "title": "일간 보안 인텔리전스 리포트",
+  "period": "daily",
+  "period_label": "2026-08-03 00:00 ~ 2026-08-04 00:00 (UTC)",
+  "generated_at": "2026-08-04T23:35:20Z",
+  "narrative": "[총평]\n금일 수집된 312건의 이벤트 중 실제 악용이 확인된 CISA KEV 등재 취약점(CVE-2026-18577)을 포함해 자사 자산과 연계된 P1 긴급 항목 7건이 식별되었습니다. 특히 N-able N-central 인증 우회 취약점은 패치 우회 방식으로 관리형 엔드포인트까지 침투하는 공급망 공격 정황이 포착되어 8월 6일까지 조치가 시급합니다.\n\n[핵심 위협 TOP 3]\n1. **N-able N-central 인증 우회(CVE-2026-18577)**: RMM 플랫폼의 불완전한 패치를 악용해 공격자가 관리자 권한을 탈취하고 Cloudflare 터널을 이용한 지속적 백도어로 고객사 엔드포인트까지 측면 이동한 공급망 침해 사례입니다.\n2. **Ruby on Rails Active Storage 임의 파일 읽기(CVE-2026-66066)**: 인증 없이 조작된 이미지 업로드만으로 서버 로컬 파일을 읽고 환경 변수 비밀키를 탈취해 원격 코드 실행 및 측면 이동이 가능한 치명적 취약점입니다. 패치 버전 적용과 함께 모든 시크릿 값의 즉각적인 순환이 필요합니다.\n3. **VPS.org 원클릭 템플릿 하드코딩 시크릿(CVE-2026-16504)**: 배포 자동화 템플릿에 하드코딩된 서명 키와 기본 비밀번호, HTTPS 비활성화 설정으로 인해 신규 배포 환경이 즉시 탈취될 수 있는 공급망 보안 결함입니다. 템플릿 사용 자산의 설정 검토와 시크릿 교체가 선행되어야 합니다.\n\n[권고 조치]\n1. N-able N-central 2026.3.1.7 버전으로 즉시 업그레이드하고 관리 엔드포인트에서 악성 Cloudflare 터널 서비스 및 의심 프로세스 존재 여부를 점검할 필요가 있습니다.\n2. Ruby on Rails Active Storage 패치 버전 적용, libvips 8.13 이상 업데이트, secret_key_base 등 모든 환경 변수 비밀값을 즉시 순환 조치할 것을 권장합니다.\n3. 팔로알토·아파치 자산을 대상으로 딥시크 연계 AI 자율 스캔·익스플로잇 시도 탐지 룰을 적용하고, 허메스 에이전트 등 AI 공격 프레임워크 관련 IOC를 위협 인텔리전스 피드에 추가하는 것이 좋습니다.",
+  "stats": {
+    "total": 312,
+    "p1": 7,
+    "p2": 34,
+    "info": 271,
+    "info_by_category": {
+      "취약점": 184,
+      "제품행사": 43,
+      "정책규제": 14,
+      "기술동향": 13,
+      "기타": 8,
+      "침해사고": 2,
+      "공급망공격": 1,
+      "공격캠페인": 1,
+      "개인정보유출": 1
+    },
+    "by_source": {
+      "nvd": 183,
+      "boannews": 30,
+      "dailysecu": 25,
+      "helpnetsecurity": 16,
+      "securityweek": 11,
+      "crowdstrike": 10,
+      "thehackernews": 10,
+      "securityaffairs": 5,
+      "infosecurity_magazine": 5,
+      "malwarebytes": 4,
+      "sans_isc": 2,
+      "cyberscoop": 2,
+      "elastic_security": 2,
+      "kisa": 1,
+      "microsoft_security": 1,
+      "asec": 1,
+      "unit42": 1,
+      "cisa_kev": 1,
+      "talos": 1,
+      "checkpoint_research": 1
+    },
+    "top_actors": [
+      [
+        "Midnight Blizzard (Storm-2945)",
+        2
+      ],
+      [
+        "ShinyHunters",
+        2
+      ],
+      [
+        "ExfilSquad",
+        2
+      ],
+      [
+        "INC Ransomware",
+        2
+      ],
+      [
+        "knaithe, KnYuan",
+        2
+      ],
+      [
+        "Astaroth (aka Guildma)",
+        1
+      ],
+      [
+        "TeamPCP",
+        1
+      ],
+      [
+        "Larva-24009",
+        1
+      ],
+      [
+        "Void Blizzard",
+        1
+      ],
+      [
+        "Iranian-affiliated threat actors",
+        1
+      ]
+    ],
+    "top_malware": [
+      [
+        "INC Ransomware",
+        2
+      ],
+      [
+        "Astaroth",
+        1
+      ],
+      [
+        "AtlasRAT",
+        1
+      ],
+      [
+        "SANDWORM_MODE",
+        1
+      ],
+      [
+        "QuasarRAT, UltraVNC, Custom PowerShell backdoor, Custom keylogger, Notifier",
+        1
+      ],
+      [
+        "HollowFrame",
+        1
+      ],
+      [
+        "OWAReaper",
+        1
+      ]
+    ],
+    "top_cves": [
+      [
+        "CVE-2026-18577",
+        5
+      ],
+      [
+        "CVE-2026-66066",
+        4
+      ],
+      [
+        "CVE-2026-18556",
+        3
+      ],
+      [
+        "CVE-2026-48395",
+        2
+      ],
+      [
+        "CVE-2026-48396",
+        2
+      ],
+      [
+        "CVE-2026-48449",
+        2
+      ],
+      [
+        "CVE-2026-44827",
+        2
+      ],
+      [
+        "CVE-2026-45804",
+        2
+      ],
+      [
+        "CVE-2026-44513",
+        2
+      ],
+      [
+        "CVE-2026-17583",
+        2
+      ]
+    ]
+  },
+  "cards": [
+    {
+      "cve": "CVE-2026-18577",
+      "level": "P1",
+      "sources": [
+        "CISA KEV",
+        "Help Net Security",
+        "SecurityWeek",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "EPSS 70%",
+        "실제 악용 확인(KEV)",
+        "GitHub PoC 저장소 1개"
+      ],
+      "products": [
+        "N-able N-central",
+        "Anthropic Claude Opus 4.7",
+        "Anthropic Mythos 5",
+        "Coldcard Hardware Wallet",
+        "Microsoft Outlook Web Access (OWA)"
+      ],
+      "remediation": "Apply mitigations in accordance with vendor instructions, ensuring compliance with CISA’s BOD 26-04 Prioritizing Security Updates Based on Risk (see U",
+      "due_date": "2026-08-06",
+      "summary": "N-able N-central RMM 플랫폼에서 인증 우회 취약점(CVE-2026-18556, CVE-2026-18577)이 악용되어 공격자가 관리자 권한을 탈취하고 관리 중인 고객 엔드포인트까지 침투했다. 최초 패치(2026.2)가 불완전해 새로운 CVE-2026-18577이 할당되었으며, 2026.3.1.7 빌드에서 최종 수정되었다. 공격자는 Cloud",
+      "items": [
+        {
+          "source_label": "The Hacker News",
+          "title": "N-able Says Attackers Take Over N-central Servers After Initial Fix Proves Incomplete",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=d3784634d4&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fn-able-says-attackers-take-over-n.html"
+        },
+        {
+          "source_label": "SecurityWeek",
+          "title": "N‑able Patches Vulnerability Exploited to Hack N-central Servers",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=f468922377&url=https%3A%2F%2Fwww.securityweek.com%2Fn-able-patches-vulnerability-exploited-to-hack-n-central-servers%2F"
+        },
+        {
+          "source_label": "CISA KEV",
+          "title": "CVE-2026-18577 - N-able N-central Authentication Bypass Using an Alternate Path or Channel Vulnerability",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=2b66c65671&url=https%3A%2F%2Fwww.cisa.gov%2Fknown-exploited-vulnerabilities-catalog"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "⚡ Weekly Recap: Rogue AI Models, $88M Bitcoin Theft, Water-System Attacks and Dangling DNS Hijacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=58c5675dd5&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fweekly-recap-rogue-ai-models-88m.html"
+        },
+        {
+          "source_label": "Help Net Security",
+          "title": "Attackers exploit N-able N-central flaw to reach managed endpoints (CVE-2026-18577)",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=161f847d73&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fcve-2026-18577-n-able-n-central-vulnerability%2F"
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2026-66066",
+      "level": "P1",
+      "sources": [
+        "Check Point Research",
+        "Help Net Security",
+        "Security Affairs",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "EPSS 70%",
+        "악용 정황",
+        "GitHub PoC 저장소 5개"
+      ],
+      "products": [
+        "Ruby on Rails Active Storage",
+        "libvips",
+        "Ruby on Rails",
+        "Anthropic Claude Opus 4.7",
+        "Anthropic Mythos 5"
+      ],
+      "remediation": "Active Storage 패치 버전으로 업그레이드, libvips 8.13 이상으로 업데이트, secret_key_base 등 모든 비밀값 순환(로테이션)",
+      "due_date": "",
+      "summary": "Ruby on Rails가 Active Storage의 libvips 이미지 처리 취약점(CVE-2026-66066, CVSS 9.5)을 패치했다. 인증되지 않은 공격자가 조작된 이미지 업로드로 임의 파일을 읽고 환경 변수(secret_key_base 등) 탈취 후 원격 코드 실행 및 측면 이동이 가능하다. 영향을 받는 시스템은 Active Storage ",
+      "items": [
+        {
+          "source_label": "Security Affairs",
+          "title": "Ruby on Rails Patches Critical Active Storage Vulnerability Affecting Image Processing",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=2c08c9c9e1&url=https%3A%2F%2Fsecurityaffairs.com%2F196486%2Fsecurity%2Fruby-on-rails-patches-critical-active-storage-vulnerability-affecting-image-processing.html"
+        },
+        {
+          "source_label": "Help Net Security",
+          "title": "KindaRails2Shell threatens Ruby on Rails apps (CVE-2026-66066)",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=d7f4af468a&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fkindarails2shell-cve-2026-66066-vulnerability%2F"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "⚡ Weekly Recap: Rogue AI Models, $88M Bitcoin Theft, Water-System Attacks and Dangling DNS Hijacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=58c5675dd5&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fweekly-recap-rogue-ai-models-88m.html"
+        },
+        {
+          "source_label": "Check Point Research",
+          "title": "3rd August – Threat Intelligence Report",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=4c55852e4e&url=https%3A%2F%2Fresearch.checkpoint.com%2F2026%2F3rd-august-threat-intelligence-report%2F"
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2026-16504",
+      "level": "P1",
+      "sources": [
+        "NVD CVE",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "CVSS 9.8",
+        "EPSS 70%",
+        "악용 정황"
+      ],
+      "products": [
+        "Anthropic Claude Opus 4.7",
+        "Anthropic Mythos 5",
+        "Coldcard Hardware Wallet",
+        "Microsoft Outlook Web Access (OWA)",
+        "Ruby on Rails Active Storage"
+      ],
+      "remediation": "Ruby on Rails shipped patches for CVE-2026-66066; Microsoft OWA patch likely available for CVE-2026-42897; Coldcard firmware update not specified; Ant",
+      "due_date": "",
+      "summary": "Deployment of the VPS.org one-click Zulip template deploys a hardcoded application signing key, a default database password (\"zulip\"), and DISABLE_HTTPS=True.",
+      "items": [
+        {
+          "source_label": "NVD CVE",
+          "title": "CVE-2026-16504",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=055dbdfd2f&url=https%3A%2F%2Fnvd.nist.gov%2Fvuln%2Fdetail%2FCVE-2026-16504"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "⚡ Weekly Recap: Rogue AI Models, $88M Bitcoin Theft, Water-System Attacks and Dangling DNS Hijacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=58c5675dd5&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fweekly-recap-rogue-ai-models-88m.html"
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2026-16503",
+      "level": "P1",
+      "sources": [
+        "NVD CVE",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "CVSS 9.1",
+        "EPSS 70%",
+        "악용 정황"
+      ],
+      "products": [
+        "Anthropic Claude Opus 4.7",
+        "Anthropic Mythos 5",
+        "Coldcard Hardware Wallet",
+        "Microsoft Outlook Web Access (OWA)",
+        "Ruby on Rails Active Storage"
+      ],
+      "remediation": "Ruby on Rails shipped patches for CVE-2026-66066; Microsoft OWA patch likely available for CVE-2026-42897; Coldcard firmware update not specified; Ant",
+      "due_date": "",
+      "summary": "Deployment of the VPS.org one-click Supabase template deploys a PostgreSQL instance that is published on all interfaces (0.0.0.0:5432) with a default database password set to \"postgres\". Because Docke",
+      "items": [
+        {
+          "source_label": "NVD CVE",
+          "title": "CVE-2026-16503",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=a749b4316b&url=https%3A%2F%2Fnvd.nist.gov%2Fvuln%2Fdetail%2FCVE-2026-16503"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "⚡ Weekly Recap: Rogue AI Models, $88M Bitcoin Theft, Water-System Attacks and Dangling DNS Hijacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=58c5675dd5&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fweekly-recap-rogue-ai-models-88m.html"
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2026-48395 / CVE-2026-48396 / CVE-2026-48449",
+      "level": "P1",
+      "sources": [
+        "KISA/KrCERT",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "EPSS 70%",
+        "악용 정황"
+      ],
+      "products": [
+        "Adobe Bridge",
+        "Adobe Campaign Classic",
+        "Anthropic Claude Opus 4.7",
+        "Anthropic Mythos 5",
+        "Coldcard Hardware Wallet"
+      ],
+      "remediation": "Adobe Bridge 16.0.6 이상 또는 15.1.7 이상으로 업데이트, Adobe Campaign Classic 7.4.3 build 9398 이상으로 업데이트",
+      "due_date": "",
+      "summary": "Adobe가 Bridge와 Campaign Classic 제품에서 발견된 다수의 취약점을 해결하는 보안 업데이트를 발표했다. Bridge에서는 경로 순회, 권한 검증 오류, 신뢰할 수 없는 검색 경로, 아웃오브바운드 쓰기 등 8개 취약점이, Campaign Classic에서는 SQL 인젝션과 권한 검증 오류 2개 취약점이 패치되었다. 영향을 받는 버전 사용",
+      "items": [
+        {
+          "source_label": "KISA/KrCERT",
+          "title": "Adobe 제품 보안 업데이트 권고",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=883073a4ff&url=https%3A%2F%2Fwww.boho.or.kr%2Fkr%2Fbbs%2Fview.do%3FsearchCnd%3D%26bbsId%3DB0000133%26searchWrd%3D%26menuNo%3D205020%26pageIndex%3D1%26categoryCode%3D%26nttId%3D72146"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "⚡ Weekly Recap: Rogue AI Models, $88M Bitcoin Theft, Water-System Attacks and Dangling DNS Hijacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=58c5675dd5&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fweekly-recap-rogue-ai-models-88m.html"
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2026-18556",
+      "level": "P1",
+      "sources": [
+        "SecurityWeek",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "EPSS 70%",
+        "악용 정황"
+      ],
+      "products": [
+        "N-able N-central",
+        "Anthropic Claude Opus 4.7",
+        "Anthropic Mythos 5",
+        "Coldcard Hardware Wallet",
+        "Microsoft Outlook Web Access (OWA)"
+      ],
+      "remediation": "2026.3.1.7로 업그레이드(호스팅 NCOD 자동, 자체 호스팅 수동), 관리 엔드포인트에서 악성 Cloudflare 터널 서비스 및 svchost.exe(Documents 폴더) 제거 필요",
+      "due_date": "",
+      "summary": "N-able N-central RMM 플랫폼에서 인증 우회 취약점(CVE-2026-18556, CVE-2026-18577)이 악용되어 공격자가 관리자 권한을 탈취하고 관리 중인 고객 엔드포인트까지 침투했다. 최초 패치(2026.2)가 불완전해 새로운 CVE-2026-18577이 할당되었으며, 2026.3.1.7 빌드에서 최종 수정되었다. 공격자는 Cloud",
+      "items": [
+        {
+          "source_label": "The Hacker News",
+          "title": "N-able Says Attackers Take Over N-central Servers After Initial Fix Proves Incomplete",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=d3784634d4&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fn-able-says-attackers-take-over-n.html"
+        },
+        {
+          "source_label": "SecurityWeek",
+          "title": "N‑able Patches Vulnerability Exploited to Hack N-central Servers",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=f468922377&url=https%3A%2F%2Fwww.securityweek.com%2Fn-able-patches-vulnerability-exploited-to-hack-n-central-servers%2F"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "⚡ Weekly Recap: Rogue AI Models, $88M Bitcoin Theft, Water-System Attacks and Dangling DNS Hijacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=58c5675dd5&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fweekly-recap-rogue-ai-models-88m.html"
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2026-42897 / CVE-2026-63077",
+      "level": "P1",
+      "sources": [
+        "Check Point Research",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "EPSS 70%",
+        "악용 정황"
+      ],
+      "products": [
+        "Anthropic Claude Opus 4.7",
+        "Anthropic Mythos 5",
+        "Coldcard Hardware Wallet",
+        "Microsoft Outlook Web Access (OWA)",
+        "Ruby on Rails Active Storage"
+      ],
+      "remediation": "Ruby on Rails shipped patches for CVE-2026-66066; Microsoft OWA patch likely available for CVE-2026-42897; Coldcard firmware update not specified; Ant",
+      "due_date": "",
+      "summary": "주간 위협 요약 보고서로 Anthropic AI 모델의 무단 접근, Coldcard 하드웨어 지갑 RNG 결함으로 인한 8,860만 달러 비트코인 탈취, 러시아 해킹 그룹 Laundry Bear의 Microsoft OWA XSS 취약점(CVE-2026-42897) 악용 및 OWAReaper 임플란트 배포, Ruby on Rails Active Storage",
+      "items": [
+        {
+          "source_label": "The Hacker News",
+          "title": "⚡ Weekly Recap: Rogue AI Models, $88M Bitcoin Theft, Water-System Attacks and Dangling DNS Hijacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=58c5675dd5&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fweekly-recap-rogue-ai-models-88m.html"
+        },
+        {
+          "source_label": "Check Point Research",
+          "title": "3rd August – Threat Intelligence Report",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=4c55852e4e&url=https%3A%2F%2Fresearch.checkpoint.com%2F2026%2F3rd-august-threat-intelligence-report%2F"
+        }
+      ]
+    },
+    {
+      "cve": "CVE-2026-15409 / CVE-2026-15410",
+      "level": "P2",
+      "sources": [
+        "SecurityWeek",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P2",
+        "EPSS 78%",
+        "악용 정황"
+      ],
+      "products": [
+        "SonicWall SMA1000",
+        "SonicWall SMA 1000"
+      ],
+      "remediation": "2026년 7월 14일자 패치로 CVE-2026-15409 및 CVE-2026-15410 수정",
+      "due_date": "",
+      "summary": "INC 랜섬웨어 그룹이 SonicWall SMA1000 어플라이언스의 두 가지 제로데이 취약점(CVE-2026-15409, CVE-2026-15410)을 연쇄 악용해 루트 권한 획득 및 내부망 횡이동을 수행 중이다. 6월 22일부터 실제 공격에 악용되었으며 7월 14일 패치 배포와 동시에 CISA KEV 카탈로그에 등재되었다. 피해 조직은 미국·호주·UAE",
+      "items": [
+        {
+          "source_label": "SecurityWeek",
+          "title": "Recent SonicWall Vulnerabilities Exploited in Ransomware Attacks",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=113950e346&url=https%3A%2F%2Fwww.securityweek.com%2Frecent-sonicwall-vulnerabilities-exploited-in-ransomware-attacks%2F"
+        },
+        {
+          "source_label": "The Hacker News",
+          "title": "INC Ransomware Emerges as Dominant Actor Exploiting SonicWall SMA 1000 Flaws",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=3ac0f172ef&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Finc-ransomware-emerges-as-dominant.html"
+        }
+      ]
+    }
+  ],
+  "domestic": {
+    "highlights": [
+      {
+        "ref": "a564d1a349",
+        "title": "케어클라우드, AWS 환경 해킹…34만5천 명 의료·금융정보 유출",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a564d1a349&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207900",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P2",
+        "category": "개인정보유출",
+        "published_at": "2026-08-03T13:07:15",
+        "summary": "미국 의료 IT 기업 케어클라우드가 AWS 환경 침해로 약 34만5천 명의 의료·금융 정보 유출을 공식 확인했다. 공격자는 AWS 환경에 침입해 전자의무기록(EHR) 데이터 저장소에 접근했으며, 사고는 3월 초 인지되었으나 피해 규모는 최근 주 정부 신고서를 통해 밝혀졌다. 일부 주의 신고 절차가 진행 중이어서 피해 규모는 더 늘어날 전망이다."
+      },
+      {
+        "ref": "cd1c753f30",
+        "title": "리버뱅크, 랜섬웨어 공격으로 데이터 탈취…“공격자가 삭제했다고 확인”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=cd1c753f30&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207906",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P2",
+        "category": "침해사고",
+        "published_at": "2026-08-04T03:45:38",
+        "summary": "미국 리버뱅크 앤드 트러스트가 6월 랜섬웨어 공격으로 내부 데이터 탈취 피해를 입었으며, 공격자로부터 데이터 삭제 확인을 받았다고 밝혔다. 개인정보 유출 여부는 아직 조사 중이며, SEC 공시를 통해 사고가 공개됐다. 금융권에서는 공격자의 데이터 삭제 주장을 기술적으로 검증하기 어렵다는 점에서 신중한 대응이 필요하다는 지적이 나온다."
+      },
+      {
+        "ref": "41c1e0a132",
+        "title": "영국 경찰 법률 데이터베이스 해킹…경찰·사법 관계자 10만 명 이상 정보 유출",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=41c1e0a132&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207904",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P2",
+        "category": "개인정보유출",
+        "published_at": "2026-08-04T00:55:12",
+        "summary": "영국 경찰 국가 법률 데이터베이스(PNLD)가 사이버 공격을 받아 경찰관, 사법기관 관계자 등 10만 명 이상의 연락처 정보가 유출됐다. 7월 26일 침해 사실이 확인되었으며, 현재 NCA와 사이버보안 전문가들이 원인을 조사 중이다. 유출된 정보에는 이름, 소속 기관, 이메일 주소 등이 포함된다."
+      },
+      {
+        "ref": "a847dd61fc",
+        "title": "포티넷, 2026년 2분기 매출 26% 성장... “AI 기반 보안운영 수요 확대”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a847dd61fc&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144998%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T15:58:00+09:00",
+        "summary": "포티넷이 2026년 2분기 매출 20.5억 달러(전년 대비 26% 성장)를 기록하며 실적 전망치를 상향 조정했다. 인텔과 협력해 차세대 보안 프로세서 SP6를 개발하고, 포티게이트 1200G·포티SASE 아웃포스트·포티SOC·포티엔드포인트 등 AI 기반 통합 보안 신제품을 발표했다. 무디스 신용등급이 A3로 상향되는 등 재무 건전성도 강화됐다."
+      },
+      {
+        "ref": "75fe395e7a",
+        "title": "Larva-24009 공격자의 피싱 메일 공격 사례 분석",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=75fe395e7a&url=https%3A%2F%2Fasec.ahnlab.com%2Fko%2F94785%2F",
+        "source": "asec",
+        "source_label": "안랩 ASEC",
+        "level": "P3",
+        "category": "공격캠페인",
+        "published_at": "2026-08-02T15:00:00+00:00",
+        "summary": "Larva-24009(HeptaX) 공격 그룹이 2023년부터 2026년까지 기업 대상 스피어피싱 메일(LNK 파일)로 파워쉘 백도어를 설치하고 QuasarRAT, UltraVNC, NirSoft 도구, 키로거 등을 통해 자격 증명·화면·키로그를 탈취하는 지속적 캠페인을 수행 중이다. 2026년 변형에서는 Notifier 악성코드가 텔레그램 API를 이용해 C2 알림을 보내는 점이 새로 확인됐다. ASEC 분석 결과 파일명·악성코드 구성·C2 인프라가 2024년과 거의 동일하게 재사용되고 있다."
+      },
+      {
+        "ref": "a44e29edd5",
+        "title": "크롬 패스키 노린 신종 공격 공개…악성코드로 지문 인증 우회",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a44e29edd5&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207905",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "취약점",
+        "published_at": "2026-08-04T03:17:02",
+        "summary": "팔로알토네트웍스 유닛42가 구글 크롬의 패스워드 매니저를 겨냥한 패스키 인증 우회 공격 기법 3종(패스타키, 실버 패스타키, 골든 패스타키)을 공개했다. 악성코드가 실행 중인 윈도우 PC에서 사용자 생체 인증 없이 패스키를 악용할 수 있으며, 암호 기술 자체가 아닌 저장·재등록·검증 절차의 허점을 노린다. 현재 실제 악용 사례보다는 연구 차원의 최초 공개로 보인다."
+      },
+      {
+        "ref": "f291b0f666",
+        "title": "[보안 최전선 ⑦] AX 대전환 속 보안... “차단 대신 자율형 거버넌스 필요해”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f291b0f666&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144987%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T15:35:00+09:00",
+        "summary": "보안뉴스 주최 라운드테이블에서 6개 기업 보안 실무진이 AI 전환(AX) 시대 보안 조직의 역할 변화, AI 게이트웨이 등 기술적 통제 수단, 클라우드 SLA 한계와 규제 대응, 보안 인력 기초 역량 저하 문제를 논의했다. 전면 차단에서 자율형 거버넌스로 패러다임 전환이 필요하며, 보안 에이전트 구축과 용어 정의 정립이 시급하다고 제언했다. 금융권은 3단계 필터링으로 인한 지연 등 실무적 고충이 크며, 규제 준수용 도입에 그치지 않는 실질적 보안 체계 마련이 강조됐다."
+      },
+      {
+        "ref": "29b84e435f",
+        "title": "티오리, 우리금융그룹에 AI 모의해킹 ‘진트 웹’ 공급",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=29b84e435f&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144989%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T11:50:00+09:00",
+        "summary": "티오리가 AI 기반 블랙박스 모의해킹 솔루션 '진트 웹'을 우리금융그룹에 공급해 국내 금융권 최초로 상시 AI 모의해킹 체계를 구축했다. 이 솔루션은 AI 에이전트가 실제 사용자처럼 웹 서비스를 탐색하며 비즈니스 로직 결함과 인증 우회 등 고난도 취약점을 탐지한다. 우리금융그룹은 AI를 악용한 사이버 위협 고도화에 선제 대응해 고객 자산 보호를 강화할 계획이다."
+      },
+      {
+        "ref": "9ab6786d14",
+        "title": "[CSW 2026] AI 인프라부터 애플리케이션까지 지킨다... 카스퍼스키, “신뢰와 혁신 가능케 하는 AI 생태계”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=9ab6786d14&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144999%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T16:00:00+09:00",
+        "summary": "카스퍼스키가 CSW 2026에서 AI 보안 플랫폼 '카스퍼스키 AI 프로텍트'를 발표하며 AI 활용 환경의 가시성 확보와 위협 대응을 강조했다. AI 악용 공격, 섀도우 IT, 공급망 공격 등 신규 위협이 증가하는 가운데 AI 인프라·애플리케이션·관제를 아우르는 통합 보안을 제공한다. 올해 AI 에이전트 위장 멀웨어 1만5천 건 발견, 일일 차단 멀웨어 50만 건(전년비 7% 증가) 등 위협 현황도 공개했다."
+      },
+      {
+        "ref": "59078a2342",
+        "title": "우리금융그룹, 국내 금융권 최초 AI 모의해킹 솔루션 도입…티오리 ‘진트 웹’ 구축",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=59078a2342&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207887",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T09:51:32",
+        "summary": "우리금융그룹이 국내 금융권 최초로 티오리의 AI 기반 블랙박스 모의해킹 솔루션 '진트 웹'을 도입해 24시간 상시 보안 점검 체계를 구축했다. AI 활용 사이버 공격 고도화에 대응하기 위한 선제적 조치다. URL 입력만으로 운영 중인 웹 서비스를 실시간 점검하는 자율형 솔루션이다."
+      },
+      {
+        "ref": "64cb1cdeee",
+        "title": "가트너 “AI 시대 개인정보 보호 핵심은 데이터 아닌 ‘추론’… AI가 만든 인사이트 유출 대비해야”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=64cb1cdeee&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207892",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T10:40:25",
+        "summary": "가트너는 2029년까지 개인정보 침해 사고의 대부분이 직접적인 개인식별정보(PII) 유출이 아닌 AI가 생성한 개인별 인사이트(추론)에서 발생할 것으로 전망했다. 바트 빌렘센 수석 애널리스트는 개인정보 침해 양상이 데이터 유출에서 인사이트 유출로 이동하고 있으며, AI는 기존 데이터 통제 여부와 관계없이 개인의 민감 정보를 추론할 수 있다고 경고했다. 기업은 AI가 생성하는 추론 결과에 대한 보호 대책을 마련해야 한다."
+      },
+      {
+        "ref": "046b308379",
+        "title": "AI 시대 방어의 한계 넘는다... 이스트시큐리티, ‘EDR 차세대 진화’ 기술보고서",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=046b308379&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144986%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T10:48:00+09:00",
+        "summary": "이스트시큐리티가 AI 에이전트 기반 자율형 EDR 기술보고서를 발간하며, 하루 평균 2992건 경보 중 63%가 방치되는 현장 인력난과 대응 격차를 지적했다. 알약 EDR 1.0에 AI 에이전트를 결합해 위협 요약·타임라인 분석·대응 추천·보고서 초안 작성을 자동화하고, 중요 차단 조치는 인간 승인을 거치는 휴먼 인 더 루프 구조를 적용했다. 온프레미스 지원, 가드레일 기술, 탐지 룰 표준화 및 랜섬웨어 롤백을 포함한 알약 EDR 2.0 로드맵도 공개했다."
+      },
+      {
+        "ref": "863bf9c1e5",
+        "title": "키페어–KB국민은행, 양자내성암호 공동 연구…금융권 양자보안 강화 나서",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=863bf9c1e5&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207893",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T12:14:05",
+        "summary": "키페어와 KB국민은행이 양자내성암호(PQC) 공동 연구를 위한 전략적 업무협약을 체결했다. 양사는 양자컴퓨팅 발전에 따른 HNDL(수집 후 추후 해독) 공격 등 미래 보안 위협에 선제 대응하고 금융권에 적합한 PQC 적용 방안을 연구할 계획이다. 이번 협약은 금융권 양자보안 강화의 일환으로 추진됐다."
+      },
+      {
+        "ref": "f9c4b8f3da",
+        "title": "[ISEC 2026 미리보기] 클루커스·위즈, 클라우드부터 AI 애플리케이션까지 아우르는 통합 보안 전략 제시",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f9c4b8f3da&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144953%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:24:00+09:00",
+        "summary": "클루커스와 위즈가 ISEC 2026에서 클라우드부터 AI 애플리케이션까지 아우르는 통합 보안 전략을 발표한다. 위즈의 에이전트리스 멀티클라우드·AI 보안 플랫폼과 Security Graph 기반 공격 경로 분석, AI 애플리케이션 보호 기능이 소개된다. ISEC 2026은 8월 11~12일 코엑스에서 'AI로 구현하는 자율 보안의 미래' 주제로 개최된다."
+      },
+      {
+        "ref": "b1ce117a03",
+        "title": "[ISEC 2026 미리보기] 센티넬원, 검증된 EDR 기반 위에 AI 시큐리티 선보인다",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b1ce117a03&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144952%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:22:00+09:00",
+        "summary": "센티넬원이 ISEC 2026에 참가해 Singularity 플랫폼 기반 AI 보안 전략을 공개한다. Purple AI, Prompt Security, 아이덴티티 보안 포트폴리오로 AI 에이전트·생성형 AI 사용 가시성과 지속적 행동 모니터링을 제공한다. 국내 공공·금융 레퍼런스(CC EAL2)와 포춘 500 20% 고객사를 강조하며 라이브 데모를 시연할 예정이다."
+      },
+      {
+        "ref": "3c41eb72f8",
+        "title": "[ISEC 2026 미리보기] 멘로시큐리티 코리아, AI 시대 겨냥한 브라우저 보안 플랫폼으로 국내 기업 보안 혁신 지원",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3c41eb72f8&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145002%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T17:23:00+09:00",
+        "summary": "멘로시큐리티 코리아가 ISEC 2026에서 제로트러스트 기반 브라우저 격리 기술인 Enterprise Browser Security 플랫폼을 선보이며, AI 시대 웹·브라우저 보안 위협 대응과 안전한 AI·SaaS 활용 지원을 강조했다. 주요 기능으로 웹 공격 차단, 악성 파일·제로데이 보호, DLP, 원격 근무 보안 등을 제공하며 국내 금융·제조·공공·IT 고객사를 대상으로 보안 현대화를 지원 중이다. 멘로시큐리티는 파트너 생태계 확대를 통해 국내 기업의 디지털 혁신과 사이버 보안 경쟁력 강화를 도울 계획이다."
+      },
+      {
+        "ref": "9b739f3bca",
+        "title": "에브리존-솔리데오, ‘화이트디펜더’ 공공총판 계약… 공공 랜섬웨어 대응 강화",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=9b739f3bca&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207910",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-04T09:28:12",
+        "summary": "에브리존과 솔리데오가 안티랜섬웨어 솔루션 '화이트디펜더'의 공공총판 계약을 체결하고 공공기관 대상 랜섬웨어 대응 사업을 확대한다. 솔리데오가 공공 영업·공급을 맡고 양사는 공동 제안·마케팅·기술지원 강화를 추진한다. 화이트디펜더는 시그니처리스 행위탐지 방식으로 랜섬웨어 암호화 행위를 실시간 탐지·차단하고 훼손 파일을 복구한다."
+      },
+      {
+        "ref": "e2df42800d",
+        "title": "큐냅 코리아, 컴퓨존 단독 최대 39% 할인 NAS 특가 판매",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=e2df42800d&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144981%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T09:53:00+09:00",
+        "summary": "큐냅 코리아가 컴퓨존 단독으로 8월 1일부터 9월 30일까지 QNAP NAS 및 확장 스토리지 주요 모델을 주차별 릴레이 특가로 최대 39% 할인 판매하는 프로모션을 진행한다."
+      },
+      {
+        "ref": "a0319d229d",
+        "title": "여의시스템, 공식 온라인 쇼핑몰서 ‘YES 네트워크 솔루션 특별전’ 진행",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a0319d229d&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144982%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T09:51:00+09:00",
+        "summary": "여의시스템이 공식 온라인 쇼핑몰 리뉴얼을 기념해 자체 네트워크 브랜드 'YES' 스위치 제품군 대상 특별 할인전을 8월 14일까지 진행한다. 비관리형 PoE 스위치 시리즈와 관리형 스위치 시리즈를 중심으로 5% 즉시할인 쿠폰을 제공한다. 온라인 구매 접근성 강화와 고객 혜택 확대가 목적이다."
+      },
+      {
+        "ref": "57ba4b245e",
+        "title": "쿠도커뮤니케이션, 지역 청소년 대상 AI·보안 교육 사회공헌… ‘과천미리내공유학교’ 운영",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=57ba4b245e&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207888",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-03T09:55:21",
+        "summary": "쿠도커뮤니케이션이 안양과천교육지원청과 협력해 지역 중고등학생 15명을 대상으로 '2026 과천미리내공유학교' AI·물리보안 교육 프로그램을 4일간 운영했다. 지난해에 이어 2년 연속 진행된 이번 사회공헌 활동은 학교 밖 미래기술 교육 기회를 제공하는 것이 목적이다. 보안 위협이나 취약점 등 기술적 위험 요소와는 무관한 기업 CSR 활동 소개 기사이다."
+      },
+      {
+        "ref": "80ff06d0cb",
+        "title": "클라우데라, 포레스터 ‘데이터 레이크하우스’ 리더 선정…“AI 시대 데이터 거버넌스 경쟁력 인정”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=80ff06d0cb&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207890",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T10:00:49",
+        "summary": "클라우데라가 포레스터의 2026년 3분기 데이터 레이크하우스 웨이브 보고서에서 리더로 선정됐으며, 비전 및 로드맵 항목에서 최고 점수를 받았다."
+      },
+      {
+        "ref": "5c3f3a1ad7",
+        "title": "쿠도커뮤니케이션, AI·보안 전문성 지역사회와 나눈다 “청소년 교육 사회공헌 진행”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=5c3f3a1ad7&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144980%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T10:00:00+09:00",
+        "summary": "쿠도커뮤니케이션이 과천시와 협력해 중고생 15명을 대상으로 AI·물리보안 진로 체험 교육 프로그램 '2026 과천미리내공유학교'를 4일간 운영했다. 임직원들이 강사로 참여해 생성형 AI, 영상분석, 물리보안 등 실무 기술을 교육하고 관련 진로 정보를 제공했다. 회사는 2년 연속 참여로 지역사회 공헌을 인정받아 2025년 과천시 감사패를 수상했다."
+      },
+      {
+        "ref": "287c0348e9",
+        "title": "인젠트-엠티데이타, 공공 정보화 사업 공동 공략…전략적 업무협약 체결",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=287c0348e9&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207891",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-03T10:03:28",
+        "summary": "인젠트와 엠티데이타가 공공 정보화 사업 공동 수주를 위한 전략적 업무협약(MOU)을 체결했다. 양사는 공공기관 발주 사업 공동 발굴, RFP 공동 대응, 컨소시엄 구성 등 전방위 협력을 추진한다. 인젠트의 데이터 플랫폼 역량과 엠티데이타의 공공 사업 경험을 결합해 시너지를 노린다."
+      },
+      {
+        "ref": "990d959999",
+        "title": "원모어시큐리티, 필리핀 Baybay City 전역에 실종자 고속검색 솔루션 구축",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=990d959999&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144978%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T10:11:00+09:00",
+        "summary": "원모어시큐리티가 필리핀 Baybay City 전역 CCTV에 AI 기반 실종자 고속검색 솔루션 '원모어아이 고속검색 v3.0'을 구축 완료했다. 단일 서버로 100시간 영상을 5분 내 분석해 수색 시간을 대폭 단축하며, 향후 필리핀 차량 번호판 인식 기능 확대도 계획 중이다. 국내 20여 지자체 검증 성과를 바탕으로 해외 공공안전 시장 진출 교두보를 마련했다."
+      },
+      {
+        "ref": "3ae2a46205",
+        "title": "핀란드, 연말에 러시아 연결 광케이블도 끊는다... 전력망 이어 통신망도 단절",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3ae2a46205&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144985%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "",
+        "published_at": "2026-08-03T10:57:00+09:00",
+        "summary": "전력망 이어 광케이블 연결 종료러시아 국경 통신 인프라 단계적 단절대체 통신망 확보 및 영향 최소화[보안뉴스 김형근 기자] 핀란드 국영 송전망 운영사 핑그리드(Fingrid)가 연말 임대 계약 만료에 맞춰 러시아와 연결된 광케이블 운영을 종료한다.글로벌 사이버보안 매체 더 레코드(The Record)에 따르면, 양국 간 전력 송전은 러시아의 우크라이나 침공"
+      },
+      {
+        "ref": "c63c3a287a",
+        "title": "나루씨큐리티-진인프라, ‘ZeroTiCA’ 리셀러 계약... 제로트러스트 보안 시장 정조준",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=c63c3a287a&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144984%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T11:24:00+09:00",
+        "summary": "나루시큐리티와 진인프라가 AI 기반 침해진단 서비스 'ZeroTiCA' 리셀러 계약을 체결하고 공공·민간 제로트러스트 보안 시장 공략에 나선다. 양사는 N2SF 컨설팅·구축 사업과 연계해 사전 진단부터 구축 후 지속 운영까지 아우르는 통합 보안 모델을 제시한다. 진인프라는 사전 PoC로 검증한 경험을 바탕으로 고객 맞춤형 컨설팅·구축·운영 관리 체계를 제공할 예정이다."
+      },
+      {
+        "ref": "0bf3c19dbb",
+        "title": "KISA, 암호모듈 시험자 양성 교육 신설…8월 21일까지 교육생 100명 모집",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=0bf3c19dbb&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207894",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T12:23:54",
+        "summary": "KISA가 과기정통부·국정원과 함께 암호모듈검증 민간 시험체계 확대에 대응해 '암호모듈 시험자 양성 교육'을 신설하고 8월 21일까지 교육생 100명을 모집한다. 암호모듈은 국가·공공기관 비비밀 업무자료 암호화·위변조 방지에 쓰이며, 관련 제품·서비스 공급 시 검증이 필수다. 이번 교육은 민간 시험인력 확충을 위한 정책적 조치다."
+      },
+      {
+        "ref": "9727ae1776",
+        "title": "NH농협캐피탈, OCI 기반 재해복구 체계 구축…업무 연속성·운영 복원력 강화",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=9727ae1776&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207896",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T12:32:33",
+        "summary": "NH농협캐피탈이 오라클 클라우드 인프라스트럭처(OCI)를 도입해 핵심 금융 서비스의 재해복구(DR) 체계를 구축했다. 기존 온프레미스 백업 방식을 OCI 기반으로 전환하고 VM웨어 솔루션과 오라클 베이스 데이터베이스 서비스를 활용해 복구 절차를 자동화했다. 이를 통해 대규모 장애 발생 시에도 안정적인 서비스 운영이 가능한 업무 연속성 체계를 마련했다."
+      },
+      {
+        "ref": "164d13e4c1",
+        "title": "옴니사, 가트너 DEX 관리 부문 2년 연속 리더 선정",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=164d13e4c1&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207895",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T12:28:21",
+        "summary": "옴니사가 2026년 가트너 매직 쿼드런트 디지털 직원 경험(DEX) 관리 도구 부문에서 2년 연속 리더로 선정됐다고 발표했다. 엔드포인트 관리, DaaS, DEX 도구 등 3개 핵심 매직 쿼드런트에서 모두 리더로 선정된 유일한 기업임을 강조했다. AI 기반 분석·자동화와 통합 가시성을 통해 다양한 업무 환경을 지원한다는 점을 부각했다."
+      },
+      {
+        "ref": "3610ff62c6",
+        "title": "금융보안원, 금융권 침투테스트 수행 가이드라인 발간…실제 공격 시나리오 기반 보안 점검 지원",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3610ff62c6&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207897",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T12:38:18",
+        "summary": "금융보안원이 금융회사의 실제 공격 대응 역량 강화를 위해 '금융분야 침투테스트 수행 가이드라인'을 발간했다. 실제 공격자 기법을 활용한 체계적 침투테스트 기준과 절차를 제시하며, 개인정보 상시평가 모의해킹 항목 신설 등 제도적 요구 확대에 대응한다. 생성형 AI 악용 공격과 다중 취약점 연계 침투 공격 증가 추세를 반영해 일관된 테스트 기준을 마련했다."
+      },
+      {
+        "ref": "d7a39b85d9",
+        "title": "AX, 어디서부터 시작할까…초록소프트, 산업 현장 겨냥한AI 전환 솔루션 3종 제시",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=d7a39b85d9&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207898",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T12:50:49",
+        "summary": "AI 전문기업 초록소프트가 중소기업의 AX(AI 전환) 도입을 지원하기 위해 시각 분석 '카비렌즈', 지식 자산화 '코브레인', 의사결정 지원 '데시내비' 등 3종 솔루션을 출시했다. 자금과 전문 인력 부족으로 AX 도입에 어려움을 겪는 산업 현장 중소기업을 주 타깃으로 한다. 개별 기술을 넘어 데이터 수집부터 활용까지 통합 지원하는 것이 특징이다."
+      },
+      {
+        "ref": "29871295d1",
+        "title": "다후아테크놀로지, 국제표준 ‘IEC 62443-4-1’ 인증 획득…제품 개발 보안체계 입증",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=29871295d1&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207899",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T12:56:32",
+        "summary": "다후아테크놀로지가 산업제어시스템 보안 국제표준인 IEC 62443-4-1(보안 개발 수명주기) 인증을 획득했다고 발표함. 이 표준은 ISA 제정, IEC 채택된 IACS 사이버보안 대표 표준으로 제품 개발 보안 체계 입증임. 구체적 제품명·버전·취약점 정보는 기사에 없음."
+      },
+      {
+        "ref": "04b80104b0",
+        "title": "리미니스트리트, AI 에이전트 거버넌스 관리 서비스 ‘리미니 거버넌스 포 AI’ 출시",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=04b80104b0&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207901",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:22:02",
+        "summary": "리미니스트리트가 AI 에이전트의 활동·보안·컴플라이언스·비용을 중앙에서 모니터링·통제하는 관리형 서비스 '리미니 거버넌스 포 AI'를 출시했다. AI 전문 엔지니어가 글로벌 커맨드 센터를 통해 24시간 365일 운영을 지원한다. 주요 기능은 에이전트 활동·보안 모니터링, 거버넌스 정책 적용, 비용·ROI 측정, 장애 대응 등이다."
+      },
+      {
+        "ref": "fb3727dce8",
+        "title": "펜타시큐리티, 웹방화벽 SaaS 1위 석권... 까다로운 일본 뚫은 K-보안",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=fb3727dce8&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144990%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:26:00+09:00",
+        "summary": "펜타시큐리티의 클라우드브릭 WAF+가 일본 최대 B2B 매체 IT트렌드의 2026년 상반기 랭킹에서 웹방화벽 부문 1위, 사이버 공격 대책 부문 2위를 차지했다. 75만여 사이트의 위협 인텔리전스를 기반으로 WAF, API 보안, 악성 봇 완화, DDoS 완화, 위협 IP 차단 등 5 in 1 보안 기능을 제공하며 PCI DSS v4.0.1 인증을 획득했다. 일본 시장에서 검증된 기술력을 바탕으로 글로벌 클라우드 보안 시장 진출을 가속화할 계획이다."
+      },
+      {
+        "ref": "ff80da25ca",
+        "title": "위베어소프트, CertKorea와 협약… CertBear 글로벌 SSL/TLS 인증서 자동 발급 지원",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=ff80da25ca&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207902",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:38:53",
+        "summary": "위베어소프트가 CertKorea와 협약을 맺고 CertBear 솔루션에 DigiCert SSL/TLS 인증서 자동 발급·갱신 기능을 추가했다. CertKorea는 DigiCert 국내 총판으로, 이번 연동으로 기업은 국제 신뢰 인증서를 더 편리하게 관리할 수 있게 됐다. 보안 위협이나 취약점 관련 내용은 없는 제품 기능 확대 소식이다."
+      },
+      {
+        "ref": "42c95fa0d0",
+        "title": "토스모바일, 얼굴결제 혜택 연계 ‘페이스페이 제휴 요금제’ 출시",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=42c95fa0d0&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144991%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:42:00+09:00",
+        "summary": "토스모바일이 LG유플러스망 기반 알뜰폰 요금제 5종을 출시하며 토스 페이스페이 결제 쿠폰 혜택을 결합했다. 월 8000원부터 7개월간 요금할인과 최대 24개월간 페이스페이 쿠폰을 제공하는 프로모션 상품이다. 누적 등록자 700만 명을 넘은 페이스페이 서비스와 통신 요금제를 연계해 고객 체감 혜택을 확대하려는 시도다."
+      },
+      {
+        "ref": "82a57f3af6",
+        "title": "한화M&S 공식 출범, 한화비전 비롯한 테크·라이프 부분 품은 지주사 체제 첫발",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=82a57f3af6&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144992%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-03T13:50:00+09:00",
+        "summary": "한화그룹의 테크·라이프 솔루션즈 부문을 통합한 한화머시너리앤서비스홀딩스(한화M&S)가 8월 3일 공식 출범했다. 김형조 대표이사 체제로 57개 자회사를 거느리며 8월 25일 유가증권시장 상장을 앞두고 있다. 지주사 설립을 통해 사업 전문성 강화와 시너지 창출로 기업 경쟁력을 높이겠다는 계획이다."
+      },
+      {
+        "ref": "7515263aaf",
+        "title": "다후아테크놀로지, 글로벌 최고 수준 사이버 보안 국제표준 ‘IEC 62443-4-1’ 인증 획득",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=7515263aaf&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144995%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T14:48:00+09:00",
+        "summary": "다후아테크놀로지가 산업제어시스템 보안 국제표준인 IEC 62443-4-1 인증을 획득해 안전한 소프트웨어 개발 수명주기(SSDLC) 체계를 입증했다. 이 인증은 유럽 사이버 복원력법(CRA) 대응 기반이 되며, 다후아는 ETSI EN 303 645, CC EAL3+ 등 다른 국제 인증도 보유하고 있다. 회사는 앞으로도 SSDLC 고도화로 글로벌 보안 규제 요구를 충족할 계획이다."
+      },
+      {
+        "ref": "8240699f2c",
+        "title": "행안부, 외국인 관광 도시 민박업 등 1만2000여개소 재난배상책임보험 의무가입",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=8240699f2c&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144997%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T15:55:00+09:00",
+        "summary": "행정안전부가 외국인 관광 도시 민박업과 한옥 체험업을 재난배상책임보험 의무가입 대상에 추가하는 법령 개정을 추진한다. 약 1만2000개 시설이 새로 의무가입 대상이 되어 안전 사각지대를 해소한다. 개정안은 문화체육관광부와 협의를 마치고 입법 절차를 진행할 예정이다."
+      },
+      {
+        "ref": "a71f6e0615",
+        "title": "스캐닝 넘어 공격자 시선으로... 금융보안원, ‘모의해킹 실무 가이드’ 배포",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a71f6e0615&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144994%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T16:02:00+09:00",
+        "summary": "금융보안원이 금융사의 실제 공격자 관점 침투테스트를 지원하는 '금융분야 침투테스트 수행 가이드라인'을 발간했다. MITRE ATT&CK와 사이버 킬체인 프레임워크를 반영해 초기 침투부터 데이터 반출까지 공격 흐름을 재현하는 시나리오 기반 점검 체계를 마련했다. RED IRIS팀의 실무 경험을 바탕으로 사전준비·점검수행·결과보고·사후관리 단계별 기준과 3개 분야 6개 항목 체크리스트를 제공한다."
+      },
+      {
+        "ref": "8d83468752",
+        "title": "국토부, AI 시대 공간정보 고도화 “도시·재난안전·모빌리티 활용 확대”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=8d83468752&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144996%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T16:00:00+09:00",
+        "summary": "국토교통부가 '제4차 공간정보산업진흥 기본계획(2026~2030)'을 확정 발표했으며, AI 시대 핵심 인프라인 고정밀 3차원 공간정보 구축, GeoAI 파운데이션 모델 개발, 공간정보 유통·활용 기반 마련, 산업 경쟁력 강화 및 인재 양성 등 3대 추진전략과 12대 과제를 제시함."
+      },
+      {
+        "ref": "6eb9f2ce16",
+        "title": "[2026 EDR·NDR·XDR 솔루션 리포트] 국가 사이버보안 기본지침 개정과 만나 보안 체계를 업그레이드하다",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=6eb9f2ce16&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144905%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T16:43:00+09:00",
+        "summary": "국가정보원이 2026년 5월 1일 국가 사이버보안 기본지침을 개정해 망 분리에서 N2SF(데이터 중요도 기반 통제)로 패러다임을 전환하고 EDR·NDR·XDR 등 탐지·대응 솔루션의 보안관제 연동을 의무화했다. 공공기관은 보안 예산 15%·전담 인력 10% 확보, 생성형 AI 보안 가이드라인 준수, 민간 기업 협조 의무 확대 등이 새롭게 적용된다. 보안 업계는 공공 수요 확대를 예상하며 EDR·NDR·XDR 통합 연계 체계 구축이 필수적이라고 강조한다."
+      },
+      {
+        "ref": "41293380fb",
+        "title": "유럽 진출 위해 꼭 알아야 할 사이버 보안법 ‘EU CRA’ 톺아보기",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=41293380fb&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144902%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T17:00:00+09:00",
+        "summary": "EU 사이버복원력법(CRA)이 2027년 12월 전면 시행되며 디지털 제품의 보안 내재화, SBOM 관리, 5년간 보안 업데이트 제공 등을 의무화한다. 국내 ICT 수출기업은 CE 인증 획득에 최소 5개월·건당 1.5~2억 원 비용이 소요되고 2026년 9월부터 24시간 내 취약점 보고 의무가 선적용돼 대응이 시급하다. 미국·일본·대만 등 주요국도 자국 제도와 CRA 간 정합성 확보나 수출기업 지원사업을 추진 중이다."
+      },
+      {
+        "ref": "f7804c26eb",
+        "title": "[CSW 2026] “북한 연계 김수키, AI로 진화”... 정밀한 표적 공격, 추적 힘든 악성코드 증가",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f7804c26eb&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145001%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "",
+        "published_at": "2026-08-03T16:59:00+09:00",
+        "summary": "CSW 2026에서 APAC 지역 위협 동향 공유[중국 광저우=보안뉴스 한세희 기자] 한국 정부 기관을 주로 공격하는 북한 연계 위협 그룹 김수키가 AI를 이용해 진화하고 있다. 랜섬웨어 그룹들은 무차별 공격보다 정교한 표적 공격 비중을 높이고 있다. 3일 중국 광저우에서 열린 ‘사이버 시큐리티 위켄드(CSW) 2026’에서 세르게이 로즈킨 카스퍼스키 글"
+      },
+      {
+        "ref": "402a3228ca",
+        "title": "아마노코리아, 바이온에버와 AI 충전·주차 통합 플랫폼 개발 추진",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=402a3228ca&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145003%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T17:45:00+09:00",
+        "summary": "아마노코리아와 바이온에버가 AI 기반 전기차 충전·주차 통합 플랫폼 개발을 위한 업무협약을 체결했다. 양사는 주차·출입·결제 시스템과 AI 충전 플랫폼을 결합하고 향후 주차로봇·자율충전 기술까지 연계한 무인 모빌리티 서비스를 공동 추진할 계획이다. 국내 상업·공공시설 대상 신규 사업 확대와 일본 등 글로벌 시장 진출도 목표로 한다."
+      },
+      {
+        "ref": "4cae412ad2",
+        "title": "국가 인프라 지킬 ‘암호모듈’ 평가자 육성... KISA 교육생 선착순 모집",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=4cae412ad2&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144993%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T17:12:00+09:00",
+        "summary": "KISA가 과기정통부·국정원과 공동으로 암호모듈 시험자 양성 교육을 신설하고 8월 31일부터 5일간 오프라인 교육생 100명을 선착순 모집한다. 민간 시험 체계 확대에 대비해 객관적 평가 역량을 갖춘 전문인력을 양성하기 위한 원스톱 교육·시험 체계다. 교육 이수 후 필기시험을 거쳐 암호모듈 시험자 자격을 취득할 수 있다."
+      },
+      {
+        "ref": "91d9a34abb",
+        "title": "진천군, CCTV 2106대로 생활안전망 똑똑하게 고도화한다",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=91d9a34abb&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145000%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T17:11:00+09:00",
+        "summary": "충북 진천군이 AI 영상분석 기반 스마트 관제망을 고도화하고 CCTV 2106대를 통합 운영하며 생활안전망을 강화하고 있다. 노후 장비 교체와 신규 설치, 비상벨 연계로 24시간 관제 체계를 구축해 범죄 예방과 신속 대응에 활용 중이다. 관제요원 17명이 4조 2교대로 근무하며 실제 검거 성과도 거두고 있다."
+      },
+      {
+        "ref": "c1a65d3795",
+        "title": "[정보보안 연재소설-로그아웃되지 않는 밤] 제14화 '현장 모르는 소리'",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=c1a65d3795&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207903",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-03T21:23:34",
+        "summary": "데일리시큐에서 연재 중인 정보보안 소설 '로그아웃되지 않는 밤' 제14화로, 보안 담당자의 정책 수립 고민과 현장 현실 간 괴리를 다룬 허구적 서사임."
+      },
+      {
+        "ref": "79bda320ba",
+        "title": "오픈AI, 차세대 AI ‘아스트라’ 공개…10년 넘은 수학 난제 10건 해결",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=79bda320ba&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207907",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-04T07:16:29",
+        "summary": "오픈AI가 차세대 AI 모델 '아스트라'의 연구 성과를 공개하며, 10년 이상 미해결된 수학 난제 10건에서 새로운 결과를 도출했다고 발표했다. 해결 분야는 고차원 기하학, 부호 이론, 군론, 양자 복잡도, 산술 회로 복잡도, 격자 기반 암호학 등이며, 비소픽 군 존재 증명과 콘스 강성 추측 반박 등이 포함된다. 아직 출시되지 않은 내부 연구용 모델로, 보안 취약점이나 공격 동향과는 직접적 관련이 없다."
+      },
+      {
+        "ref": "c3b11479b9",
+        "title": "[속담으로 배우는 100가지 보안 습관 81] 소 잃고 외양간 고친다(1)-지갑 잃어버리면 가장 먼저 해야 할 것",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=c3b11479b9&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144235%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-04T10:14:00+09:00",
+        "summary": "지갑 분실 시 즉시 카드 정지·분실신고, 신분증 재발급, 경찰청 유실물센터(lost112) 신고 등 대응 절차를 안내하는 보안 습관 칼럼이다. 기술적 해킹보다 실수·부주의가 사고의 주원인이므로 일상 습관 개선이 중요함을 강조한다. 카드사 앱, 정부24, 안전운전 통합민원 등 구체적 신고 채널을 소개한다."
+      },
+      {
+        "ref": "2d0ade06b4",
+        "title": "조달청, 인공지능(AI) 제품 공공조달 지원 본격화",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=2d0ade06b4&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145005%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-04T10:03:00+09:00",
+        "summary": "조달청이 인공지능 기본법 시행령 개정에 맞춰 AI 제품의 공공조달시장 진입 기준 완화, 판로 확대, 가점 부여 등 전방위 지원책을 발표했다. 다수공급자계약 실적·업체 수·규격 요건을 낮추고 적격성 평가를 면제하며, 2단계 경쟁 기준 금액을 4배 상향해 수요기관의 직접 구매 범위를 넓혔다. 물품구매 적격심사 시 AI 제품에 +1.5점 가점을 부여해 공공구매력을 활용한 AI 산업 육성을 목표로 한다."
+      },
+      {
+        "ref": "6f34c40805",
+        "title": "카스퍼스키, 컨테이너 시큐리티 업데이트…DevSecOps·GitHub Actions 보안 강화",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=6f34c40805&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207913",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-04T09:49:04",
+        "summary": "카스퍼스키가 컨테이너 보안 솔루션 KCS의 신규 기능을 공개했다. DevSecOps 환경에 맞춘 사용자 지정 보안 정책, 시스템 구성 백업·복제, 컨트롤 플레인 감사, GitHub Actions 설정 오류 탐지 기능이 추가됐다. 컨테이너 개발·운영 전반의 보안 강화를 목표로 한다."
+      },
+      {
+        "ref": "c0366681c1",
+        "title": "지니언스, 상반기 역대 최대 실적…영업이익 294% 급증",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=c0366681c1&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207912",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-04T09:43:50",
+        "summary": "지니언스가 2026년 상반기 매출 249억 원, 영업이익 43억 원으로 창사 이래 최대 상반기 실적을 기록했다. 전년 동기 대비 매출 19.9%, 영업이익 294.3% 증가했으며, AI 위협 확산에 따른 EDR·NAC 수요 증가와 클라우드 NAC·MDR 서비스 성장이 견인했다. 하반기에는 생성형 AI 공격 대응을 위한 제로트러스트 기반 통합 보안 플랫폼 사업을 확대할 계획이다."
+      },
+      {
+        "ref": "8d0688ff2f",
+        "title": "LG유플러스, MDR 전문기업 파고네트웍스 인수…전사 보안 체계·기업 보안 사업 강화",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=8d0688ff2f&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207911",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-04T09:34:59",
+        "summary": "LG유플러스가 MDR 전문기업 파고네트웍스를 인수해 전사 보안 체계 고도화와 기업 보안 사업 확대를 추진한다. MDR은 24시간 모니터링·탐지·분석·대응을 수행하는 운영형 보안 서비스다. 이번 인수로 LG유플러스는 전문 인력과 역량을 내재화해 보안 경쟁력을 강화할 계획이다."
+      },
+      {
+        "ref": "c2685c9062",
+        "title": "[김승주 교수 칼럼] 한국에도 NIST가 필요하다",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=c2685c9062&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207909",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-04T09:00:48",
+        "summary": "한국의 사이버보안 거버넌스가 부처별로 분산돼 일관성이 부족하다고 지적하며, 미국 NIST 모델처럼 국가 차원의 통합 보안 기준·평가 체계를 마련해야 한다고 주장한다. FISMA 제정 이후 NIST가 미 연방 보안 표준을 총괄하는 것처럼, 한국도 단일 기구가 표준·인증·평가를 주도해야 한다는 의견이다. AI·양자컴퓨팅 등 신기술 등장에 맞춰 거버넌스 개편이 시급하다고 강조한다."
+      },
+      {
+        "ref": "0ae76efa39",
+        "title": "국방부, 군 내 보안 전문기관 ‘국방보안지원단’ 창설",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=0ae76efa39&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145010%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-04T11:39:00+09:00",
+        "summary": "국방부가 7월 31일 국군방첩사령부 해체 후속조치로 국방보안지원단을 창설했다. 군단급 이상 부대의 중앙보안감사와 보안사고 조사를 전담하며 군 보안업무의 독립성과 전문성을 강화한다. 국방부는 이를 계기로 군 보안체계를 재정립하고 변화하는 안보환경에 대응하겠다고 밝혔다."
+      }
+    ],
+    "trend_reads": [
+      {
+        "ref": "9ab6786d14",
+        "title": "[CSW 2026] AI 인프라부터 애플리케이션까지 지킨다... 카스퍼스키, “신뢰와 혁신 가능케 하는 AI 생태계”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=9ab6786d14&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144999%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T16:00:00+09:00",
+        "summary": "카스퍼스키가 CSW 2026에서 AI 보안 플랫폼 '카스퍼스키 AI 프로텍트'를 발표하며 AI 활용 환경의 가시성 확보와 위협 대응을 강조했다. AI 악용 공격, 섀도우 IT, 공급망 공격 등 신규 위협이 증가하는 가운데 AI 인프라·애플리케이션·관제를 아우르는 통합 보안을 제공한다. 올해 AI 에이전트 위장 멀웨어 1만5천 건 발견, 일일 차단 멀웨어 50만 건(전년비 7% 증가) 등 위협 현황도 공개했다.",
+        "score": 15,
+        "reason_bits": [
+          "신규",
+          "우선도 15점"
+        ]
+      },
+      {
+        "ref": "f291b0f666",
+        "title": "[보안 최전선 ⑦] AX 대전환 속 보안... “차단 대신 자율형 거버넌스 필요해”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f291b0f666&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D144987%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T15:35:00+09:00",
+        "summary": "보안뉴스 주최 라운드테이블에서 6개 기업 보안 실무진이 AI 전환(AX) 시대 보안 조직의 역할 변화, AI 게이트웨이 등 기술적 통제 수단, 클라우드 SLA 한계와 규제 대응, 보안 인력 기초 역량 저하 문제를 논의했다. 전면 차단에서 자율형 거버넌스로 패러다임 전환이 필요하며, 보안 에이전트 구축과 용어 정의 정립이 시급하다고 제언했다. 금융권은 3단계 필터링으로 인한 지연 등 실무적 고충이 크며, 규제 준수용 도입에 그치지 않는 실질적 보안 체계 마련이 강조됐다.",
+        "score": 28,
+        "reason_bits": [
+          "심층 분석",
+          "관련성 높음",
+          "우선도 28점"
+        ]
+      },
+      {
+        "ref": "75fe395e7a",
+        "title": "Larva-24009 공격자의 피싱 메일 공격 사례 분석",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=75fe395e7a&url=https%3A%2F%2Fasec.ahnlab.com%2Fko%2F94785%2F",
+        "source": "asec",
+        "source_label": "안랩 ASEC",
+        "level": "P3",
+        "category": "공격캠페인",
+        "published_at": "2026-08-02T15:00:00+00:00",
+        "summary": "Larva-24009(HeptaX) 공격 그룹이 2023년부터 2026년까지 기업 대상 스피어피싱 메일(LNK 파일)로 파워쉘 백도어를 설치하고 QuasarRAT, UltraVNC, NirSoft 도구, 키로거 등을 통해 자격 증명·화면·키로그를 탈취하는 지속적 캠페인을 수행 중이다. 2026년 변형에서는 Notifier 악성코드가 텔레그램 API를 이용해 C2 알림을 보내는 점이 새로 확인됐다. ASEC 분석 결과 파일명·악성코드 구성·C2 인프라가 2024년과 거의 동일하게 재사용되고 있다.",
+        "score": 47,
+        "reason_bits": [
+          "심층 분석",
+          "관련성 높음",
+          "우선도 47점"
+        ]
+      }
+    ]
+  },
+  "overseas": {
+    "highlights": [
+      {
+        "ref": "5a46a866fc",
+        "title": "Chinese hacker used DeepSeek to launch autonomous cyberattacks on vulnerable servers",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=5a46a866fc&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fdeepseek-ai-autonomous-cyberattacks-hermes-agent%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P1",
+        "category": "기술동향",
+        "published_at": "2026-08-03T13:51:57+00:00",
+        "summary": "중국 해커 그룹(knaithe, KnYuan)이 DeepSeek 등 다수의 LLM을 활용해 인터넷에 노출된 취약한 서버를 대상으로 자율적인 사이버 공격을 수행했다. 팔로알토 네트웍스 Unit 42 연구원들이 공격자의 AI 에이전트 설정 실수로 인프라가 노출되어 이를 발견했다. 공격자는 여러 AI 플랫폼을 조합해 공격 자동화를 시도했으며, 이는 AI를 악용한 새로운 공격 트렌드를 보여준다."
+      },
+      {
+        "ref": "d739badb55",
+        "title": "AI Runs the Hack: Chinese Actor Automates Cyberattacks With DeepSeek",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=d739badb55&url=https%3A%2F%2Fsecurityaffairs.com%2F196544%2Fai%2Fai-runs-the-hack-chinese-actor-automates-cyberattacks-with-deepseek.html",
+        "source": "securityaffairs",
+        "source_label": "Security Affairs",
+        "level": "P1",
+        "category": "공격캠페인",
+        "published_at": "2026-08-03T15:52:27+00:00",
+        "summary": "팔로알토 유닛42가 중국어권 공격자(knaithe, KnYuan)가 딥시크(DeepSeek) AI를 허메스 에이전트(Hermes Agent) 프레임워크에 연동해 표적 스캔, 익스플로잇 선택, 공격 실행을 자율 수행한 캠페인을 포착했다. 공격자가 홈 디렉터리에 파일 서버를 띄우는 실수로 API 키, 익스플로잇 스크립트, 타겟 리스트, 세션 로그 등이 유출돼 AI의 공격 전 과정이 기록됐다. 딥시크는 랭플로우(CVE-2026-33017)와 n8n 워크플로 자동화 도구의 연쇄 취약점을 자동으로 탐색·악용하려 했으며, Qwen·GLM·Ki"
+      },
+      {
+        "ref": "b8b757d947",
+        "title": "New York Awards $9 Million to Strengthen Cybersecurity at 153 Water Systems",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b8b757d947&url=https%3A%2F%2Fwww.securityweek.com%2Fnew-york-awards-9-million-to-strengthen-cybersecurity-at-153-water-systems%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P1",
+        "category": "공격캠페인",
+        "published_at": "2026-08-04T01:54:00+00:00",
+        "summary": "뉴욕주가 153개 상·하수도 시스템의 사이버 방어 강화를 위해 900만 달러 규모의 SECURE 보조금 프로그램을 발표했습니다. 이는 미국 7개 이상 주에서 발생한 상수도·하수도 OT 시스템 대상 협조적 사이버 캠페인(일부 시설 제어 기능 중단)에 따른 조치로, 이란 연계 위협 행위자가 유력 용의자로 지목됩니다. CISA는 인터넷 노출 PLC 제거, 기본 비밀번호 변경, 보안 게이트웨이/VPN 통한 원격 접근, 신뢰 IP 제한 등 즉각적 완화 조치를 권고했습니다."
+      },
+      {
+        "ref": "248e625d49",
+        "title": "US Water Cyberattacks Extend Beyond Minnesota to at Least 6 Other States",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=248e625d49&url=https%3A%2F%2Fwww.securityweek.com%2Fus-water-cyberattacks-extend-beyond-minnesota-to-at-least-6-other-states%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P1",
+        "category": "",
+        "published_at": "2026-08-03T08:48:02+00:00",
+        "summary": "Michigan, South Dakota, and Georgia are reportedly on the list of states whose water systems have been targeted by Iran-linked hackers. The post US Water Cyberattacks Extend Beyond Minnesota to at Least 6 Other States appeared first on SecurityWeek ."
+      },
+      {
+        "ref": "6c51257cfd",
+        "title": "CaptiveCrunch: Midnight Blizzard targets travelers worldwide for malware delivery and credential theft",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=6c51257cfd&url=https%3A%2F%2Fwww.microsoft.com%2Fen-us%2Fsecurity%2Fblog%2F2026%2F07%2F31%2Fcaptivecrunch-midnight-blizzard-targets-travelers-worldwide-for-malware-delivery-and-credential-theft%2F",
+        "source": "microsoft_security",
+        "source_label": "Microsoft Security Blog",
+        "level": "P2",
+        "category": "공격캠페인",
+        "published_at": "2026-07-31T21:01:37+00:00",
+        "summary": "마이크로소프트가 '캡티브크런치(CaptiveCrunch)' 캠페인을 공개하며, 미드나이트 블리자드 하위 그룹 스톰-2945가 2026년 5월부터 전 세계 호텔·접객 업종의 캡티브 포털 네트워크를 악용해 DNS·HTTP 트래픽을 조작하고 사용자를 피싱·악성코드 유포 인프라로 리디렉션하고 있다고 밝혔다. 공격자는 AI를 활용해 디바이스 코드 인증 흐름을 악용한 AitM 피싱과 클릭픽스(ClickFix) 기법으로 윈도우·안드로이드용 골랭 기반 RAT를 유포하며, 자격 증명 탈취·시스템 열거·오디오·비디오 감시 등 광범위한 기능을 수행한다"
+      },
+      {
+        "ref": "b7c041cd88",
+        "title": "A week in security (July 27 – August 2)",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b7c041cd88&url=https%3A%2F%2Fwww.malwarebytes.com%2Fblog%2Fnews%2F2026%2F08%2Fa-week-in-security-july-27-august-2",
+        "source": "malwarebytes",
+        "source_label": "Malwarebytes Labs",
+        "level": "P2",
+        "category": "기타",
+        "published_at": "2026-08-03T07:01:00+00:00",
+        "summary": "Malwarebytes Labs 주간 보안 요약(7/27~8/2)으로 가짜 포트나이트 보상 피싱, 가짜 플래시 플레이어를 통한 AtlasRAT 유포, Microsoft Copilot 프롬프트 인젝션 웜, 애플 앱스토어 가짜 암호화폐 앱 피해, 가짜 월마트 사이트 신용카드 탈취, 바티칸 기도 앱 70만 명 개인정보 유출, ShinyHunters 데이터 악용 섹스토션 등 다양한 위협 동향을 다룸."
+      },
+      {
+        "ref": "1bd7794cf3",
+        "title": "Denying the Worm: Detecting SANDWORM_MODE and the Emerging Class of AI Toolchain Supply Chain Attacks",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=1bd7794cf3&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fdenying-the-worm-sandworm-mode-and-ai-toolchain-supply-chain-attacks%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P2",
+        "category": "공급망공격",
+        "published_at": "2026-07-21T00:00:00-05:00",
+        "summary": "Socket.dev가 2026년 2월 공개한 연구에 따르면, SANDWORM_MODE라는 내부 플래그를 가진 다단계 npm 공급망 웜이 19개 악성 패키지와 두 개의 게시자 별칭을 통해 AI 증강 개발 워크플로를 표적으로 삼았다. 이 웜은 AI 코딩 어시스턴트, CI 자동화, LLM 툴체인의 런타임 동작을 악용하는 새로운 유형의 공급망 공격으로, 난독화 로더, 자격 증명 수집 및 시간 지연 후 전체 기능 탑재의 3단계 감염 체인을 가진다. 탐지 엔지니어링 노력으로 도출된 공격 지표가 현재 CrowdStrike 고객을 보호 중이다."
+      },
+      {
+        "ref": "25597a0d05",
+        "title": "CrowdStrike: AI is now both the weapon and the target in cyberattacks",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=25597a0d05&url=https%3A%2F%2Fcyberscoop.com%2Fcrowdstrike-annual-threat-hunting-report-2026%2F",
+        "source": "cyberscoop",
+        "source_label": "CyberScoop",
+        "level": "P2",
+        "category": "기술동향",
+        "published_at": "2026-08-03T07:01:00+00:00",
+        "summary": "CrowdStrike 연례 위협 헌팅 보고서에 따르면 AI가 공격 도구이자 표적이 되면서 AI 기반 악성 활동이 전년 대비 89% 급증했고, 취약점의 88%가 48시간 내 무기화되어 기존 30일 패치 주기가 무의미해졌습니다. TeamPCP 등 위협 그룹이 오픈소스 공급망을 하루 만에 300개 이상 의존성 침해하는 등 AI 생태계가 새로운 공급망 전장이 되고 있습니다. 기업은 AI 도구 보안 강화와 초단위 패치 대응 체계 마련이 시급합니다."
+      },
+      {
+        "ref": "b18ab03e23",
+        "title": "18 Malicious npm Packages Deliver Cross-Platform RAT to Alibaba Tool Users",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b18ab03e23&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2F18-malicious-npm-packages-deliver-cross.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P2",
+        "category": "공급망공격",
+        "published_at": "2026-08-04T00:13:53+05:30",
+        "summary": "알리바바 개발자 도구 사용자를 노린 18개 악성 npm 패키지가 발견되어 크로스플랫폼 RAT를 유포하는 정교한 소프트웨어 공급망 공격이 수행됨. 공격자는 '@ali' 스코프의 비공개 패키지명을 위장한 언스코프드 패키지(lib-mtop 등)를 공개 레지스트리에 올려 의존성 트리를 통해 악성 로더를 심고, OS별 맞춤형 페이로드로 엔터프라이즈 보안 솔루션 무력화 및 지속성을 확보함. 중국어 주석과 알리바바 위장 도메인 사용으로 볼 때 중국어권 개발 환경 대상 표적 공격으로 추정됨."
+      },
+      {
+        "ref": "3cc3347d21",
+        "title": "Inside Astaroth's New Spambot Component",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3cc3347d21&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Finside-astaroths-new-spambot-component%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P2",
+        "category": "악성코드",
+        "published_at": "2026-07-29T00:00:00-05:00",
+        "summary": "라틴아메리카 위협 그룹 Astaroth(Guildma)가 2025년 4분기 WhatsApp Web 스팸봇 컴포넌트를 새로 추가해 피해자의 연락처 전체에 악성 메시지를 자동 발송하는 새로운 유포 벡터를 확보했다. 이 스팸봇은 헤드리스 브라우저 자동화와 WebDriver 자동화 지표 제거로 사용자 모르게 작동하며, 기존 Vareg(WATER SACI) 스팸봇과 코드베이스를 공유한다. 브라질 타겟팅 지표(전화번호 필터, 포르투갈어 템플릿 등)가 확인돼 브라질 사용자를 노린 뱅킹 트로이잔의 진화로 분석된다."
+      },
+      {
+        "ref": "1b0199760b",
+        "title": "PNLD Breach Exposes U.K. Police and Government Contact Details on Dark Web",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=1b0199760b&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fpnld-breach-exposes-uk-police-and.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P2",
+        "category": "개인정보유출",
+        "published_at": "2026-08-03T14:43:56+05:30",
+        "summary": "영국 경찰 법률 데이터베이스(PNLD)가 해킹되어 경찰·정부 관계자 및 고객 10만여 명의 이름·조직·업무 이메일 주소가 다크웹에 유출됐다. 공격 그룹 ExfilSquad가 유출을 주장했으나 PNLD는 공식 귀속하지 않았으며, 비밀번호 등 인증 정보 유출 증거는 없다고 밝혔다. 보안 업체 VenariX는 Microsoft Power Pages의 익명 사용자 권한 설정 오류로 Dataverse 테이블이 공개된 것을 유력 경로로 지목했으나, PNLD 특정 엔드포인트·로그는 아직 확인되지 않았다."
+      },
+      {
+        "ref": "37f58329bc",
+        "title": "PNLD Confirms Data Breach Affecting UK Police and Justice Staff",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=37f58329bc&url=https%3A%2F%2Fsecurityaffairs.com%2F196525%2Fdata-breach%2Fpnld-confirms-data-breach-affecting-uk-police-and-justice-staff.html",
+        "source": "securityaffairs",
+        "source_label": "Security Affairs",
+        "level": "P2",
+        "category": "개인정보유출",
+        "published_at": "2026-08-03T12:23:55+00:00",
+        "summary": "영국 경찰 법적 데이터베이스(PNLD)가 해킹되어 경찰관·사법 종사자 10만여 명의 이름과 업무 이메일이 다크웹에 유출됨. 협박 그룹 ExfilSquad가 유출을 주장하며, 보안 업체 VenariX는 Microsoft Power Pages 포털의 익명 접근 권한 설정 오류를 유력한 원인으로 지목함. 영국 국가범죄수사청(NCA)이 수사 중이며, 피해 기관에 가이드 제공 및 ICO 신고가 완료됨."
+      },
+      {
+        "ref": "f8dbb77ffb",
+        "title": "Midnight Blizzard Targets Travelers via Captive Portals",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f8dbb77ffb&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fcaptivecrunch-midnight-blizzard%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P2",
+        "category": "공격캠페인",
+        "published_at": "2026-08-03T14:30:00+00:00",
+        "summary": "러시아 해킹 그룹 Storm-2945(미드나이트 블리자드)가 호텔 캡티브 포털을 탈취해 가짜 업데이트를 배포하고 인증 토큰을 탈취하는 공격을 수행했다. 여행자를 표적으로 삼아 공공 와이파이 접속 시 악성 페이지로 유도한다. 초기 침투 후 추가 악성 행위가 우려된다."
+      },
+      {
+        "ref": "cbf2494030",
+        "title": "HollowFrame Loader Uses Fake Python DLL to Evade Defender",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=cbf2494030&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fhollowframe-fake-python-dll%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P2",
+        "category": "악성코드",
+        "published_at": "2026-08-03T11:26:00+00:00",
+        "summary": "HollowFrame 로더가 가짜 Python DLL을 이용해 Go 코드를 숨기고, Windows Defender 제외 설정을 사전에 구성해 탐지를 회피하는 새로운 기법을 사용함."
+      },
+      {
+        "ref": "2a945e8f9f",
+        "title": "OpenAI reveals how criminals used ChatGPT to run scams",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=2a945e8f9f&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fopenai-disrupts-chatgpt-scam-operation%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P2",
+        "category": "공격캠페인",
+        "published_at": "2026-08-03T08:40:26+00:00",
+        "summary": "OpenAI가 캄보디아 프레아 시아누크 주에서 운영된 것으로 보이는 조직적인 ChatGPT 계정 네트워크를 차단했다고 밝혔다. 이 네트워크는 가짜 온라인 페르소나 생성, 사기 대상에게 보낼 메시지 생성 및 번역, 사기 홍보 콘텐츠 제작 등 일상적인 사기 운영에 ChatGPT를 활용했다. WhatsApp의 제보로 조사가 시작되어 해당 네트워크가 해체되었다."
+      },
+      {
+        "ref": "f0a69cf9c5",
+        "title": "Brinks Home Discloses Data Breach as Hackers Leak Files",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f0a69cf9c5&url=https%3A%2F%2Fwww.securityweek.com%2Fbrinks-home-discloses-data-breach-as-hackers-leak-files%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P2",
+        "category": "개인정보유출",
+        "published_at": "2026-08-03T11:45:14+00:00",
+        "summary": "물리 보안 기업 Brinks Home이 ShinyHunters 협박 그룹에 의해 41GB 이상의 데이터가 유출되었음을 공개함. 공격자들은 Brinks Home의 Salesforce 인스턴스에서 490만 건 이상의 레코드(개인식별정보 포함)를 탈취했으며, 몸값 지불 거부 시 데이터를 공개함. 회사는 알람 모니터링 등 핵심 서비스는 영향받지 않았다고 밝힘."
+      },
+      {
+        "ref": "7b2cb42406",
+        "title": "China-Linked Threat Actors Weaponize New Vulnerabilities in Under a Day",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=7b2cb42406&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fchinalinked-threat-actors%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P2",
+        "category": "공격캠페인",
+        "published_at": "2026-08-03T15:00:00+00:00",
+        "summary": "중국 연계 위협 행위자가 치명적인 React2Shell 익스플로잇을 공개 하루 만에 악용했으며, 2026년 상반기 악용된 취약점의 88%가 공개 후 48시간 내에 침해된 것으로 나타남."
+      },
+      {
+        "ref": "7f9231bc24",
+        "title": "CrowdStrike 2026 Threat Hunting Report: Exploitation Window Closes as AI Use Accelerates",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=7f9231bc24&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fcrowdstrike-2026-threat-hunting-report%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-08-03T00:00:00-05:00",
+        "summary": "The CrowdStrike 2026 Threat Hunting Report illustrates the next evolution in trust abuse. Adversaries are targeting trusted users and tools across identity systems, cloud environments, SaaS applications, AI services, software supply chains, and developer workflows to blend into legitimate business a"
+      },
+      {
+        "ref": "26cfa15cd1",
+        "title": "Alleged Żabka Breach Exposes Jira Data, Source Code, and API Keys",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=26cfa15cd1&url=https%3A%2F%2Fsecurityaffairs.com%2F196510%2Fdata-breach%2Falleged-zabka-breach-exposes-jira-data-source-code-and-api-keys.html",
+        "source": "securityaffairs",
+        "source_label": "Security Affairs",
+        "level": "P2",
+        "category": "침해사고",
+        "published_at": "2026-08-03T09:03:39+00:00",
+        "summary": "폴란드 최대 편의점 체인 Żabka Polska의 내부 데이터가 해킹 포럼에서 5,000유로에 판매 중이며, Jira 이슈 54만 건, 서비스데스크 티켓 23만 건, GitLab 저장소 89개 소스코드가 포함됨. 모든 저장소 덤프에 동일 GitLab 액세스 토큰(62자)과 Cloudflare API 키, MongoDB 관리자 비밀번호, 메시지 브로커 자격증명 등 라이브 시크릿이 하드코딩돼 있음이 확인됨. Żabka는 침해 사실을 공식 확인하지 않았으며, 인수 발표 이틀 뒤 유출 게시물이 올라온 점 외에 공격 경로는 불명확함."
+      },
+      {
+        "ref": "eaad118c63",
+        "title": "River Bank Says Hackers Deleted Data Stolen in Ransomware Attack",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=eaad118c63&url=https%3A%2F%2Fwww.securityweek.com%2Friver-bank-says-hackers-deleted-data-stolen-in-ransomware-attack%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P2",
+        "category": "침해사고",
+        "published_at": "2026-08-03T13:02:06+00:00",
+        "summary": "리버 파이낸셜 코퍼레이션(River Financial Corporation)이 2026년 6월 랜섬웨어 공격을 받아 서버 환경에 랜섬웨어가 배포되고 데이터가 유출되었음을 SEC 공시를 통해 밝혔다. 회사는 위협 행위자와 접촉해 탈취 데이터 삭제 확인을 받았으며, 이는 몸값 지불 결과로 추정된다. 현재 개인정보 유출 여부와 피해 규모 조사가 진행 중이며 최소 4건의 소송이 제기된 상태다."
+      },
+      {
+        "ref": "b07ac88a09",
+        "title": "River Bank obtained assurances from the attackers that the stolen data in the June attack was deleted",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b07ac88a09&url=https%3A%2F%2Fsecurityaffairs.com%2F196537%2Fcyber-crime%2Friver-bank-obtained-assurances-from-the-attackers-that-the-stolen-data-in-the-june-attack-was-deleted.html",
+        "source": "securityaffairs",
+        "source_label": "Security Affairs",
+        "level": "P2",
+        "category": "침해사고",
+        "published_at": "2026-08-03T14:33:44+00:00",
+        "summary": "리버 파이낸셜 코퍼레이션(리버 뱅크)은 2026년 6월 16일 시작되어 6월 19일 탐지된 랜섬웨어 공격으로 서버 환경 일부가 암호화되고 데이터가 유출되었음을 SEC 8-K 공시를 통해 밝혔다. 현재 제3자 포렌식 업체와 조사를 진행 중이며, 공격자로부터 탈취 데이터가 삭제되었다는 확약을 받았다고 발표했다. 다만 개인식별정보(PII) 유출 여부와 초기 침투 경로, 공격 그룹 정체는 아직 확인되지 않았다."
+      },
+      {
+        "ref": "cf716a24a1",
+        "title": "“Adult TikTok” searches lead to scams",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=cf716a24a1&url=https%3A%2F%2Fwww.malwarebytes.com%2Fblog%2Fscams%2F2026%2F08%2Fadult-tiktok-searches-lead-to-scams",
+        "source": "malwarebytes",
+        "source_label": "Malwarebytes Labs",
+        "level": "P2",
+        "category": "피싱사기",
+        "published_at": "2026-08-03T21:35:18+00:00",
+        "summary": "틱톡(TikTok) 브랜드와 성인 콘텐츠 검색어를 악용한 사기 페이지가 검색 엔진 상위 노출을 통해 사용자를 유인한다. 이 페이지들은 흐릿한 썸네일과 '연령 인증'을 미끼로 클릭, 가입, 앱 설치, 결제 정보 입력을 유도하며 실제 콘텐츠는 제공하지 않는다. 운영자는 제휴 수수료, 광고 수익, 리드 생성, 구독 트랩, 악성코드 유포 등 다단계 수익 모델을 운영한다."
+      },
+      {
+        "ref": "a2b6ce0ee9",
+        "title": "Coldcard Users Lose $89m After Bitcoin Wallet Is Hacked",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a2b6ce0ee9&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fcoldcard-users-lose-89m-bitcoin%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P2",
+        "category": "침해사고",
+        "published_at": "2026-08-03T08:40:00+00:00",
+        "summary": "Coldcard 비트코인 하드웨어 지갑에서 레거시 버그를 악용한 해킹으로 약 8,900만 달러가 탈취되었다."
+      },
+      {
+        "ref": "990babd6e8",
+        "title": "Buying TikTok followers can expose users to scams and account theft",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=990babd6e8&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fmalwarebytes-tiktok-followers-scam-risks-report%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P2",
+        "category": "피싱사기",
+        "published_at": "2026-08-03T04:00:04+00:00",
+        "summary": "Malwarebytes 조사에 따르면 TikTok 팔로워·좋아요·조회수 구매 서비스가 사기, 계정 탈취, 금전적 손실 등 보안 위험을 초래함. 인위적 소셜 미디어 참여 시장은 구매자뿐만 아니라 플랫폼 전체 사용자에게 위험을 만듦. 보안 전문가들은 공식 경로 외 서비스 이용 자제와 2FA 활성화 등 계정 보안 강화를 권고함."
+      },
+      {
+        "ref": "e280ba0d5d",
+        "title": "Thermo Fisher Patches Flaw That Could Make DNA File Tampering Nearly Undetectable",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=e280ba0d5d&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fthermo-fisher-patches-flaw-that-could.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-08-03T13:35:30+05:30",
+        "summary": "Thermo Fisher Scientific has patched a flaw in select Applied Biosystems human identification software that could allow data files to be altered before analysis software loads them. The vendor's July 31 security bulletin says nearly undetectable changes to .fsa and .hid outputs could occur if labora"
+      },
+      {
+        "ref": "206ad7ecdb",
+        "title": "Google Password Manager Attacks Could Let Malware Hijack Passkey-Protected Accounts",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=206ad7ecdb&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fgoogle-password-manager-attacks-could.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "취약점",
+        "published_at": "2026-08-03T21:54:47+05:30",
+        "summary": "Unit 42 연구진이 Chrome의 Google Password Manager에서 패스키 보호를 우회하는 세 가지 공격 경로(Pass-ta-key, Silver Pass-ta-key, Golden Pass-ta-key)를 공개했습니다. 이 공격들은 악성코드가 이미 감염된 Windows 단말에서 로컬 권한으로 실행되며, TPM 키 처리 허점과 재등록 과정의 검증 부재를 악용해 사용자 인증 없이 패스키 계정에 접근할 수 있게 합니다. 실제 야생 악용 사례나 CVE는 아직 보고되지 않았으나, 패스키 인증 체계의 구현상 취약점을 보여주는"
+      },
+      {
+        "ref": "bd5174f68c",
+        "title": "Horizon3 Raises $250 Million to Fund Continuing Growth",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=bd5174f68c&url=https%3A%2F%2Fwww.securityweek.com%2Fhorizon3-raises-250-million-to-fund-continuing-growth%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-03T13:00:00+00:00",
+        "summary": "Horizon3가 시리즈 E 펀딩으로 2억 5천만 달러를 유치하며 기업 가치를 20억 달러로 3배 늘렸다. 이 회사는 AI 에이전트를 활용해 네트워크 취약점을 자동으로 탐색하고 수정하는 솔루션을 제공한다. 7,000개 이상의 고객사와 포춘 10대 기업 4곳을 확보하며 연간 120% ARR 성장률을 기록 중이다."
+      },
+      {
+        "ref": "5feb0bbbcd",
+        "title": "Hugging Face Diffusers Flaws Could Let Model Repositories Execute Arbitrary Code",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=5feb0bbbcd&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fhugging-face-diffusers-flaws-could-let.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "공급망공격",
+        "published_at": "2026-08-03T12:10:31+05:30",
+        "summary": "Hugging Face Diffusers 라이브러리에서 trust_remote_code 보호 기능을 우회해 임의 코드 실행이 가능한 3가지 고위험 취약점(FaceHugger)이 공개됐다. CVE-2026-44827, CVE-2026-45804, CVE-2026-44513은 모델 저장소 로드 시 두 번의 비원자적 HTTP 요청과 신뢰 검증이 첫 요청에만 수행되는 TOCTOU 결함을 악용한다. Diffusers 0.38.0에서 패치됐으며, 즉시 업데이트가 어렵다면 신뢰할 수 있는 소스만 사용하고 custom_pipeline로 다른 허브"
+      },
+      {
+        "ref": "5e67045039",
+        "title": "Pass the Passkey: A Novel Attack Surface in Passwordless Authentication",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=5e67045039&url=https%3A%2F%2Funit42.paloaltonetworks.com%2Fpasswordless-authentication-security-risks%2F",
+        "source": "unit42",
+        "source_label": "Unit 42",
+        "level": "P3",
+        "category": "취약점",
+        "published_at": "2026-08-03T10:00:35+00:00",
+        "summary": "Unit 42 연구진이 패스키(Passkey) 구현 시 의존 당사자(Relying Party)가 'User Verified' 플래그를 검증하지 않아 다중 인증(MFA)이 단일 요소로 축소되는 새로운 공격 표면을 발견했습니다. 이 구현 격차는 패스키 인증의 보안 이점을 무력화할 수 있으며, 공격자가 사용자 검증 없이 인증을 우회할 수 있게 합니다. 해당 연구는 패스키 도입 시 플래그 검증의 중요성을 강조합니다."
+      },
+      {
+        "ref": "fe06641e20",
+        "title": "AI cut phishing from hours to seconds, which is where DMARC and BIMI come in",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=fe06641e20&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fdmarc-and-bimi-video%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T05:00:38+00:00",
+        "summary": "AI 기술 발전으로 피싱 공격 제작 시간이 시간에서 초 단위로 단축되고 있으며, 이에 대응해 DMARC와 BIMI 같은 이메일 인증 기술의 중요성이 강조된다. GMO GlobalSign과 Red Sift 전문가들이 이메일 보안의 진화 과정과 현재 조직들이 직면한 구현 과제를 논의한다. 기사는 AI 기반 피싱 위협 증가와 이메일 인증 표준 채택 필요성을 다룬다."
+      },
+      {
+        "ref": "3eda308c93",
+        "title": "Beyond the Model: Harnessing Frontier AI for Stronger Cyber Defense",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3eda308c93&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fharnessing-frontier-ai-for-stronger-defense%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-07-20T00:00:00-05:00",
+        "summary": "CrowdStrike가 프론티어 AI 모델(Anthropic Mythos Preview 등)을 활용한 취약점 연구 평가 결과를 공유했습니다. AI가 대규모 코드베이스 추론, 취약점 체인 식별, 익스플로잇 경로 생성을 가속화하여 방어자와 공격자 모두의 역량을 변화시킨다고 분석했습니다. 조직은 AI 기반 취약점 발견을 실행 가능한 보안 성과로 전환하고, 제로데이 악용 가속화에 대비해야 합니다."
+      },
+      {
+        "ref": "00e971348b",
+        "title": "Public interest coalition urges Congress to investigate OpenAI, Hugging Face hack",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=00e971348b&url=https%3A%2F%2Ffedscoop.com%2Fpublic-interest-coalition-urges-congress-investigate-openai-hugging-face-hack%2F",
+        "source": "cyberscoop",
+        "source_label": "CyberScoop",
+        "level": "P3",
+        "category": "침해사고",
+        "published_at": "2026-08-03T21:43:26+00:00",
+        "summary": "공익 단체 연합이 OpenAI와 Hugging Face 해킹 사건에 대한 미국 의회 조사를 촉구함. 두 주요 AI 플랫폼의 보안 침해 가능성에 대한 우려가 제기됨. 구체적인 해킹 세부 사항이나 피해 규모는 기사에서 언급되지 않음."
+      },
+      {
+        "ref": "c2dc6878d4",
+        "title": "Korea’s Largest Telco KT Fined $38m After Femtocell Campaign",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=c2dc6878d4&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fkoreas-largest-telco-kt-fine-39m%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P3",
+        "category": "침해사고",
+        "published_at": "2026-08-03T09:36:00+00:00",
+        "summary": "한국 최대 통신사 KT가 펨토셀 침해로 인한 1년간의 보안 사고와 관련해 3,900만 달러(약 520억 원)의 과징금을 부과받았다."
+      },
+      {
+        "ref": "6a7a21a3cf",
+        "title": "FOMO in the SOC: Where AI Platforms like Claude Actually Fit",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=6a7a21a3cf&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Ffomo-in-soc-where-ai-platforms-like.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T17:00:00+05:30",
+        "summary": "AI 플랫폼(Claude, Codex, Cursor)과 자율형 AI SOC의 역할 분담을 통해 보안 운영 효율성을 높이는 방안을 분석한다. 공격자는 이미 AI를 피싱·멀웨어 개발에 활용 중이며, 방어자는 알림 트리아지·탐지 규칙 작성·보고 자동화에 AI를 적용하고 있다. AI 플랫폼은 분석가 협업용으로, 대량 알림 조사는 자율형 AI SOC가 담당해야 비용·토큰 문제를 해결할 수 있다."
+      },
+      {
+        "ref": "cbebabb699",
+        "title": "Cyberattack Hits Liechtenstein’s Register of People Behind Companies and Foundations",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=cbebabb699&url=https%3A%2F%2Fwww.securityweek.com%2Fcyberattack-hits-liechtensteins-register-of-people-behind-companies-and-foundations%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P3",
+        "category": "개인정보유출",
+        "published_at": "2026-08-03T15:15:00+00:00",
+        "summary": "리히텐슈타인의 기업·재단 실소유주 등록부가 사이버 공격을 받아 약 3만 1천 명의 데이터가 유출되었습니다. 정부는 침해 사실을 목요일 인지하고 시스템을 오프라인 전환했으며, 데이터 변조나 삭제 흔적은 없다고 밝혔습니다. 자금세탁·테러자금조달 방지를 위한 등록부 침해로 위기 대응팀을 구성해 조사 중입니다."
+      },
+      {
+        "ref": "b0b833cdd3",
+        "title": "Black Hat USA 2026 – Summary of Vendor Announcements (Part 1)",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b0b833cdd3&url=https%3A%2F%2Fwww.securityweek.com%2Fblack-hat-usa-2026-summary-of-vendor-announcements-part-1%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T15:50:00+00:00",
+        "summary": "SecurityWeek가 블랙햇 USA 2026에서 발표된 주요 벤더 제품·서비스를 요약 보도했다. 아칼비오·아티피셸·아크틱울프·비욘드트러스트·카토네트웍스·크리블·사이코드 등 7개 업체가 AI 에이전트 보호, 취약점 검증 자동화, 사이버 레질리언스 번들, 아이덴티티·권한 갭 분석, 에이전트형 위협 예측, AI 옵저버빌리티, 에이전트형 워크플로 자동화 등 신기능을 공개했다. 기사는 각 제품의 주요 특징과 마케팅 포인트 위주로 소개하며 기술적 심층 분석은 다루지 않는다."
+      },
+      {
+        "ref": "b414ce4b51",
+        "title": "Elastic Defend now covers 800+ vulnerable drivers, with automated troubleshooting and ARM support",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b414ce4b51&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Felastic-defend-vulnerable-driver-detection%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T08:31:10+00:00",
+        "summary": "Elastic Defend가 800개 이상의 취약한 드라이버를 탐지·차단하도록 커버리지를 확장했으며, 자동화된 문제 해결 기능과 ARM 아키텍처 지원을 추가했다. 공격자는 서명된 취약 드라이버를 이용해 커널 권한을 획득하고 보안 솔루션을 무력화할 수 있다. 이번 업데이트로 엔드포인트에서 BYOVD(Bring Your Own Vulnerable Driver) 기법 악용을 더 효과적으로 방어할 수 있게 됐다."
+      },
+      {
+        "ref": "d87732fe5a",
+        "title": "SkillSpector: NVIDIA’s open-source security scanner for AI agent skills",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=d87732fe5a&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fskillspector-open-source-agent-skill-security-scanner%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T05:30:57+00:00",
+        "summary": "NVIDIA가 AI 에이전트 스킬의 보안성을 검사하는 오픈소스 스캐너 'SkillSpector'를 공개했다. 이 도구는 디렉터리, ZIP 파일, SKILL.md, Git URL 등 다양한 소스를 스캔하여 위험도 점수와 권장사항을 제공한다. 스킬은 마크다운과 파이썬 스크립트로 구성되며 셸과 환경 변수에 접근할 수 있어 공급망 보안 검증이 필요하다."
+      },
+      {
+        "ref": "ae8cb6d624",
+        "title": "Falcon AIDR Now Protects Copilot Studio Agents and Claude Code",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=ae8cb6d624&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Ffalcon-aidr-protects-copilot-studio-agents-and-claude-code%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-30T00:00:00-05:00",
+        "summary": "크라우드스트라이크가 Falcon AIDR 기능을 마이크로소프트 코파일럿 스튜디오와 클로드 코드, 브라우저 확장 프로그램으로 확장해 AI 도구 사용 시 위험한 도구 호출 차단, 프롬프트·도구 활동 실시간 감시, 통합 가시성 제공을 발표했다. 코파일럿 스튜디오에서는 외부 위협 탐지 제공자로 연동돼 정책 위반 도구 실행을 사전 차단하며, 클로드 코드는 훅 이벤트 시스템을 통해 프롬프트와 도구 호출을 실시간 검사한다. 브라우저 확장 기능으로 엔드포인트 컨텍스트와 연계된 AI 활동 모니터링이 가능해졌다."
+      },
+      {
+        "ref": "1c8afa873c",
+        "title": "Falcon Platform IOAs Arrive in Falcon Next-Gen SIEM to Identify New Threats",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=1c8afa873c&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Ffalcon-platform-ioas-arrive-in-falcon-next-gen-siem%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-29T00:00:00-05:00",
+        "summary": "CrowdStrike가 Falcon 플랫폼의 새로운 탐지 기능인 'Falcon Platform IOAs'를 Falcon Next-Gen SIEM에 정식 출시했다. 이 기능은 엔드포인트, 클라우드, 아이덴티티 등 여러 도메인의 텔레메트리를 연계해 공격자 행위 기반의 탐지 콘텐츠를 자동으로 생성·유지보수한다. CrowdStrike의 사고 대응 전문가, 위협 헌터, MDR 팀의 인사이트를 반영해 신규 위협에 빠르게 대응하고 운영 부담을 줄이는 것이 목적이다."
+      },
+      {
+        "ref": "081bb91849",
+        "title": "CrowdStrike Joins the Open Secure AI Alliance to Advance AI Safety and Security",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=081bb91849&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fcrowdstrike-joins-the-open-secure-ai-alliance%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-07-27T00:00:00-04:00",
+        "summary": "CrowdStrike가 NVIDIA 등 업계 리더들과 함께 Open Secure AI Alliance의 창립 파트너로 참여하여 AI 안전성과 보안 강화를 위한 개방형 혁신과 공동 연구를 추진한다. AI 모델의 하네스(운영 프레임워크) 중요성을 강조하며, 자체 보안 하네스 적용 시 취약점 연구에서 거짓 양성률을 80%에서 20%로 낮춘 사례를 공개했다. Anthropic Mythos Preview, OpenAI TAC 등 프론티어 모델과 협력해 43개 제품에서 2,400건 이상의 취약점을 발견한 성과도 소개했다."
+      },
+      {
+        "ref": "f14a4f7c50",
+        "title": "Benchmarking the Agentic SOC: How we evaluate LLMs for security workflows",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f14a4f7c50&url=https%3A%2F%2Fwww.elastic.co%2Fsecurity-labs%2Fllm-benchmarking-agentic-soc",
+        "source": "elastic_security",
+        "source_label": "Elastic Security Labs",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T00:00:00+00:00",
+        "summary": "Elastic이 LLM 기반 SOC 에이전트의 실제 보안 업무 수행 능력을 평가하기 위한 독자적 프레임워크를 공개했다. 실제 침해 시나리오를 Elastic 환경에 심고, 각 모델이 알림 분석·엔티티 분석·위협 헌팅·탐지 규칙 작성·워크플로 작성·액션 호출·멀티스텝 체인 등 7개 역량 범주에서 도구 호출 순서·파라미터·그라운딩 여부까지 기록해 블라인드 채점한다. 일반적인 LLM 벤치마크가 지식·대화 품질만 측정해 에이전트의 위험한 환각을 걸러내지 못한다는 문제 의도에서 출발했다."
+      },
+      {
+        "ref": "2cc6a0670e",
+        "title": "SOC case management and detection rule history in Elastic Security",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=2cc6a0670e&url=https%3A%2F%2Fwww.elastic.co%2Fsecurity-labs%2Fsoc-case-management-detection-rule-history",
+        "source": "elastic_security",
+        "source_label": "Elastic Security Labs",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T00:00:00+00:00",
+        "summary": "Elastic Security 9.5에서 탐지 규칙 변경 이력 관리(GA)와 케이스 관리 기능이 대폭 개선되었다. 탐지 규칙의 모든 변경 사항을 불변 로그로 기록하고 원클릭 롤백을 지원하며, ISO 27001·SOC 2·DORA 컴플라이언스 감사 추적용으로 활용 가능하다. 케이스 템플릿 시스템이 재구축되어 조사 유형별 필드 정의, 필수 필드 강제, 필드 라이브러리 재사용이 가능해졌고, 케이스 분석 데이터가 3개 전역 인덱스로 기본 제공되어 대시보드 구축이 용이해졌다."
+      },
+      {
+        "ref": "97d3b30bb2",
+        "title": "Mimecast introduces AI agent governance and managed threat response",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=97d3b30bb2&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fmimecast-agent-risk-center%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:57:40+00:00",
+        "summary": "Mimecast가 AI 에이전트 거버넌스 솔루션 'Agent Risk Center' 베타 버전과 AI 지원 트리아지와 분석가 확인 복구를 결합한 'Managed Threat Response' 24/7 서비스를 출시했다. Mimecast 분석에 따르면 조직의 98%가 이미 비승인 AI 도구를 사용 중이며, 2029년까지 10억 개 이상의 에이전트가 하루 2170억 건의 행동을 수행할 전망이다. 보안 도구의 가시성 부족 문제를 해결하기 위한 제품 발표이다."
+      },
+      {
+        "ref": "f5a0bce7e5",
+        "title": "SentinelOne expands security operations automation with governed AI",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f5a0bce7e5&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fsentinelone-security-operations-automation%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:44:00+00:00",
+        "summary": "SentinelOne이 Singularity Platform에 거버넌스된 AI 자동화 기능을 추가해 Purple AI와 Singularity Hyperautomation이 알림 조사, 판정, 대응을 자율 수행하도록 지원한다고 발표했다. 보안팀이 AI 자율 동작 범위를 설정하면 자율 SOC가 알림부터 조치까지 수행한다. 이는 보안 운영 자동화의 새로운 단계로 제시된다."
+      },
+      {
+        "ref": "4296d5d43d",
+        "title": "ISC Stormcast For Monday, August 3rd, 2026 https://isc.sans.edu/podcastdetail/10034, (Mon, Aug 3rd)",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=4296d5d43d&url=https%3A%2F%2Fisc.sans.edu%2Fdiary%2Frss%2F33210",
+        "source": "sans_isc",
+        "source_label": "SANS ISC",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T02:00:02+00:00",
+        "summary": "SANS ISC의 일일 보안 팟캐스트 'Stormcast' 2026년 8월 3일자 에피소드 제목만 제공되었으며, 본문에는 저작권 고지 외 구체적인 보안 내용이 포함되어 있지 않음."
+      },
+      {
+        "ref": "3f7ec5436d",
+        "title": "Product showcase: Guardio Mobile Security turns breach alerts into a recovery plan",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3f7ec5436d&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fproduct-showcase-guardio-mobile-security%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T04:30:11+00:00",
+        "summary": "Guardio Mobile Security는 아이폰과 안드로이드용 모바일 앱으로, 개인정보 노출 모니터링, 피싱 탐지, 위협 알림 기능을 제공하며 크롬과 엣지 브라우저 확장 프로그램도 지원한다."
+      },
+      {
+        "ref": "e17c2ad96b",
+        "title": "Falcon Cloud Security July 2026 Release: Helping Security Teams Move Faster in the Cloud",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=e17c2ad96b&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fnew-in-falcon-cloud-security-helping-security-teams-move-faster%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-29T00:00:00-05:00",
+        "summary": "CrowdStrike가 Falcon Cloud Security 2026년 7월 릴리스를 발표하며 IaC 보안, 클라우드 권한 관리(CIEM), 애플리케이션 보안 자세 관리(ASPM) 기능을 확장했다. 주요 업데이트로는 Visual Studio Code와 IntelliJ IDE 내 IaC 스캔 통합, 커스텀 Rego 규칙 지원, 권한 쿼리 및 최소 권한 자동 복구, 애플리케이션 코드 분석과 CIEM 연계가 포함된다. 모든 기능은 정식 버전(GA)으로 제공되어 클라우드 보안 운영의 마찰을 줄이는 것을 목표로 한다."
+      },
+      {
+        "ref": "15efc6fff2",
+        "title": "Mapping the malware blast radius a single alert won’t show you",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=15efc6fff2&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fmike-wiacek-stairwell-backstory-malware-blast-radius%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T06:00:24+00:00",
+        "summary": "Stairwell의 CTO Mike Wiacek가 단일 알림으로부터 멀웨어 캠페인의 확산 범위를 매핑하는 AI 에이전트 'Backstory'를 소개함. 연구 결과 공개된 샘플 하나당 평균 2.4개의 미문서화 변종이 존재하며, Stairwell은 고객 엔드포인트에서 실행되는 모든 실행 파일을 보관해 분석에 활용함."
+      },
+      {
+        "ref": "ddd073156c",
+        "title": "5 High-Impact Use Cases for Falcon Onum",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=ddd073156c&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Ffive-high-impact-use-cases-for-falcon-onum%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-27T00:00:00-05:00",
+        "summary": "CrowdStrike Falcon Onum은 보안 텔레메트리 파이프라인을 지능형 제어 플레인으로 전환하여 데이터 볼륨 절감, SIEM 마이그레이션 가속화, 데이터 인모션 엔리치먼트 등 5가지 활용 사례를 제시한다. 기사는 제품 기능 소개와 고객 사례 중심으로 구성되어 있으며, 구체적 위협 인텔리전스나 취약점 정보는 포함하지 않는다."
+      },
+      {
+        "ref": "b6e5cdd3ea",
+        "title": "CrowdStrike Falcon Platform Helps Meet U.S. Government Mandates for CISA BOD-26-04",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b6e5cdd3ea&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fcrowdstrike-falcon-platform-helps-meet-us-government-mandates-cisa-bod-26-04%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-22T00:00:00-05:00",
+        "summary": "CISA가 2026년 6월 10일 발표한 BOD-26-04는 연방 기관의 취약점 관리를 CVSS 기반에서 위험 기반 모델로 전환하며, 공개 자산 노출·KEV 등재·익스플로잇 자동화 가능성·기술적 영향을 종합해 최고 위험 취약점은 3일 내 조치를 요구한다. CrowdStrike는 Falcon 플랫폼의 지속적 공격 표면 관리, 네이티브 KEV 연동, 행동 기반 AI 탐지, SOAR 플레이북 등이 이 지침의 3단계 이행 요건과 매핑됨을 자사 발표 자료로 제시했다. 기사는 벤더 관점에서 제품 기능을 새 지침 요구사항에 대응시키는 홍보성 내"
+      },
+      {
+        "ref": "0412cd0d8c",
+        "title": "Chinese Threat Actor Uses Leaked DarkSword Kit to Deploy GHOSTBLADE on iOS",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=0412cd0d8c&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fchinese-threat-actor-uses-leaked.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "",
+        "published_at": "2026-08-03T16:19:06+05:30",
+        "summary": "An unknown Chinese-threat actor has been observed running a campaign targeting Apple iOS devices by leveraging a publicly leaked version of the DarkSword exploit kit. Attack surface management platform Censys said it identified the threat actor running more than 100 web properties, most of which are"
+      },
+      {
+        "ref": "21435a848c",
+        "title": "Russian State APT Linked to Recent Public Wi-Fi Gateway Hacking",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=21435a848c&url=https%3A%2F%2Fwww.securityweek.com%2Frussian-state-apt-linked-to-recent-public-wi-fi-gateway-hacking%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P3",
+        "category": "",
+        "published_at": "2026-08-03T09:17:37+00:00",
+        "summary": "Midnight Blizzard has been stealing Microsoft account credentials via compromised Wi-Fi networks at hospitality organizations. The post Russian State APT Linked to Recent Public Wi-Fi Gateway Hacking appeared first on SecurityWeek ."
+      },
+      {
+        "ref": "fe6a6953ef",
+        "title": "Qodana 2026.2 adds post-quantum crypto checks for JVM code",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=fe6a6953ef&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fqodana-2026-2-static-analysis-benchmarks%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T11:21:33+00:00",
+        "summary": "JetBrains의 정적 분석 도구 Qodana 2026.2 버전이 출시되어 포스트 퀀텀 암호화 검사, 크로스 파일 언트러스티드 데이터 추적 등 새로운 보안 검사 기능이 추가되었습니다. .NET 린터에서 기본 실행되며 C#, JavaScript, TypeScript에서 SQL 인젝션, 명령어 인젝션, XSS, 경로 탐색 취약점을 탐지합니다. 검출 결과는 IDE와 CI/CD 파이프라인에서 확인 가능합니다."
+      },
+      {
+        "ref": "eeb4df7da5",
+        "title": "Simbian adds AI threat hunting agent to expand autonomous SecOps platform",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=eeb4df7da5&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fsimbian-ai-threat-hunt-agent%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T11:02:50+00:00",
+        "summary": "Simbian이 자율형 AI 위협 헌팅 에이전트를 출시하여 SecOps 플랫폼을 확장했다. 이 에이전트는 기업 환경 전반에서 잠재적 위협을 조사하고 악성 활동을 식별한다. 이로써 Simbian의 AI 기반 보안 스위트는 실시간 알림 분석, 취약점 탐지, 위협 헌팅의 세 가지 축을 완성했다."
+      },
+      {
+        "ref": "f0d6e3b542",
+        "title": "CISA lays out new guidance for using open-source software",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f0d6e3b542&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fcisa-oss-security-guidance%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T11:53:06+00:00",
+        "summary": "미국 CISA가 연방기관을 위한 오픈소스 소프트웨어 보안 원칙 및 실무 가이드를 발표했습니다. 이 가이드는 오픈소스 소프트웨어 보안 관리, 오픈소스 프로젝트 기여, 오픈소스 AI 시스템 평가에 대한 권고사항을 담고 있습니다. 소스 코드 독립적 검토 가능성 등 오픈소스 활용 이점과 보안 관리 방안을 제시합니다."
+      },
+      {
+        "ref": "e675462e17",
+        "title": "Visa to Acquire Fraud Intelligence Firm BioCatch for $2.4 Billion",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=e675462e17&url=https%3A%2F%2Fwww.securityweek.com%2Fvisa-to-acquire-fraud-intelligence-firm-biocatch-for-2-4-billion%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T15:32:05+00:00",
+        "summary": "비자(Visa)가 행동 생체인식 기반 사기 탐지 기업 바이오캐치(BioCatch)를 24억 달러에 인수하기로 합의했다. 바이오캐치는 키스트로크, 마우스 움직임, 터치 제스처 등 수천 가지 신호를 AI로 분석해 계정 탈취, 사기, 머니 뮬 활동 등을 실시간으로 식별한다. 이번 인수는 비자가 결제 처리 외 사이버보안·금융범죄 탐지 역량을 강화하려는 전략의 일환이다."
+      },
+      {
+        "ref": "c6ec456728",
+        "title": "[Webinar] Tales from the Frontlines: An exclusive briefing on Q2 incidents",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=c6ec456728&url=https%3A%2F%2Fblog.talosintelligence.com%2Fwebinar-tales-from-the-frontlines-an-exclusive-briefing-on-q2-incidents%2F",
+        "source": "talos",
+        "source_label": "Cisco Talos",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T16:00:12+00:00",
+        "summary": "시스코 탈로스 인시던트 대응팀이 2026년 2분기 주요 보안 사고를 다루는 웨비나를 8월 11일 개최한다. 30분간 진행되는 비공개 세션으로 실제 대응 사례와 전략적 시사점을 공유한다. 보안 전문가를 대상으로 하며 사전 등록이 필요하다."
+      },
+      {
+        "ref": "b49ba63f42",
+        "title": "Horizon3.ai hits $2 billion valuation in $250 million funding round",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b49ba63f42&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fhorizon3-ai-250-million-funding%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-03T13:21:57+00:00",
+        "summary": "Horizon3.ai가 2억 5천만 달러 규모의 시리즈 E 투자를 유치하며 기업 가치를 20억 달러 이상으로 평가받았다. 기존 투자자인 NightDragon과 NEA가 공동 주도했으며, 신규 투자자 7곳과 기존 투자자 5곳이 참여했다. AI 기반 사이버 공격이 증가하는 가운데 자율 보안 검증 수요가 급증하고 있음을 보여준다."
+      },
+      {
+        "ref": "ae6ef1959c",
+        "title": "The AI Act kicks into action, forces companies to be clear about AI chatbots",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=ae6ef1959c&url=https%3A%2F%2Fwww.malwarebytes.com%2Fblog%2Fnews%2F2026%2F08%2Fthe-ai-act-kicks-into-action-forces-companies-to-be-clear-about-ai-bots",
+        "source": "malwarebytes",
+        "source_label": "Malwarebytes Labs",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T21:08:29+00:00",
+        "summary": "EU AI Act가 8월 2일부터 주요 조항을 시행하여 챗봇 등 AI 시스템에 투명성 의무(봇임을 표시, AI 생성 콘텐츠 라벨링)를 부과하고, 부적합 시 최대 1,500만 유로 또는 전세계 매출 3% 과징금을 부과한다. AI Office는 위반 신고·내부고발 도구를 운영하며, 성적 딥페이크 생성 AI 등 '수용 불가 위험' 용도는 2026년 12월부터 금지된다. 이는 AI의 사람 가장을 방지하고 책임 있는 AI 활용을 강제하는 규제 전환점이다."
+      },
+      {
+        "ref": "8598522ab2",
+        "title": "Californians can tell data brokers to DROP their information",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=8598522ab2&url=https%3A%2F%2Fwww.malwarebytes.com%2Fblog%2Fnews%2F2026%2F08%2Fcalifornians-can-tell-data-brokers-to-drop-their-information",
+        "source": "malwarebytes",
+        "source_label": "Malwarebytes Labs",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-03T20:50:32+00:00",
+        "summary": "캘리포니아주가 데이터 브로커 등록 의무화 법(Delete Act)에 따라 통합 삭제·옵트아웃 플랫폼(DROP)을 출시했다. 600여 개 등록 브로커에 일괄 삭제 요청을 보낼 수 있으며, 2026년 8월부터 브로커는 90일 내 기록을 삭제해야 한다. 기사에는 DROP 이용 절차와 타주 거주자를 위한 수동 옵트아웃 방법, 개인정보 노출 최소화 팁이 포함돼 있다."
+      },
+      {
+        "ref": "067cd17359",
+        "title": "ISC Stormcast For Tuesday, August 4th, 2026 https://isc.sans.edu/podcastdetail/10036, (Tue, Aug 4th)",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=067cd17359&url=https%3A%2F%2Fisc.sans.edu%2Fdiary%2Frss%2F33212",
+        "source": "sans_isc",
+        "source_label": "SANS ISC",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-04T02:00:03+00:00",
+        "summary": "SANS ISC의 일일 보안 팟캐스트 'Stormcast' 2026년 8월 4일자 에피소드 공지임. 본문에는 보안 관련 구체적 내용이 없고 저작권 안내만 포함됨."
+      }
+    ],
+    "trend_reads": [
+      {
+        "ref": "5feb0bbbcd",
+        "title": "Hugging Face Diffusers Flaws Could Let Model Repositories Execute Arbitrary Code",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=5feb0bbbcd&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fhugging-face-diffusers-flaws-could-let.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "공급망공격",
+        "published_at": "2026-08-03T12:10:31+05:30",
+        "summary": "Hugging Face Diffusers 라이브러리에서 trust_remote_code 보호 기능을 우회해 임의 코드 실행이 가능한 3가지 고위험 취약점(FaceHugger)이 공개됐다. CVE-2026-44827, CVE-2026-45804, CVE-2026-44513은 모델 저장소 로드 시 두 번의 비원자적 HTTP 요청과 신뢰 검증이 첫 요청에만 수행되는 TOCTOU 결함을 악용한다. Diffusers 0.38.0에서 패치됐으며, 즉시 업데이트가 어렵다면 신뢰할 수 있는 소스만 사용하고 custom_pipeline로 다른 허브",
+        "score": 48,
+        "reason_bits": [
+          "신규",
+          "관련성 높음",
+          "우선도 48점"
+        ]
+      },
+      {
+        "ref": "fe06641e20",
+        "title": "AI cut phishing from hours to seconds, which is where DMARC and BIMI come in",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=fe06641e20&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fdmarc-and-bimi-video%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T05:00:38+00:00",
+        "summary": "AI 기술 발전으로 피싱 공격 제작 시간이 시간에서 초 단위로 단축되고 있으며, 이에 대응해 DMARC와 BIMI 같은 이메일 인증 기술의 중요성이 강조된다. GMO GlobalSign과 Red Sift 전문가들이 이메일 보안의 진화 과정과 현재 조직들이 직면한 구현 과제를 논의한다. 기사는 AI 기반 피싱 위협 증가와 이메일 인증 표준 채택 필요성을 다룬다.",
+        "score": 31,
+        "reason_bits": [
+          "우선도 31점"
+        ]
+      },
+      {
+        "ref": "206ad7ecdb",
+        "title": "Google Password Manager Attacks Could Let Malware Hijack Passkey-Protected Accounts",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=206ad7ecdb&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fgoogle-password-manager-attacks-could.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "취약점",
+        "published_at": "2026-08-03T21:54:47+05:30",
+        "summary": "Unit 42 연구진이 Chrome의 Google Password Manager에서 패스키 보호를 우회하는 세 가지 공격 경로(Pass-ta-key, Silver Pass-ta-key, Golden Pass-ta-key)를 공개했습니다. 이 공격들은 악성코드가 이미 감염된 Windows 단말에서 로컬 권한으로 실행되며, TPM 키 처리 허점과 재등록 과정의 검증 부재를 악용해 사용자 인증 없이 패스키 계정에 접근할 수 있게 합니다. 실제 야생 악용 사례나 CVE는 아직 보고되지 않았으나, 패스키 인증 체계의 구현상 취약점을 보여주는",
+        "score": 43,
+        "reason_bits": [
+          "신규",
+          "심층 분석",
+          "관련성 높음",
+          "우선도 43점"
+        ]
+      },
+      {
+        "ref": "00e971348b",
+        "title": "Public interest coalition urges Congress to investigate OpenAI, Hugging Face hack",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=00e971348b&url=https%3A%2F%2Ffedscoop.com%2Fpublic-interest-coalition-urges-congress-investigate-openai-hugging-face-hack%2F",
+        "source": "cyberscoop",
+        "source_label": "CyberScoop",
+        "level": "P3",
+        "category": "침해사고",
+        "published_at": "2026-08-03T21:43:26+00:00",
+        "summary": "공익 단체 연합이 OpenAI와 Hugging Face 해킹 사건에 대한 미국 의회 조사를 촉구함. 두 주요 AI 플랫폼의 보안 침해 가능성에 대한 우려가 제기됨. 구체적인 해킹 세부 사항이나 피해 규모는 기사에서 언급되지 않음.",
+        "score": 29,
+        "reason_bits": [
+          "신규",
+          "관련성 높음",
+          "우선도 29점"
+        ]
+      },
+      {
+        "ref": "2a945e8f9f",
+        "title": "OpenAI reveals how criminals used ChatGPT to run scams",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=2a945e8f9f&url=https%3A%2F%2Fwww.helpnetsecurity.com%2F2026%2F08%2F03%2Fopenai-disrupts-chatgpt-scam-operation%2F",
+        "source": "helpnetsecurity",
+        "source_label": "Help Net Security",
+        "level": "P2",
+        "category": "공격캠페인",
+        "published_at": "2026-08-03T08:40:26+00:00",
+        "summary": "OpenAI가 캄보디아 프레아 시아누크 주에서 운영된 것으로 보이는 조직적인 ChatGPT 계정 네트워크를 차단했다고 밝혔다. 이 네트워크는 가짜 온라인 페르소나 생성, 사기 대상에게 보낼 메시지 생성 및 번역, 사기 홍보 콘텐츠 제작 등 일상적인 사기 운영에 ChatGPT를 활용했다. WhatsApp의 제보로 조사가 시작되어 해당 네트워크가 해체되었다.",
+        "score": 62,
+        "reason_bits": [
+          "신규",
+          "우선도 62점"
+        ]
+      },
+      {
+        "ref": "cbf2494030",
+        "title": "HollowFrame Loader Uses Fake Python DLL to Evade Defender",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=cbf2494030&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fhollowframe-fake-python-dll%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P2",
+        "category": "악성코드",
+        "published_at": "2026-08-03T11:26:00+00:00",
+        "summary": "HollowFrame 로더가 가짜 Python DLL을 이용해 Go 코드를 숨기고, Windows Defender 제외 설정을 사전에 구성해 탐지를 회피하는 새로운 기법을 사용함.",
+        "score": 62,
+        "reason_bits": [
+          "신규",
+          "관련성 높음",
+          "우선도 62점"
+        ]
+      },
+      {
+        "ref": "6a7a21a3cf",
+        "title": "FOMO in the SOC: Where AI Platforms like Claude Actually Fit",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=6a7a21a3cf&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Ffomo-in-soc-where-ai-platforms-like.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T17:00:00+05:30",
+        "summary": "AI 플랫폼(Claude, Codex, Cursor)과 자율형 AI SOC의 역할 분담을 통해 보안 운영 효율성을 높이는 방안을 분석한다. 공격자는 이미 AI를 피싱·멀웨어 개발에 활용 중이며, 방어자는 알림 트리아지·탐지 규칙 작성·보고 자동화에 AI를 적용하고 있다. AI 플랫폼은 분석가 협업용으로, 대량 알림 조사는 자율형 AI SOC가 담당해야 비용·토큰 문제를 해결할 수 있다.",
+        "score": 25,
+        "reason_bits": [
+          "심층 분석",
+          "우선도 25점"
+        ]
+      },
+      {
+        "ref": "f8dbb77ffb",
+        "title": "Midnight Blizzard Targets Travelers via Captive Portals",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f8dbb77ffb&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fcaptivecrunch-midnight-blizzard%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P2",
+        "category": "공격캠페인",
+        "published_at": "2026-08-03T14:30:00+00:00",
+        "summary": "러시아 해킹 그룹 Storm-2945(미드나이트 블리자드)가 호텔 캡티브 포털을 탈취해 가짜 업데이트를 배포하고 인증 토큰을 탈취하는 공격을 수행했다. 여행자를 표적으로 삼아 공공 와이파이 접속 시 악성 페이지로 유도한다. 초기 침투 후 추가 악성 행위가 우려된다.",
+        "score": 68,
+        "reason_bits": [
+          "신규",
+          "우선도 68점"
+        ]
+      },
+      {
+        "ref": "f14a4f7c50",
+        "title": "Benchmarking the Agentic SOC: How we evaluate LLMs for security workflows",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f14a4f7c50&url=https%3A%2F%2Fwww.elastic.co%2Fsecurity-labs%2Fllm-benchmarking-agentic-soc",
+        "source": "elastic_security",
+        "source_label": "Elastic Security Labs",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-03T00:00:00+00:00",
+        "summary": "Elastic이 LLM 기반 SOC 에이전트의 실제 보안 업무 수행 능력을 평가하기 위한 독자적 프레임워크를 공개했다. 실제 침해 시나리오를 Elastic 환경에 심고, 각 모델이 알림 분석·엔티티 분석·위협 헌팅·탐지 규칙 작성·워크플로 작성·액션 호출·멀티스텝 체인 등 7개 역량 범주에서 도구 호출 순서·파라미터·그라운딩 여부까지 기록해 블라인드 채점한다. 일반적인 LLM 벤치마크가 지식·대화 품질만 측정해 에이전트의 위험한 환각을 걸러내지 못한다는 문제 의도에서 출발했다.",
+        "score": 4,
+        "reason_bits": [
+          "신규",
+          "심층 분석",
+          "우선도 4점"
+        ]
+      },
+      {
+        "ref": "3eda308c93",
+        "title": "Beyond the Model: Harnessing Frontier AI for Stronger Cyber Defense",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3eda308c93&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fharnessing-frontier-ai-for-stronger-defense%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-07-20T00:00:00-05:00",
+        "summary": "CrowdStrike가 프론티어 AI 모델(Anthropic Mythos Preview 등)을 활용한 취약점 연구 평가 결과를 공유했습니다. AI가 대규모 코드베이스 추론, 취약점 체인 식별, 익스플로잇 경로 생성을 가속화하여 방어자와 공격자 모두의 역량을 변화시킨다고 분석했습니다. 조직은 AI 기반 취약점 발견을 실행 가능한 보안 성과로 전환하고, 제로데이 악용 가속화에 대비해야 합니다.",
+        "score": 30,
+        "reason_bits": [
+          "신규",
+          "심층 분석",
+          "우선도 30점"
+        ]
+      },
+      {
+        "ref": "081bb91849",
+        "title": "CrowdStrike Joins the Open Secure AI Alliance to Advance AI Safety and Security",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=081bb91849&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fcrowdstrike-joins-the-open-secure-ai-alliance%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-07-27T00:00:00-04:00",
+        "summary": "CrowdStrike가 NVIDIA 등 업계 리더들과 함께 Open Secure AI Alliance의 창립 파트너로 참여하여 AI 안전성과 보안 강화를 위한 개방형 혁신과 공동 연구를 추진한다. AI 모델의 하네스(운영 프레임워크) 중요성을 강조하며, 자체 보안 하네스 적용 시 취약점 연구에서 거짓 양성률을 80%에서 20%로 낮춘 사례를 공개했다. Anthropic Mythos Preview, OpenAI TAC 등 프론티어 모델과 협력해 43개 제품에서 2,400건 이상의 취약점을 발견한 성과도 소개했다.",
+        "score": 4,
+        "reason_bits": [
+          "신규",
+          "우선도 4점"
+        ]
+      },
+      {
+        "ref": "7b2cb42406",
+        "title": "China-Linked Threat Actors Weaponize New Vulnerabilities in Under a Day",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=7b2cb42406&url=https%3A%2F%2Fwww.infosecurity-magazine.com%2Fnews%2Fchinalinked-threat-actors%2F",
+        "source": "infosecurity_magazine",
+        "source_label": "Infosecurity Magazine",
+        "level": "P2",
+        "category": "공격캠페인",
+        "published_at": "2026-08-03T15:00:00+00:00",
+        "summary": "중국 연계 위협 행위자가 치명적인 React2Shell 익스플로잇을 공개 하루 만에 악용했으며, 2026년 상반기 악용된 취약점의 88%가 공개 후 48시간 내에 침해된 것으로 나타남.",
+        "score": 62,
+        "reason_bits": [
+          "신규",
+          "관련성 높음",
+          "우선도 62점"
+        ]
+      }
+    ]
+  },
+  "keywords": [
+    "N-able N-central",
+    "CVE-2026-18577",
+    "DeepSeek",
+    "Hermes Agent",
+    "knaithe",
+    "INC Ransomware",
+    "SonicWall SMA 1000",
+    "CVE-2026-66066"
+  ],
+  "weekly_trends": null
+}

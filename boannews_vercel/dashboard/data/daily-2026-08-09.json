@@ -1,0 +1,495 @@
+{
+  "title": "일간 보안 인텔리전스 리포트",
+  "period": "daily",
+  "period_label": "2026-08-08 00:00 ~ 2026-08-09 00:00 (UTC)",
+  "generated_at": "2026-08-09T10:46:26Z",
+  "narrative": "[총평]\n- 금일 수집된 80건의 이벤트 중 가장 시급한 사안은 CISA KEV 카탈로그에 등재되며 실제 악용이 확인된 Progress LoadMaster 취약점(CVE-2026-8037)이 자사 ADC 자산과 매칭되어 P1 긴급 등급으로 분류된 점입니다.\n\n[핵심 위협 TOP 3]\n1. **Progress LoadMaster 원격 코드 실행(CVE-2026-8037)**: CISA KEV 등재와 함께 792건의 악용 시도가 관측되었으며, 자사 ADC 장비가 직접 영향권에 있어 즉각적인 패치와 침해 흔적 점검이 최우선으로 필요합니다.\n2. **아틀라시안 Rovo AI 어시스턴트 취약점(RovoBlast 등)**: 악성 링크 클릭 한 번으로 Jira·Confluence 등 연동 시스템의 민감 데이터가 유출되는 원클릭 취약점이 다수 보안 업체에 의해 독립적으로 발견되어 패치 완료 여부 확인이 시급합니다.\n3. **메타베이스 제로데이 사전 인증 RCE**: CVSS 10.0 만점의 인증 우회 취약점이 실제 환경에서 악용되어 관리자 권한 탈취와 데이터 유출 사례가 확인되었으며, 아직 CVE 번호가 부여되지 않아 벤더 권고안 적용 여부 확인이 필수적입니다.\n\n[권고 조치]\n1. CISA KEV 등재된 Progress LoadMaster 취약점(CVE-2026-8037) 대상 자산에 대해 즉시 패치를 적용하고, 기 악용 여부를 로그 분석으로 확인할 필요가 있습니다.\n2. 아틀라시안 Rovo, 메타베이스, Kata Containers 등 활발히 악용 중인 핵심 인프라·애플리케이션 취약점의 패치 현황을 전수 조사하고 미적용 자산에 긴급 조치를 시행할 것을 권장합니다.\n3. M365 AitM 피싱, VMware ESX 셸 난독화 등 최신 초기 접근 기법에 대응하기 위해 엔드포인트 탐지 시그니처를 갱신하고 임직원 대상 인증 피싱 주의 교육을 강화할 필요가 있습니다.",
+  "stats": {
+    "total": 80,
+    "p1": 1,
+    "p2": 9,
+    "info": 70,
+    "info_by_category": {
+      "취약점": 50,
+      "기술동향": 8,
+      "제품행사": 6,
+      "기타": 2,
+      "정책규제": 1
+    },
+    "by_source": {
+      "nvd": 45,
+      "crowdstrike": 9,
+      "msrc": 5,
+      "boannews": 5,
+      "thehackernews": 5,
+      "dailysecu": 4,
+      "securityaffairs": 4,
+      "unit42": 1,
+      "microsoft_security": 1,
+      "securityweek": 1
+    },
+    "top_actors": [
+      [
+        "SCATTERED SPIDER, BlackBasta, Royal (BlackSuit), Akira, shinysp1d3r",
+        1
+      ]
+    ],
+    "top_malware": [],
+    "top_cves": [
+      [
+        "CVE-2026-8037",
+        2
+      ],
+      [
+        "CVE-2026-44210",
+        1
+      ],
+      [
+        "CVE-2026-55971",
+        1
+      ],
+      [
+        "CVE-2026-17543",
+        1
+      ],
+      [
+        "CVE-2026-68480",
+        1
+      ],
+      [
+        "CVE-2026-58043",
+        1
+      ],
+      [
+        "CVE-2026-14526",
+        1
+      ],
+      [
+        "CVE-2026-13505",
+        1
+      ],
+      [
+        "CVE-2026-8798",
+        1
+      ],
+      [
+        "CVE-2023-38646",
+        1
+      ]
+    ]
+  },
+  "cards": [
+    {
+      "cve": "CVE-2026-8037",
+      "level": "P1",
+      "sources": [
+        "Security Affairs",
+        "The Hacker News"
+      ],
+      "severity_bits": [
+        "P1",
+        "EPSS 85%",
+        "악용 정황",
+        "GitHub PoC 저장소 2개"
+      ],
+      "products": [
+        "Progress LoadMaster"
+      ],
+      "remediation": "",
+      "due_date": "",
+      "summary": "The U.S. Cybersecurity and Infrastructure Security Agency (CISA) on Friday added a critical-severity security flaw impacting Progress Kemp LoadMaster to its Known Exploited Vulnerabilities (KEV) catal",
+      "items": [
+        {
+          "source_label": "The Hacker News",
+          "title": "Progress Kemp LoadMaster Flaw Hits CISA KEV After 792 Reported Exploit Attempts",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=f35c2912e3&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fprogress-kemp-loadmaster-flaw-hits-cisa.html"
+        },
+        {
+          "source_label": "Security Affairs",
+          "title": "U.S. CISA adds a Progress LoadMaster flaw to its Known Exploited Vulnerabilities catalog",
+          "url": "https://click-tracker-two.vercel.app/api/click?ref=eaba06e632&url=https%3A%2F%2Fsecurityaffairs.com%2F196863%2Fhacking%2Fu-s-cisa-adds-a-progress-loadmaster-flaw-to-its-known-exploited-vulnerabilities-catalog.html"
+        }
+      ]
+    }
+  ],
+  "domestic": {
+    "highlights": [
+      {
+        "ref": "bbd0005b90",
+        "title": "[김승주 교수 칼럼] AI 해킹 시대, 무조건적인 최신 패치가 답은 아니다",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=bbd0005b90&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207961",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-08T10:25:00",
+        "summary": "생성형 AI와 AI 에이전트 발전으로 해킹 기술 장벽이 낮아져 취약점 분석·공격코드 변형·타겟 탐지 등이 자동화되는 '해킹 대중화' 시대가 도래했다. 이에 따라 기존 '취약점 공개 후 패치 적용' 중심의 수동적 대응은 한계가 있으며, AI 기반 방어 체계와 지속적 모니터링, 제로트러스트 등 선제적 보안 전략 전환이 필요하다는 주장이다."
+      },
+      {
+        "ref": "42d8567fec",
+        "title": "가상자산 보유자 노린 오프라인 물리적 범죄 급증...상반기 피해액 3천만 달러 넘어",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=42d8567fec&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207962",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-08T15:29:32",
+        "summary": "체이널리시스 보고서에 따르면 2026년 상반기 가상자산 보유자를 노린 납치·주거침입 등 물리적 폭력 범죄로 탈취된 자산이 3,000만 달러를 넘어섰다. 온라인 해킹·사기 중심이던 범죄 수법이 오프라인 물리적 위협으로 확대되는 추세다. 미수 사례와 몸값 요구까지 포함하면 실제 피해 규모는 더 클 것으로 추정된다."
+      },
+      {
+        "ref": "a7e6a0407b",
+        "title": "[DEF CON 34] 데프콘 본선, AI 사용 제한 無... “AI 역량=경쟁력 불가피”",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a7e6a0407b&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145077%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-08T11:30:00+09:00",
+        "summary": "데프콘 34 CTF 본선에서 AI 사용 제한이 완전히 폐지되어 해커들이 LLM과 에이전트를 무제한 활용할 수 있게 되었다. 예선에서는 '100% AI만으로 풀지 말 것'이라는 제한이 있었으나, 본선에서는 검증 어려움과 실질적 효율성 차이로 인해 규정이 사라졌다. 해커들은 AI 역량이 경쟁력을 좌우하지만 인간의 창의력과 판단력이 여전히 핵심 시너지를 낸다고 입을 모았다."
+      },
+      {
+        "ref": "d0ee2783e7",
+        "title": "Microsoft 365 AitM 악용 피싱 공격으로 계정 탈취... 급여 관련 이메일 수집",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=d0ee2783e7&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145076%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "",
+        "published_at": "2026-08-08T10:58:00+09:00",
+        "summary": "북미 및 유럽의 의료, 교육, 정부 서비스 부문 공격...단순 정보만 수집해 공격 탐지 우회[보안뉴스 원병철 기자] 최근 마이크로소프트 365 계정을 장악해 재무 워크플로에 관련된 주요 담당자를 식별하고, 관련 이메일을 수집하기 위한 중간자 공격(AitM) 기법을 사용하는 ‘광범위한 이메일 기반 피싱 캠페인’이 활발하게 진행되는 것으로 알려져 주의가 요구된"
+      },
+      {
+        "ref": "d4d90dbf75",
+        "title": "체코, 1억달러 투입 ‘C-ITS’ 본격 가동하며 AI 교통분석·사이버보안 시장 확대",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=d4d90dbf75&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145011%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-08T10:11:00+09:00",
+        "summary": "체코 정부가 2031년까지 전국 단위 C-ITS(차세대 지능형 교통체계) 구축을 위해 약 1억 달러를 투자하는 국가전략을 승인했다. ITS-G5와 5G 하이브리드 통신망 기반으로 고속도로·도시·철도 연계 및 긴급차량 우선통행 서비스를 확대하며, AI 기반 교통흐름 예측과 사이버보안·인증체계 구축을 핵심 과제로 제시했다. 한국 기업의 AI 교통분석 및 C-ITS 보안 역량이 현지 후속사업 수요와 부합해 진출 기회가 열릴 전망이다."
+      },
+      {
+        "ref": "51cbdbec24",
+        "title": "클라이온, 신임 대표이사에 김주성 전 가온아이 CSO 선임",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=51cbdbec24&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207964",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기타",
+        "published_at": "2026-08-08T16:01:48",
+        "summary": "클라이온이 김주성 전 가온아이 CSO를 신임 대표이사로 선임했다. 김 대표는 KT와 kt cloud에서 28년간 근무한 클라우드 전문가다. 클라이온은 생성형 AI와 AI Agent 기술을 결합한 AX 사업을 핵심 성장 동력으로 육성할 계획이다."
+      },
+      {
+        "ref": "08e51fafce",
+        "title": "이스트시큐리티-퓨리오사AI, ‘차세대 K-AI 보안 솔루션 개발 및 기술 협력 위한 업무협약’ 체결",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=08e51fafce&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207963",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-08T15:49:13",
+        "summary": "이스트시큐리티와 퓨리오사AI가 차세대 K-AI 보안 솔루션 개발을 위한 업무협약을 체결했다. 양사는 AI 에이전트 기반 알약 EDR에 퓨리오사AI의 2세대 AI 추론 가속기 RNGD와 소프트웨어 스택을 적용하고, 보안 특화 sLLM 추론 엔진 연동을 추진한다. 국내 환경에 맞춘 보안성과 운영 효율 향상을 목표로 한다."
+      },
+      {
+        "ref": "f7ecfb41bc",
+        "title": "[사진으로 보는 DEF CON 34ⓛ] ‘해커들의 축제’ 개막... 다양한 CTF와 즐길거리",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f7ecfb41bc&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145080%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-08T16:24:00+09:00",
+        "summary": "데프콘34(DEF CON 34)가 라스베이거스에서 개막했으며, 메인 CTF 본선에 한국 해커가 이끄는 7개 팀이 진출해 활약 중이다. AI, 선박 해킹, 게임 해킹 등 다양한 주제의 빌리지에서 CTF, 강연, 시연이 진행된다. 행사는 경쟁보다 축제 분위기로 즐기는 문화가 강하다."
+      },
+      {
+        "ref": "574c48abb6",
+        "title": "[사진으로 보는 DEF CON 34②] 한국팀 데프콘 본선 활약 현장",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=574c48abb6&url=http%3A%2F%2Fwww.boannews.com%2Fmedia%2Fview.asp%3Fidx%3D145079%26kind%3D%26sub_kind%3D",
+        "source": "boannews",
+        "source_label": "보안뉴스",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-08T16:18:00+09:00",
+        "summary": "데프콘 34 CTF 본선에 한국팀 7개 팀이 진출해 경합 중이며, KISA가 현장 지원을 제공하고 있다. 대회 분위기와 팀별 활동 모습을 사진 중심으로 보도했다. 한국 해커들의 AI 역량과 정부 지원이 성과로 이어지고 있다는 평가가 나온다."
+      }
+    ],
+    "trend_reads": [
+      {
+        "ref": "bbd0005b90",
+        "title": "[김승주 교수 칼럼] AI 해킹 시대, 무조건적인 최신 패치가 답은 아니다",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=bbd0005b90&url=https%3A%2F%2Fwww.dailysecu.com%2Fnews%2FarticleView.html%3Fidxno%3D207961",
+        "source": "dailysecu",
+        "source_label": "데일리시큐",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-08T10:25:00",
+        "summary": "생성형 AI와 AI 에이전트 발전으로 해킹 기술 장벽이 낮아져 취약점 분석·공격코드 변형·타겟 탐지 등이 자동화되는 '해킹 대중화' 시대가 도래했다. 이에 따라 기존 '취약점 공개 후 패치 적용' 중심의 수동적 대응은 한계가 있으며, AI 기반 방어 체계와 지속적 모니터링, 제로트러스트 등 선제적 보안 전략 전환이 필요하다는 주장이다.",
+        "score": 28,
+        "reason_bits": [
+          "신규",
+          "관련성 높음",
+          "우선도 28점"
+        ]
+      }
+    ]
+  },
+  "overseas": {
+    "highlights": [
+      {
+        "ref": "b4afcc33be",
+        "title": "CrowdStrike Threat Hunts for Shell Command Obfuscation on VMware ESX",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b4afcc33be&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fcrowdstrike-hunts-for-shell-command-obfuscation-vmware-esx%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P2",
+        "category": "기술동향",
+        "published_at": "2026-08-07T00:00:00-05:00",
+        "summary": "CrowdStrike 연구진이 VMware ESX의 BusyBox 셸에서 명령어 난독화 기법 21가지를 검증하고, 이를 탐지하기 위한 CQL(CrowdStrike Query Language) 정규식 패턴을 공개했다. SCATTERED SPIDER, BlackBasta, Royal/BlackSuit, Akira, shinysp1d3r 등 랜섬웨어 그룹들이 하이퍼바이저 계층에서 VM 암호화·로깅 무력화를 수행 중이며, 기존 키워드 기반 탐지는 난독화된 명령을 놓친다. ESX 7.0.3 환경에서 awk의 비트 연산·system() 호출 "
+      },
+      {
+        "ref": "55bc84cb93",
+        "title": "Unlimited Technology Systems Data Breach Exposes Data of 3.8 Million Healthcare Patients",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=55bc84cb93&url=https%3A%2F%2Fsecurityaffairs.com%2F196843%2Fdata-breach%2Funlimited-technology-systems-data-breach-exposes-data-of-3-8-million-healthcare-patients.html",
+        "source": "securityaffairs",
+        "source_label": "Security Affairs",
+        "level": "P2",
+        "category": "개인정보유출",
+        "published_at": "2026-08-08T07:25:10+00:00",
+        "summary": "미국 의료 기술 기업 Unlimited Technology Systems의 상업용 데이터 센터가 2025년 10월 5~10일 사이 해킹당해 380만 명의 개인정보, 의료정보, 보험정보가 유출됐다. 회사는 10월 19일 무단 활동을 발견하고 포렌식 조사, 법 집행 기관 신고, 피해자 통지를 진행했다. 현재까지 공격 주체는 밝혀지지 않았으며, 랜섬웨어 그룹의 배후 주장도 없는 상태다."
+      },
+      {
+        "ref": "535e5a7788",
+        "title": "N-able Issues N-central Hotfix 2 as Attackers Reach Managed Systems and Persist",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=535e5a7788&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fn-central-attackers-reach-managed.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-08-08T12:27:43+05:30",
+        "summary": "N-able has released a fresh round of hotfixes for N‑central as part of its investigation into ongoing exploitation of a recently disclosed security flaw in the Remote Monitoring and Management (RMM) product. \"We are proactively expanding protections in response to ongoing monitoring of threat actors"
+      },
+      {
+        "ref": "a07ced8084",
+        "title": "CrowdStrike 2026 Threat Hunting Report: Exploitation Window Closes as AI Use Accelerates",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=a07ced8084&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fcrowdstrike-2026-threat-hunting-report%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-08-03T00:00:00-05:00",
+        "summary": "The CrowdStrike 2026 Threat Hunting Report illustrates the next evolution in trust abuse. Adversaries are targeting trusted users and tools across identity systems, cloud environments, SaaS applications, AI services, software supply chains, and developer workflows to blend into legitimate business a"
+      },
+      {
+        "ref": "b10e9fe5c6",
+        "title": "Metabase Zero-Day Exploited in Wild Allows Admin Access Without Authentication",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=b10e9fe5c6&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fmetabase-zero-day-exploited-in-wild.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-08-08T12:28:31+05:30",
+        "summary": "Metabase has warned that a maximum-severity security flaw impacting its business intelligence and data visualization software package has been exploited in the wild as a zero-day. The vulnerability (CVSS score: 10.0), which does not carry a CVE identifier, allows an unauthenticated remote attacker t"
+      },
+      {
+        "ref": "7850da234b",
+        "title": "Metabase Zero-Day Exploited in the Wild, Exposing Admin Access and Sensitive Data",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=7850da234b&url=https%3A%2F%2Fsecurityaffairs.com%2F196874%2Fhacking%2Fmetabase-zero-day-exploited-in-the-wild-exposing-admin-access-and-sensitive-data.html",
+        "source": "securityaffairs",
+        "source_label": "Security Affairs",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-08-08T11:50:21+00:00",
+        "summary": "Attackers exploited a CVSS 10 Metabase zero-day to gain admin access and steal sensitive data. Framework confirmed it was among the victims. Metabase just confirmed something no analytics vendor wants to write: attackers found and used an unpatched, maximum-severity flaw against Metabase Cloud befor"
+      },
+      {
+        "ref": "ab85ccf95d",
+        "title": "Atlassian Rovo Can Be Tricked Into Sending Jira and Confluence Data to Attackers",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=ab85ccf95d&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fatlassian-rovo-can-be-tricked-into.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P2",
+        "category": "",
+        "published_at": "2026-08-08T14:24:50+05:30",
+        "summary": "Attacker-controlled instructions can make Atlassian's Rovo assistant collect Jira or Confluence data that a signed-in user can access, then send it to an outside server. Two security firms found that behavior independently, by different routes. Only one of those routes is confirmed closed. PromptArm"
+      },
+      {
+        "ref": "f1fe23a3c1",
+        "title": "Palo Alto Networks Faces China Cybersecurity Review Amid Rising Tech Tensions",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=f1fe23a3c1&url=https%3A%2F%2Fsecurityaffairs.com%2F196881%2Fintelligence%2Fpalo-alto-networks-faces-china-cybersecurity-review-amid-rising-tech-tensions.html",
+        "source": "securityaffairs",
+        "source_label": "Security Affairs",
+        "level": "P3",
+        "category": "정책규제",
+        "published_at": "2026-08-08T13:41:32+00:00",
+        "summary": "중국 국가인터넷정보판공실(CAC)이 국가안보법과 사이버보안법을 근거로 팔로알토 네트웍스 중국 내 제품에 대한 사이버보안 심사를 개시했다. 구체적 취약점이나 사고 언급 없이 국가안보 우려만 밝혔으며, 2023년 마이크론 심사 사례와 유사한 패턴이다. 중국은 이미 올해 1월 자국 기업에 미국·이스라엘 보안 벤더 제품 교체를 권고한 바 있다."
+      },
+      {
+        "ref": "352c9180a3",
+        "title": "Critical One-Click Vulnerability in Atlassian’s Rovo AI Exposed Enterprise Data",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=352c9180a3&url=https%3A%2F%2Fwww.securityweek.com%2Fcritical-one-click-vulnerability-in-atlassians-rovo-ai-exposed-enterprise-data%2F",
+        "source": "securityweek",
+        "source_label": "SecurityWeek",
+        "level": "P3",
+        "category": "취약점",
+        "published_at": "2026-08-08T11:30:00+00:00",
+        "summary": "아틀라시안의 기업용 AI 어시스턴트 Rovo에서 'RovoBlast'라는 원클릭 취약점이 발견되어, 악성 링크 클릭만으로 Jira·Confluence·SharePoint 등 연동 시스템의 민감 데이터가 유출될 수 있음이 밝혀졌다. 공격자는 URL 파라미터(rovoChatPrompt)를 통해 프롬프트 인젝션을 수행하고, Rovo의 자율 에이전트(ResearchAgent)를 악용해 내부 데이터를 외부로 전송하는 체인을 시연했다. 아틀라시안은 공개 전 패치를 완료했으며, 기업은 Rovo 연동 범위 제한·불필요한 자율 기능 비활성화·활동 "
+      },
+      {
+        "ref": "4838a24658",
+        "title": "Secure Agent Harness Execution: Preventing Escape",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=4838a24658&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fsecure-agent-harness-execution-preventing-escape%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-04T00:00:00-05:00",
+        "summary": "CrowdStrike가 AI 에이전트 레드팀 테스트 시 사용하는 7계층 방어 심도(Defense-in-Depth) 샌드박스 격리 프레임워크를 공개했다. 데이터 유출, 횡적 이동, 호스트 침해, 자격증명 탈취 등 에이전트 이스케이프 위협 모델을 정의하고, 각 계층이 독립적으로 동작해 단일 장애점 없이 격리를 보장한다고 설명한다. 현재까지 공격용 에이전트가 샌드박스 경계를 벗어난 사례는 없다고 밝혔다."
+      },
+      {
+        "ref": "08a7a2e4fa",
+        "title": "New CSS Attacks Can Break Webmail Defenses to Steal Passwords and Tokens",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=08a7a2e4fa&url=https%3A%2F%2Fthehackernews.com%2F2026%2F08%2Fnew-css-attacks-can-break-webmail.html",
+        "source": "thehackernews",
+        "source_label": "The Hacker News",
+        "level": "P3",
+        "category": "",
+        "published_at": "2026-08-08T13:33:57+05:30",
+        "summary": "New research shows content inside an email can escape its message boundary and interfere with the webmail interface. Across attack chains spanning Outlook, Gmail, Fastmail, Proton Mail, Yahoo Mail, and AOL Mail, the techniques can capture passwords, take over third-party accounts, leak tokens, hijac"
+      },
+      {
+        "ref": "4561048679",
+        "title": "Falcon AIDR Now Protects Copilot Studio Agents and Claude Code",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=4561048679&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Ffalcon-aidr-protects-copilot-studio-agents-and-claude-code%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-30T00:00:00-05:00",
+        "summary": "크라우드스트라이크가 Falcon AIDR의 보호 범위를 마이크로소프트 코파일럿 스튜디오와 클로드 코드(Claude Code)로 확장했다. 코파일럿 스튜디오에서는 에이전트의 툴 호출 전 정책 기반 차단 기능을, 클로드 코드에서는 훅 이벤트 시스템을 통한 프롬프트·툴 활동 실시간 검사를 제공한다. 팔콘 브라우저 확장에도 AIDR 기능이 추가돼 웹 기반 AI 채팅 활동을 엔드포인트 컨텍스트와 연계해 모니터링·차단할 수 있다."
+      },
+      {
+        "ref": "5fd1f1aba2",
+        "title": "Inside the Modern SOC: The Identity Front Door",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=5fd1f1aba2&url=https%3A%2F%2Funit42.paloaltonetworks.com%2Fsoc-identity-front-door%2F",
+        "source": "unit42",
+        "source_label": "Unit 42",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-07T23:00:01+00:00",
+        "summary": "Unit 42 블로그에서 현대 SOC에서 신원 기반 공격이 전체 사고의 90%를 차지한다고 분석했습니다. 공격자가 신원을 악용하는 방식과 SOC 리더가 대응할 수 있는 방안을 다룹니다. 신원 보안의 중요성을 강조하는 기술 동향 기사입니다."
+      },
+      {
+        "ref": "e01e05dffe",
+        "title": "128 Seconds to disruption: Microsoft Defender stops ransomware at QNET",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=e01e05dffe&url=https%3A%2F%2Fwww.microsoft.com%2Fen-us%2Fsecurity%2Fblog%2F2026%2F08%2F04%2F129-seconds-disruption-microsoft-defender-stops-ransomware-qnet%2F",
+        "source": "microsoft_security",
+        "source_label": "Microsoft Security Blog",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-08-04T17:54:04+00:00",
+        "summary": "마이크로소프트 디펜더의 새로운 '디바이스 격리' 기능이 QNET에서 랜섬웨어 공격을 128초 만에 차단한 사례를 소개한다. 공격자는 합법적인 윈도우 도구를 악용해 악성 페이로드를 내려받는 LOL 기법을 사용했으나, AI 기반 상관 분석으로 고신뢰도 판정 시 자동 격리가 실행되어 측면 이동과 추가 감염을 사전 차단했다. 격리 시 외부 네트워크는 차단하되 보안 서비스 통신은 유지되며, 운영자가 검토 후 해제할 수 있다."
+      },
+      {
+        "ref": "d915a9e775",
+        "title": "Expanding AI Benchmarks in Cybersecurity Beyond Vulnerability Discovery",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=d915a9e775&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fexpanding-cybersecurity-ai-benchmarks-beyond-vulnerability-discovery%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-06T00:00:00-05:00",
+        "summary": "CrowdStrike가 AI 사이버보안 벤치마크를 취약점 탐지 이상으로 확장해야 한다고 주장하며, Verizon 2026 DBIR 통계(취약점 악용 31%)를 근거로 자격증명 남용·피싱 등 초기 접근 벡터 다변화와 탐지·조사·헌팅·적대자 에뮬레이션 등 방어 운영 전반을 평가하는 프레임워크가 필요함을 강조한다."
+      },
+      {
+        "ref": "3340fdebff",
+        "title": "5 High-Impact Use Cases for Falcon Onum",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=3340fdebff&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Ffive-high-impact-use-cases-for-falcon-onum%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-27T00:00:00-05:00",
+        "summary": "CrowdStrike가 Falcon Onum의 5가지 주요 활용 사례를 소개하며, 보안 텔레메트리 파이프라인을 지능형 제어 플레인으로 전환해 데이터 볼륨 절감, SIEM 마이그레이션 가속화, 데이터 인모션 엔리치먼트 등의 효과를 강조한다. 기사는 텔레메트리 세금 절감, SIEM 마이그레이션 시 리플러밍 없이 병렬 운영, 위협 인텔리전스 및 자산 컨텍스트를 파이프라인 단계에서 주입하는 기능을 핵심으로 다룬다. 글로벌 통신사의 네트워크 텔레메트리 실시간 인텔리전스 전환 사례를 예시로 제시한다."
+      },
+      {
+        "ref": "87ea2d88cf",
+        "title": "Inside Astaroth's New Spambot Component",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=87ea2d88cf&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Finside-astaroths-new-spambot-component%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "",
+        "published_at": "2026-07-29T00:00:00-05:00",
+        "summary": "Established Latin American (LATAM) threat actors are continuously adapting their malware capabilities and attack methodologies to circumvent defensive measures and maintain effectiveness against target environments. Exemplifying these evolving operations, in Q4 2025, operators of the Astaroth (aka G"
+      },
+      {
+        "ref": "8abfb622b8",
+        "title": "Falcon Cloud Security July 2026 Release: Helping Security Teams Move Faster in the Cloud",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=8abfb622b8&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fnew-in-falcon-cloud-security-helping-security-teams-move-faster%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-29T00:00:00-05:00",
+        "summary": "CrowdStrike가 Falcon Cloud Security 2026년 7월 릴리스를 발표하며 IaC 보안, 클라우드 아이덴티티 관리(CIEM), 애플리케이션 보안 자세 관리(ASPM) 기능을 강화했다. VS Code와 IntelliJ에 IaC 스캔을 통합하고 커스텀 Rego 규칙을 지원하며, 권한 쿼리와 최소 권한 정책 자동 생성을 통해 아이덴티티 거버넌스를 단순화했다. 애플리케이션 코드 분석과 CIEM 인사이트를 연계해 클라우드 컨트롤 플레인 동작을 자동으로 파악하는 기능도 추가됐다."
+      },
+      {
+        "ref": "6170e2d1e1",
+        "title": "Falcon Platform IOAs Arrive in Falcon Next-Gen SIEM to Identify New Threats",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=6170e2d1e1&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Ffalcon-platform-ioas-arrive-in-falcon-next-gen-siem%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "제품행사",
+        "published_at": "2026-07-29T00:00:00-05:00",
+        "summary": "CrowdStrike가 Falcon Next-Gen SIEM에 Falcon Platform IOAs(공격 지표)를 정식 출시하여, 엔드포인트·클라우드·아이덴티티 등 크로스 도메인 텔레메트리를 연계한 관리형 탐지 콘텐츠를 자동 제공한다. CrowdStrike 탐지 엔지니어와 IR 전문가, OverWatch 위협 헌터, Complete MDR 팀이 지속적으로 IOAs를 생성·갱신하여 신규 취약점·제로데이·공격 기법에 빠르게 대응한다. 보안팀은 탐지 룰 작성·유지보수 부담을 덜고 위협 헌팅·조사·대응 등 고부가가치 업무에 집중할 수 있다"
+      }
+    ],
+    "trend_reads": [
+      {
+        "ref": "5fd1f1aba2",
+        "title": "Inside the Modern SOC: The Identity Front Door",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=5fd1f1aba2&url=https%3A%2F%2Funit42.paloaltonetworks.com%2Fsoc-identity-front-door%2F",
+        "source": "unit42",
+        "source_label": "Unit 42",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-07T23:00:01+00:00",
+        "summary": "Unit 42 블로그에서 현대 SOC에서 신원 기반 공격이 전체 사고의 90%를 차지한다고 분석했습니다. 공격자가 신원을 악용하는 방식과 SOC 리더가 대응할 수 있는 방안을 다룹니다. 신원 보안의 중요성을 강조하는 기술 동향 기사입니다.",
+        "score": 4,
+        "reason_bits": [
+          "심층 분석",
+          "우선도 4점"
+        ]
+      },
+      {
+        "ref": "d915a9e775",
+        "title": "Expanding AI Benchmarks in Cybersecurity Beyond Vulnerability Discovery",
+        "url": "https://click-tracker-two.vercel.app/api/click?ref=d915a9e775&url=https%3A%2F%2Fwww.crowdstrike.com%2Fen-us%2Fblog%2Fexpanding-cybersecurity-ai-benchmarks-beyond-vulnerability-discovery%2F",
+        "source": "crowdstrike",
+        "source_label": "CrowdStrike",
+        "level": "P3",
+        "category": "기술동향",
+        "published_at": "2026-08-06T00:00:00-05:00",
+        "summary": "CrowdStrike가 AI 사이버보안 벤치마크를 취약점 탐지 이상으로 확장해야 한다고 주장하며, Verizon 2026 DBIR 통계(취약점 악용 31%)를 근거로 자격증명 남용·피싱 등 초기 접근 벡터 다변화와 탐지·조사·헌팅·적대자 에뮬레이션 등 방어 운영 전반을 평가하는 프레임워크가 필요함을 강조한다.",
+        "score": 4,
+        "reason_bits": [
+          "심층 분석",
+          "우선도 4점"
+        ]
+      }
+    ]
+  },
+  "keywords": [
+    "CVE-2026-8037",
+    "Progress LoadMaster",
+    "Atlassian Rovo",
+    "Metabase",
+    "SCATTERED SPIDER",
+    "BlackBasta",
+    "AitM",
+    "Kata Containers"
+  ],
+  "weekly_trends": null
+}
