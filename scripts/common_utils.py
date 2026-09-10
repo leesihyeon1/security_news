@@ -36,6 +36,9 @@ SOURCE_LABELS = {
     "kisa": "KISA/KrCERT",
     "asec": "안랩 ASEC",
     "msrc": "Microsoft 패치",
+    "cisco_psirt": "Cisco PSIRT",
+    "fortinet_psirt": "Fortinet PSIRT",
+    "paloalto_psirt": "Palo Alto PSIRT",
     "github_advisory": "GitHub Advisory",
     "boannews": "보안뉴스",
     "thehackernews": "The Hacker News",
@@ -91,7 +94,19 @@ def source_label(source):
 # 순수 CVE/공지 피드 소스 — 제목이 "CVE-XXXX" 식이라 "기사"로 보기 어려워
 # 뉴스 목록(top_items)·검색 인덱스에서 제외한다. CVE 카드·소스별 전용
 # 알림이 이 소스들의 내용을 이미 별도로 다룬다.
-NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "kisa", "exploit_db"}
+#
+# kisa는 여기 없다 — KrCERT 피드 제목은 "Fortinet 제품 보안 업데이트 권고",
+# "국가배후 해킹조직의 우리 국민·기업 해킹 공격 주의 권고"처럼 보안뉴스·ASEC과
+# 똑같은 성격의 기사 헤드라인이라(CVE-ID 나열이 아님) 이 그룹의 제외 사유가
+# 적용되지 않는다. 예전엔 여기 포함돼 있어서 주요 뉴스·검색 인덱스에서
+# 통째로 안 보였다.
+# 기사가 아니라 카탈로그·어드바이저리형 소스. 대시보드 국내/해외 기사 목록과 검색
+# 인덱스에서 빠지고, CVE 상관관계 카드의 근거로만 등장한다 — 벤더 PSIRT는 건당
+# 정보량이 적고 발행량이 많아 기사 목록에 섞이면 목록을 잠식한다.
+NON_NEWS_SOURCES = {
+    "nvd", "cisa_kev", "msrc", "github_advisory", "exploit_db",
+    "cisco_psirt", "fortinet_psirt", "paloalto_psirt",
+}
 
 def load_env_file(dotenv_path=None):
     if dotenv_path is None:
@@ -127,6 +142,15 @@ SLACK_WEBHOOK_URGENT = os.environ.get("SLACK_WEBHOOK_URGENT")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
+# 폴백 체인을 명시적으로 지정한다(쉼표 구분, 예: "nvidia" / "nvidia,ollama").
+# 미지정이면 기존 동작 유지. 로컬 Ollama를 안 띄우는 환경에서 체인에 남겨두면
+# 호출마다 연결 거부 예외를 맞고 그 사이 기사 분석이 통째로 유실된다
+# (실측: NVIDIA 실패 748회 = Ollama 실패 748회로, 폴백이 한 번도 성공한 적 없음).
+LLM_PROVIDERS = [
+    name.strip().lower()
+    for name in os.environ.get("LLM_PROVIDERS", "").split(",")
+    if name.strip()
+]
 NVIDIA_API_URL = os.environ.get("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
@@ -191,6 +215,39 @@ def _load_inventory_items(path):
     if current and current["name"]:
         items.append(current)
     return items
+
+
+def inventory_canonical_map(inventory_file=None):
+    """정규화된 자산 용어(이름·별칭) → 제품 대표명 매핑.
+
+    match_inventory_terms()는 매칭된 별칭을 전부 돌려준다(예: "Palo Alto Networks
+    PAN-OS GlobalProtect" → Palo Alto / Palo Alto Networks / PAN-OS / GlobalProtect).
+    판정에는 그게 맞지만 집계에 그대로 쓰면 제품 하나가 별칭 수만큼 부풀려진다
+    (실측 주간: Palo Alto Networks 20건 / Palo Alto 20건 / Paloalto 12건이 같은 제품).
+    """
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    if not path.exists():
+        return {}
+    mapping = {}
+    for item in _load_inventory_items(path):
+        for term in [item["name"]] + item["aliases"]:
+            normalized = clean_text(term).lower()
+            if normalized:
+                mapping.setdefault(normalized, item["name"])
+    return mapping
+
+
+def canonical_assets(terms, inventory_file=None):
+    """매칭된 자산 용어들을 제품 대표명 기준으로 중복 제거해 반환 (등장 순서 유지)."""
+    mapping = inventory_canonical_map(inventory_file)
+    seen = set()
+    result = []
+    for term in terms or []:
+        name = mapping.get(clean_text(term).lower(), clean_text(term))
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
 
 
 def inventory_criticality_map(inventory_file=None):
@@ -272,6 +329,83 @@ def normalize_threat_actor(name):
         return ""
     aliases = (_load_intel("threat_actor_aliases") or {}).get("aliases") or {}
     return aliases.get(name.lower(), name)
+
+# ATT&CK 전술(킬체인 단계) — 공격 순서대로. 기법 ID 20~24개를 한 줄에 나열하면
+# 아무도 못 읽는다. 전술로 묶어 "어느 단계에 무엇이 있는지"로 보여준다.
+TACTIC_ORDER = [
+    "reconnaissance", "resource-development", "initial-access", "execution",
+    "persistence", "privilege-escalation", "stealth", "defense-impairment",
+    "credential-access", "discovery", "lateral-movement", "collection",
+    "command-and-control", "exfiltration", "impact",
+]
+TACTIC_LABELS = {
+    "reconnaissance": "정찰",
+    "resource-development": "자원 확보",
+    "initial-access": "초기 침투",
+    "execution": "실행",
+    "persistence": "지속성",
+    "privilege-escalation": "권한 상승",
+    "stealth": "방어 회피",
+    "defense-impairment": "보안 기능 무력화",
+    "credential-access": "자격증명 접근",
+    "discovery": "내부 정찰",
+    "lateral-movement": "내부 이동",
+    "collection": "수집",
+    "command-and-control": "C2 통신",
+    "exfiltration": "유출",
+    "impact": "영향·파괴",
+}
+
+
+def attack_technique_name(technique_id):
+    """기법 ID의 공식 이름. 카탈로그에 없으면 빈 문자열."""
+    catalog = (_load_intel("attack_techniques") or {}).get("techniques") or {}
+    return catalog.get(str(technique_id).upper().strip(), "")
+
+
+def attack_tactics(technique_id):
+    """기법이 속한 전술 목록(공격 순서대로). 매핑이 없으면 빈 목록."""
+    mapping = (_load_intel("attack_techniques") or {}).get("tactics") or {}
+    stages = mapping.get(str(technique_id).upper().strip()) or []
+    return sorted(stages, key=lambda stage: TACTIC_ORDER.index(stage)
+                  if stage in TACTIC_ORDER else len(TACTIC_ORDER))
+
+
+def group_attack_techniques(technique_ids, labels=None):
+    """기법 ID를 전술별로 묶는다.
+
+    한 기법이 여러 전술에 속하면 공격 순서상 가장 앞선 전술에만 넣는다 — 같은 항목이
+    두 번 보이면 개수를 오해한다. 전술 매핑이 없는 기법은 마지막에 따로 모은다.
+    """
+    labels = labels or {}
+    buckets = {}
+    unmapped = []
+    for raw in technique_ids or []:
+        # 옛 기록은 "T1566.001 (피싱: 표적형)"처럼 설명까지 한 문자열로 저장돼 있다.
+        # ID만 떼어내고, 괄호 안 설명이 있으면 라벨로 쓴다.
+        text = str(raw).strip()
+        match = ATTACK_TECHNIQUE_RE.search(text.upper())
+        if not match:
+            continue
+        technique_id = match.group(0)
+        inline = re.search(r"\(([^)]{2,90})\)", text)
+        stages = attack_tactics(technique_id)
+        entry = {"id": technique_id,
+                 "label": (labels.get(technique_id)
+                           or (inline.group(1).strip() if inline else "")
+                           or attack_technique_name(technique_id))}
+        if stages:
+            buckets.setdefault(stages[0], []).append(entry)
+        else:
+            unmapped.append(entry)
+
+    grouped = [{"tactic": stage, "label": TACTIC_LABELS.get(stage, stage),
+                "items": buckets[stage]}
+               for stage in TACTIC_ORDER if stage in buckets]
+    if unmapped:
+        grouped.append({"tactic": "", "label": "분류 없음", "items": unmapped})
+    return grouped
+
 
 def validate_attack_techniques(candidates):
     """LLM이 제시한 ATT&CK 기법 ID 후보를 공식 카탈로그로 검증해 환각을 차단.
@@ -473,7 +607,46 @@ def validate_pirs(candidates):
 # ===== LLM 호출 공용 계층 (LLM_PROVIDER: nvidia = NVIDIA NIM API, ollama = 로컬) =====
 THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
-def _generate_nvidia(prompt, timeout):
+NVIDIA_RETRY_DELAY_SECONDS = 5
+NVIDIA_RATE_LIMIT_DELAY_SECONDS = 15
+# 고정 간격으로 재시도하면 몇 초짜리 장애 구간 안에서 시도를 다 소진한다
+# (실측: 주간 총평이 5초 간격 3회 모두 HTTP 404로 실패 → 그 주 리포트에 AI 해석 없음).
+# 시도할수록 간격을 2배로 늘려 장애 구간을 넘긴다.
+NVIDIA_RETRY_BACKOFF_MAX_SECONDS = 120
+# 실패 응답의 본문에 실제 사유가 들어 있는데 그동안 상태 코드만 남겨 원인을 알 수 없었다.
+NVIDIA_ERROR_BODY_LOG_CHARS = 300
+
+
+def _nvidia_retry_delay(base_seconds, attempt):
+    return min(base_seconds * (2 ** (attempt - 1)), NVIDIA_RETRY_BACKOFF_MAX_SECONDS)
+
+# LLM 응답 본문에 U+FFFD(치환 문자)가 섞여 오는 일이 있다 — 프로바이더가 멀티바이트
+# 글자를 토큰 경계에서 쪼갠 뒤 조각별로 디코딩하면 한글 한 음절이 "??"(U+FFFD 2개)로
+# 바뀐다. 2026-08-13~14 수집분에서 기사 요약의 약 80%가 이렇게 깨진 채 저장됐다
+# ("윈도우"의 "윈"이 U+FFFD 2개로, "랜섬웨어"의 "랜섬웨"가 6개로). 파이프라인 안에는
+# 문자를 깨뜨릴 지점이 없고(events.jsonl 쓰기는 strict UTF-8이라 깨진 바이트가 있으면
+# 예외가 난다) 응답이 이미 깨진 채 도착하는 것이라, 생성 단계에서 걸러내야 한다.
+REPLACEMENT_CHAR = "\ufffd"
+# 깨진 응답을 받았을 때 같은 프로바이더로 다시 받아볼 횟수. 서빙 계층에서 생기는
+# 산발적 손상이라 같은 프롬프트로 다시 부르면 대개 멀쩡하게 온다.
+BROKEN_RESPONSE_ATTEMPTS = 2
+
+def has_broken_chars(text):
+    """LLM 응답이 깨진 문자를 포함하는지. 정상 텍스트에 U+FFFD가 들어갈 일은 없다."""
+    return REPLACEMENT_CHAR in (text or "")
+
+def _generate_nvidia(prompt, timeout, max_attempts=2):
+    """예전엔 429(rate limit)만 한 번 재시도하고 그 외(타임아웃·일시적 5xx·연결
+    오류)는 즉시 실패 처리했다 — ai_narrative()처럼 큰 digest를 8192 토큰까지
+    생성하는 호출은 이런 일시적 문제가 드물지 않은데, 한 번 실패하면 바로
+    "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"로 떨어졌다.
+
+    max_attempts 기본값(2)은 예전보다 한 번만 더 시도하는 수준으로 보수적으로
+    잡았다 — 수백 건을 순회하는 기사별 enrichment(enrich_article 등)에서 NVIDIA가
+    통째로 안 되는 날이면 매 건마다 재시도가 쌓여 전체 실행시간이 크게 늘어날 수
+    있어서다. 실패해도 바로 로컬 Ollama로 폴백되니(llm_generate) 기사별 호출은
+    이 기본값으로 충분하고, 실패 시 대체 수단이 없는 총평 같은 단발성 고가치
+    호출만 max_attempts를 더 크게 넘겨서 쓴다."""
     payload = {
         "model": NVIDIA_MODEL,
         "messages": [{"role": "user", "content": prompt}],
@@ -482,19 +655,52 @@ def _generate_nvidia(prompt, timeout):
         "stream": False,
     }
     headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
-    for attempt in (1, 2):
-        response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
-        if response.status_code == 429 and attempt == 1:
-            # 무료 티어 40 RPM 제한 — 한 번만 대기 후 재시도
-            time.sleep(15)
+
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
+        except requests.exceptions.RequestException as error:
+            last_error = error
+            if attempt < max_attempts:
+                delay = _nvidia_retry_delay(NVIDIA_RETRY_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 호출 실패, 재시도 {}/{} ({}초 후): {}".format(
+                    attempt, max_attempts, delay, error))
+                time.sleep(delay)
             continue
-        break
-    if response.status_code != 200:
-        raise RuntimeError("HTTP {}".format(response.status_code))
-    choices = (response.json() or {}).get("choices") or []
-    if not choices:
-        raise RuntimeError("빈 choices 응답")
-    return (choices[0].get("message") or {}).get("content") or ""
+
+        if response.status_code == 429:
+            # 무료 티어 40 RPM 제한 — 다른 오류보다 더 오래 대기 후 재시도
+            last_error = RuntimeError("HTTP 429")
+            if attempt < max_attempts:
+                delay = _nvidia_retry_delay(NVIDIA_RATE_LIMIT_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 호출 제한(429), 재시도 {}/{} ({}초 후)".format(attempt, max_attempts, delay))
+                time.sleep(delay)
+            continue
+
+        if response.status_code != 200:
+            # 상태 코드만으로는 모델명 오류인지 일시 장애인지 구분이 안 된다 — 본문을 남긴다.
+            body = (response.text or "").strip().replace("\n", " ")[:NVIDIA_ERROR_BODY_LOG_CHARS]
+            last_error = RuntimeError("HTTP {}: {}".format(response.status_code, body))
+            if attempt < max_attempts:
+                delay = _nvidia_retry_delay(NVIDIA_RETRY_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 호출 실패, 재시도 {}/{} ({}초 후): {}".format(
+                    attempt, max_attempts, delay, last_error))
+                time.sleep(delay)
+            continue
+
+        choices = (response.json() or {}).get("choices") or []
+        if not choices:
+            last_error = RuntimeError("빈 choices 응답")
+            if attempt < max_attempts:
+                delay = _nvidia_retry_delay(NVIDIA_RETRY_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 빈 응답, 재시도 {}/{} ({}초 후)".format(attempt, max_attempts, delay))
+                time.sleep(delay)
+            continue
+
+        return (choices[0].get("message") or {}).get("content") or ""
+
+    raise last_error or RuntimeError("NVIDIA 호출 실패")
 
 def _generate_ollama(prompt, timeout, json_format):
     payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
@@ -505,27 +711,46 @@ def _generate_ollama(prompt, timeout, json_format):
         raise RuntimeError("HTTP {}".format(response.status_code))
     return (response.json() or {}).get("response", "")
 
-def llm_generate(prompt, timeout=120, json_format=False):
+def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
     """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
 
     LLM_PROVIDER=nvidia 이면 NVIDIA NIM을 먼저 시도하고 실패 시 로컬 Ollama로 폴백한다.
+    nvidia_max_attempts는 실패 시 대체 수단이 없는 단발성 고가치 호출(예: 일간/주간
+    AI 총평)에서만 기본값(2)보다 크게 넘겨라 — 기사별 enrichment처럼 대량 호출되는
+    곳에서 크게 잡으면 NVIDIA 장애 시 전체 실행시간이 크게 늘어난다.
+
+    응답에 깨진 문자(U+FFFD)가 섞여 있으면 실패로 보고 같은 프로바이더로 다시 받아본
+    뒤(BROKEN_RESPONSE_ATTEMPTS) 그래도 깨져 있으면 다음 프로바이더로 넘어간다. 모든
+    시도가 깨진 경우에만 마지막 수단으로 깨진 텍스트를 그대로 돌려준다 — 요약이 통째로
+    비면 카테고리까지 "기타"로 떨어져서, 한 음절 깨진 요약보다 손해가 크기 때문이다.
     """
-    providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
+    providers = LLM_PROVIDERS or (["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"])
+    broken_text = None
     for provider in providers:
-        try:
-            if provider == "nvidia":
-                if not NVIDIA_API_KEY:
-                    raise RuntimeError("NVIDIA_API_KEY 미설정")
-                text = _generate_nvidia(prompt, timeout)
-            else:
-                text = _generate_ollama(prompt, timeout, json_format)
-            text = THINK_TAG_RE.sub("", text).strip()
-            if text:
-                return text
-            raise RuntimeError("빈 응답")
-        except Exception as error:
-            print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
-    return None
+        for attempt in range(1, BROKEN_RESPONSE_ATTEMPTS + 1):
+            try:
+                if provider == "nvidia":
+                    if not NVIDIA_API_KEY:
+                        raise RuntimeError("NVIDIA_API_KEY 미설정")
+                    text = _generate_nvidia(prompt, timeout, max_attempts=nvidia_max_attempts)
+                else:
+                    text = _generate_ollama(prompt, timeout, json_format)
+                text = THINK_TAG_RE.sub("", text).strip()
+                if not text:
+                    raise RuntimeError("빈 응답")
+                if not has_broken_chars(text):
+                    return text
+                # 처음 받은 것만 남긴다 — 뒤로 갈수록 폴백 프로바이더라 품질이 낮다.
+                broken_text = broken_text or text
+                print("[-] LLM 응답에 깨진 문자 포함 ({}, {}/{}회)".format(
+                    provider, attempt, BROKEN_RESPONSE_ATTEMPTS))
+            except Exception as error:
+                # 호출 자체가 실패한 경우의 재시도는 _generate_nvidia 안에서 이미 했다.
+                print("[-] LLM 생성 실패 ({}): {}".format(provider, error))
+                break
+    if broken_text:
+        print("[-] 모든 시도의 응답에 깨진 문자가 남아 그대로 사용합니다.")
+    return broken_text
 
 # ===== LLM 기사 분석 (수집 시점 enrichment — 보안뉴스/ASEC 등 기사형 소스 공용) =====
 
@@ -646,8 +871,13 @@ def _parse_analyst_review(raw):
     }
 
 def ai_enrich_article(title, body):
-    """기사 본문을 LLM으로 분석해 구조화된 enrichment를 반환. 실패 시 None."""
-    if not body:
+    """기사 본문을 LLM으로 분석해 구조화된 enrichment를 반환. 실패 시 None.
+
+    본문을 못 가져온 경우(스크래핑 실패·RSS에 요약 자체가 없는 소스 등)에도 제목만으로
+    최소한의 분류는 시도한다 — 여기서 바로 포기하면 카테고리를 포함한 모든 필드가
+    통째로 비어 리포트에서 "기타"와 구분이 안 되는 진짜 분류 실패가 돼버린다.
+    """
+    if not title and not body:
         return None
 
     text = llm_generate(_build_enrich_prompt(title, body), timeout=120, json_format=True)
@@ -1422,6 +1652,19 @@ def _title_tokens(title):
     tokens = re.findall(r"[0-9a-z가-힣]{2,}", clean_text(title).lower())
     return {token for token in tokens if token not in _TITLE_STOPWORDS}
 
+
+def title_tokens(title):
+    """제목 토큰 집합 — 카드 묶기(generate_report)와 클러스터링이 같은 기준을 쓰도록 공개."""
+    return _title_tokens(title)
+
+
+def title_similarity(left, right):
+    """두 제목의 토큰 자카드 유사도(0~1). 한쪽이라도 토큰이 없으면 0."""
+    a, b = _title_tokens(left), _title_tokens(right)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
 def _read_recent_events(hours, events_file=None):
     """events.jsonl 뒤쪽에서 시간 창 안의 이벤트만 파싱 (카탈로그형 소스 제외).
 
@@ -1520,12 +1763,21 @@ def build_cluster_context(related_events, triage=None):
         "escalated": bool(alerted) and current_rank < best_alerted_rank,
     }
 
+# P1/P2/P3는 SSVC 판정 결과를 저장·정렬하는 내부 코드다. 사람이 읽는 자리에서는
+# 코드 대신 무엇을 해야 하는지가 바로 읽히는 문구를 쓴다 — 데이터 값은 그대로 둔다.
+LEVEL_LABELS = {"P1": "긴급 대응", "P2": "주의", "P3": "참고"}
+
+
+def level_label(level):
+    return LEVEL_LABELS.get(level or "", "")
+
+
 def triage_marker(triage):
     level = (triage or {}).get("level")
     if level == "P1":
-        return "🚨 *P1* "
+        return "🚨 *긴급 대응* "
     if level == "P2":
-        return "⚠️ P2 "
+        return "⚠️ 주의 "
     return ""
 
 def triage_note(triage):

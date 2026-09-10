@@ -75,9 +75,43 @@ def build_threat_actor_aliases():
     })
 
 
+def build_known_names():
+    """이미 이름이 붙어 알려진 것들의 목록. "신규 캠페인" 판정에서 걸러내는 데 쓴다.
+
+    공격 동향 레이더는 "우리 코퍼스에서 처음 본 이름"을 신규로 본다. 코퍼스가 두 달
+    남짓이라 그 전부터 알려진 것도 신규로 뜬다(실측: Rhysida·APT37·Kimsuky가 신규
+    캠페인 카드로 올라왔다). 행위자는 threat_actor_aliases.json으로 걸러지지만
+    랜섬웨어·악성코드 이름은 그 사전에 없어서 따로 모은다.
+    """
+    names = {}
+    for cluster, label in (("ransomware", "ransomware"),
+                           ("malpedia", "malware"),
+                           ("tool", "tool")):
+        try:
+            data = fetch_json("{}/{}.json".format(GALAXY_BASE, cluster))
+        except Exception as error:
+            print("[-] {} 클러스터를 받지 못했습니다: {}".format(cluster, error))
+            continue
+        for item in data.get("values") or []:
+            canonical = common_utils.clean_text(item.get("value"))
+            if not canonical:
+                continue
+            for name in [canonical] + list((item.get("meta") or {}).get("synonyms") or []):
+                key = common_utils.clean_text(name).lower()
+                # 짧은 이름은 일반 낱말과 겹쳐 오탐을 만든다 — 걸러내기 용도라
+                # 잘못 걸리면 진짜 신규 캠페인이 사라진다.
+                if len(key) >= 4 and key not in names:
+                    names[key] = label
+    save("known_names.json", {
+        "source": "MISP Galaxy ransomware/malpedia/tool",
+        "count": len(names),
+        "names": names,
+    })
+
+
 def build_attack_techniques():
     data = fetch_json("{}/mitre-attack-pattern.json".format(GALAXY_BASE))
-    techniques = {}
+    techniques, tactics = {}, {}
     for cluster in data.get("values") or []:
         meta = cluster.get("meta") or {}
         external_id = common_utils.clean_text(meta.get("external_id"))
@@ -89,9 +123,23 @@ def build_attack_techniques():
             continue
         name = common_utils.clean_text(cluster.get("value")).rsplit(" - ", 1)[0]
         techniques[external_id] = name
+        # 전술(킬체인 단계)도 함께 담는다 — 기법 ID만 나열하면 20개가 넘어가 읽히지
+        # 않는다. 갤럭시는 "attack-Enterprise:initial-access" 형태로 준다.
+        stages = []
+        for entry in meta.get("kill_chain") or []:
+            matrix, _, phase = str(entry).partition(":")
+            # 갤럭시는 행렬을 플랫폼 이름으로 준다(attack-Windows:initial-access).
+            # 모바일·ICS·구 pre-attack 행렬은 우리 환경과 무관하니 뺀다.
+            if not phase or not matrix.startswith("attack-"):
+                continue
+            if phase not in stages:
+                stages.append(phase)
+        if stages:
+            tactics[external_id] = stages
     save("attack_techniques.json", {
         "source": "MISP Galaxy mitre-attack-pattern",
         "techniques": techniques,
+        "tactics": tactics,
     })
 
 
@@ -123,7 +171,8 @@ def build_benign_iocs():
 
 
 def main():
-    for build in (build_threat_actor_aliases, build_attack_techniques, build_benign_iocs):
+    for build in (build_threat_actor_aliases, build_known_names,
+                  build_attack_techniques, build_benign_iocs):
         # 하나가 실패해도 나머지는 갱신한다 (기존 파일은 보존됨)
         try:
             build()

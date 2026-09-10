@@ -3,6 +3,7 @@ import os
 import re
 import smtplib
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import requests
@@ -22,7 +23,13 @@ for stream in (sys.stdout, sys.stderr):
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name.lower() == "scripts" else SCRIPT_DIR
-RSS_URL = "https://www.boannews.com/media/news_rss.xml"
+# 보안뉴스가 2026-08에 media/news_rss.xml을 폐기했다(404 -> 이후 홈페이지 HTML 응답).
+# 한쪽이 또 사라져도 메일러가 멈추지 않도록 순서대로 시도한다.
+# cdn 쪽을 우선하는 이유: guid를 주고 pubDate가 RFC822라 article_id/날짜 파싱이 안정적이다.
+RSS_URLS = [
+    "https://cdn.boannews.com/rss/gn_rss_allArticle.xml",
+    "https://www.boannews.com/rss/allArticle.xml",
+]
 TO_EMAIL = common_utils.DEFAULT_TO_EMAIL
 
 SMTP_SERVER = common_utils.SMTP_SERVER
@@ -36,7 +43,8 @@ MAX_STORED_SENT_IDS = 200
 XML_DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>", re.IGNORECASE)
 
 ARTICLE_BODY_MAX_CHARS = 4000
-ARTICLE_DATE_RE = re.compile(r"입력\s*:?\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
+# 개편 후 레이아웃은 "등록 · 2026.08.30 13:05", 구 레이아웃은 "입력 : 2026-08-30 13:05"
+ARTICLE_DATE_RE = re.compile(r"(?:입력|등록)\s*[·:]?\s*(\d{4}[.\-]\d{2}[.\-]\d{2}\s+\d{2}:\d{2})")
 
 
 def clean_text(text):
@@ -53,6 +61,16 @@ def parse_rss_datetime(value):
         return None
 
 
+def decode_page(raw):
+    """개편 페이지(utf-8)와 구 페이지(cp949)를 모두 읽을 수 있도록 순서대로 시도."""
+    for encoding in ("utf-8", "cp949"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return raw.decode("utf-8", errors="replace")
+
+
 def fetch_article_body(url):
     """기사 페이지에서 본문 텍스트와 입력 일시(KST)를 추출. 실패 시 ("", None)."""
     try:
@@ -61,23 +79,32 @@ def fetch_article_body(url):
             headers={"User-Agent": "Mozilla/5.0 boannews-daily-mailer/1.0"},
             timeout=15,
         )
-        page_text = resp.content.decode("cp949", errors="replace")
+        # 개편된 기사 페이지는 utf-8, 구 media/view.asp 페이지는 cp949다
+        page_text = decode_page(resp.content)
     except Exception as error:
         print("[-] 기사 본문 수집 실패({}): {}".format(url, error))
         return "", None
 
     soup = BeautifulSoup(page_text, "html.parser")
 
+    # 개편 레이아웃은 ISO8601(+09:00)을 메타로 그대로 준다 — 화면 표기 파싱보다 안정적
     published_at = None
-    date_match = ARTICLE_DATE_RE.search(soup.get_text(" ", strip=True))
-    if date_match:
-        try:
-            published_at = datetime.strptime(date_match.group(1), "%Y-%m-%d %H:%M").isoformat() + "+09:00"
-        except ValueError:
-            pass
+    meta_published = soup.find("meta", attrs={"property": "article:published_time"})
+    if meta_published and meta_published.get("content"):
+        published_at = meta_published["content"].strip()
+
+    if not published_at:
+        date_match = ARTICLE_DATE_RE.search(soup.get_text(" ", strip=True))
+        if date_match:
+            try:
+                published_at = datetime.strptime(
+                    date_match.group(1).replace(".", "-"), "%Y-%m-%d %H:%M"
+                ).isoformat() + "+09:00"
+            except ValueError:
+                pass
 
     container = None
-    for container_id in ("news_content", "news_contents", "con_Article"):
+    for container_id in ("article-view-content-div", "news_content", "news_contents", "con_Article"):
         container = soup.find(id=container_id)
         if container is not None:
             break
@@ -126,21 +153,57 @@ def decode_xml(xml_data, charset):
     return XML_DECLARATION_RE.sub("", xml_text, count=1)
 
 
+def looks_like_xml(xml_data):
+    """피드가 내려가면 200 + HTML 홈페이지가 돌아온다 — 그걸 파싱하려다 ParseError로
+    죽는 대신 다음 후보로 넘어가기 위한 선검사."""
+    head = xml_data[:512].lstrip().lower()
+    return head.startswith(b"<?xml") or head.startswith(b"<rss") or head.startswith(b"<feed")
+
+
+def fetch_rss_channel():
+    """RSS_URLS를 순서대로 시도해 첫 번째로 성공한 channel 엘리먼트를 반환."""
+    failures = []
+
+    for url in RSS_URLS:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 boannews-daily-mailer/1.0"},
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                xml_data = response.read()
+                charset = response.headers.get_content_charset()
+        except (urllib.error.URLError, TimeoutError) as error:
+            failures.append("{} -> 요청 실패: {}".format(url, error))
+            continue
+
+        if not looks_like_xml(xml_data):
+            failures.append("{} -> XML이 아닌 응답({}바이트)".format(url, len(xml_data)))
+            continue
+
+        try:
+            root = ET.fromstring(decode_xml(xml_data, charset))
+        except ET.ParseError as error:
+            failures.append("{} -> XML 파싱 실패: {}".format(url, error))
+            continue
+
+        channel = root.find("channel")
+        if channel is None:
+            failures.append("{} -> RSS channel을 찾을 수 없습니다".format(url))
+            continue
+
+        if failures:
+            print("[!] 폴백 피드로 수집합니다: {}".format(url))
+            for failure in failures:
+                print("    - {}".format(failure))
+        return channel
+
+    raise RuntimeError("보안뉴스 RSS를 읽지 못했습니다:\n  " + "\n  ".join(failures))
+
+
 def fetch_latest_security_news(limit=10):
-    request = urllib.request.Request(
-        RSS_URL,
-        headers={"User-Agent": "Mozilla/5.0 boannews-daily-mailer/1.0"},
-    )
-
-    with urllib.request.urlopen(request, timeout=15) as response:
-        xml_data = response.read()
-        charset = response.headers.get_content_charset()
-
-    root = ET.fromstring(decode_xml(xml_data, charset))
-    channel = root.find("channel")
-
-    if channel is None:
-        raise RuntimeError("RSS channel을 찾을 수 없습니다.")
+    channel = fetch_rss_channel()
 
     news_items = []
 
@@ -187,6 +250,7 @@ def build_email_body(news_items):
         summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
         score = (news.get("importance") or {}).get("score")
         response = " · ".join(common_utils.enrichment_response_bits(news.get("enrichment")))
+        tracked_link = common_utils.tracking_url("boannews:{}".format(news["id"]), news["link"])
 
         text_body += "{}. {}\n".format(idx, news["title"])
         text_body += "요약: {}\n".format(summary)
@@ -194,7 +258,7 @@ def build_email_body(news_items):
             text_body += "대응: {}\n".format(response)
         if score is not None:
             text_body += "중요도: {}점\n".format(score)
-        text_body += "기사 링크: {}\n".format(news["link"])
+        text_body += "기사 링크: {}\n".format(tracked_link)
         text_body += "발행일: {}\n\n".format(news["pub_date"])
 
         html_body += """
@@ -210,7 +274,7 @@ def build_email_body(news_items):
             summary=html.escape(summary),
             score_row="<p><b>중요도:</b> {}점</p>".format(score) if score is not None else "",
             pub_date=html.escape(news["pub_date"]),
-            link=html.escape(news["link"]),
+            link=html.escape(tracked_link),
         )
 
     html_body += """
@@ -243,6 +307,7 @@ def send_to_slack(news_items):
         ai_summary = (news.get("enrichment") or {}).get("summary") or news["summary"]
         response = " · ".join(common_utils.enrichment_response_bits(news.get("enrichment")))
         response_line = f"\n🔧 {response}" if response else ""
+        tracked_link = common_utils.tracking_url("boannews:{}".format(news["id"]), news["link"])
 
         triage = news.get("triage")
         blocks.append({
@@ -252,7 +317,7 @@ def send_to_slack(news_items):
                 "text":
                     f"{common_utils.triage_marker(triage)}📰 *{news['title']}*\n\n"
                     f"{ai_summary}{common_utils.triage_note(triage)}{response_line}\n\n"
-                    f"<{news['link']}|기사 보기> · 중요도 {(news.get('importance') or {}).get('score', '-')}점"
+                    f"<{tracked_link}|기사 보기> · 중요도 {(news.get('importance') or {}).get('score', '-')}점"
                 }
     })
         # 피드백 참조 해시 — 슬랙 폴러가 반응(👍/👎)을 이벤트로 역매핑한다

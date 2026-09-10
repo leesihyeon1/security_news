@@ -4,6 +4,7 @@ import os
 import re
 import smtplib
 import sys
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 import requests
@@ -42,6 +43,10 @@ STATE_FILE = common_utils.STATE_DIR / "kisa_sent_state.json"
 MAX_ITEMS_PER_EMAIL = int(os.environ.get("MAX_KISA_ITEMS_PER_EMAIL", "10"))
 MAX_STORED_SENT_IDS = 500
 XML_DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>", re.IGNORECASE)
+
+# boho.or.kr이 연속 요청을 봇으로 보고 막는지 확인용 — 기사 본문 수집 실패율이
+# 유독 높았던 원인 후보라 요청 사이에 간격을 둬본다.
+ARTICLE_FETCH_DELAY_SECONDS = 2
 
 
 def clean_text(value):
@@ -229,11 +234,12 @@ def build_email_body(items):
     """.format(checked_at=html.escape(checked_at))
 
     for idx, item in enumerate(items, start=1):
+        tracked_link = common_utils.tracking_url("kisa:{}".format(item["id"]), item["link"])
         text_body += "{}. {}\n".format(idx, item["title"])
         text_body += "Source: {}\n".format(item["source"])
         text_body += "Published: {}\n".format(item["published"])
         text_body += "Summary: {}\n".format(item["summary"])
-        text_body += "Link: {}\n\n".format(item["link"])
+        text_body += "Link: {}\n\n".format(tracked_link)
 
         html_body += """
         <hr>
@@ -248,7 +254,7 @@ def build_email_body(items):
             source=html.escape(item["source"]),
             published=html.escape(item["published"]),
             summary=html.escape(item["summary"]),
-            link=html.escape(item["link"]),
+            link=html.escape(tracked_link),
         )
 
     html_body += "</body></html>"
@@ -274,7 +280,10 @@ def send_to_slack(items):
         {"type": "divider"}
     ]
 
-    for item in items:
+    for idx, item in enumerate(items):
+
+        if idx > 0:
+            time.sleep(ARTICLE_FETCH_DELAY_SECONDS)
 
         print(f"본문 수집중: {item['title']}")
 
@@ -305,12 +314,15 @@ def send_to_slack(items):
 
         else:
              ai_result = "본문을 가져오지 못했습니다."
-             item["enrichment"] = {}
+             # 본문이 없어도 제목만으로 최소한의 카테고리 분류는 시도한다 — 여기서
+             # 완전히 건너뛰면 이 기사가 카테고리별/PIR 집계에서 통째로 빠진다.
+             item["enrichment"] = common_utils.ai_enrich_article(item["title"], "") or {}
              item["iocs"] = []
              item["attack_techniques"] = []
              item["body_chars"] = 0
 
         triage = item.get("triage")
+        tracked_link = common_utils.tracking_url("kisa:{}".format(item["id"]), item["link"])
         blocks.append({
             "type": "section",
             "text": {
@@ -320,7 +332,7 @@ def send_to_slack(items):
                     f"> 출처: {item['source']}{common_utils.triage_note(triage)}\n\n"
                     f"🤖 *AI 분석 결과*\n"
                     f"{ai_result[:2500]}\n\n"
-                    f"🔗 <{item['link']}|기사 바로가기>"
+                    f"🔗 <{tracked_link}|기사 바로가기>"
             }
         })
 
