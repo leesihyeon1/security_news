@@ -22,6 +22,7 @@ import re
 
 import artifact_extractor
 import common_utils
+import github_hunter
 import lure_hunter
 import supply_chain_hunter
 import vuln_hunter
@@ -52,7 +53,11 @@ SHARED_HOSTING_RE = re.compile(
 )
 
 MAX_VALUES_PER_LIST = 40
-MAX_KQL_QUERIES = 10       # 이보다 많으면 아무도 다 안 본다
+MAX_KQL_QUERIES = 10
+# 이보다 오래 운영된 도메인은 공격자가 등록한 유포지가 아니라 원래 있던
+# 서비스로 본다. 침해돼 유포에 쓰이는 경우가 있지만, 그때도 막을 대상은
+# 개별 URL이지 도메인 전체가 아니다.
+ESTABLISHED_DOMAIN_DAYS = 365       # 이보다 많으면 아무도 다 안 본다
 LOOKBACK = "30d"
 
 # ClickFix 계열 초기 침투 탐지에 쓰는 고정 목록 — 관측값이 아니라 기법 자체다.
@@ -90,6 +95,33 @@ def _collect(block, iocs, text=""):
     # 정상 서비스를 막거나(공용 RPC), 막을 수도 없는 것(.onion)을 목록에 넣게 된다.
     host_roles = lure_hunter.classify_ioc_hosts(iocs, text=text)
 
+    # 목록에 없는 호스트도 나이로 걸러낸다. 조사에서 이미 도메인 나이를 확보하는데
+    # 그것을 차단 판정에 쓰지 않아, 10년 된 도메인이 차단 후보로 올라갔다(실측:
+    # github.com, 나이 3,572일). 오래 운영된 도메인은 공격자가 만든 것이 아니라
+    # 원래 있던 서비스이므로, 아펙스를 막으면 정상 트래픽을 막는다.
+    established = set()
+    for seed in block.get("seeds") or []:
+        age = (seed.get("facts") or {}).get("domain_age_days")
+        host = (seed.get("domain") or seed.get("host") or "").lower()
+        if host and isinstance(age, int) and age >= ESTABLISHED_DOMAIN_DAYS:
+            established.add(host)
+    if established:
+        moved = [h for h in host_roles["lure"] if h in established]
+        for host in moved:
+            host_roles["lure"].remove(host)
+            if host not in host_roles["public_service"]:
+                host_roles["public_service"].append(host)
+
+    # 교차 조회에서 역방향 호스트명이 확인된 IP는 확인 없이 막으면 안 된다. "정상이다"로
+    # 단정하지는 않는다 — 공격자도 역방향 DNS를 붙일 수 있다. 다만 실측에서 기사가
+    # C2로 지목한 99.84.67.186이 sellingpartnerapi-eu.amazon.com이었고, 그걸 막으면
+    # Amazon Selling Partner API가 끊긴다. 차단 후보에서 빼고 별도 목록으로 올린다.
+    named_ips = {}
+    for entry in ((block.get("intel") or {}).get("named_ips") or []):
+        ip = str(entry.get("ip") or "").strip()
+        if ip:
+            named_ips[ip] = entry
+
     ioc_domains, ioc_ips, ioc_hashes = [], [], []
     for ioc in iocs or []:
         kind = (ioc.get("type") or "").lower()
@@ -109,13 +141,22 @@ def _collect(block, iocs, text=""):
                 if host in host_roles["lure"] and host not in ioc_domains:
                     ioc_domains.append(host)
         elif kind in ("ip", "ipv4", "ip-dst", "ip-src"):
-            if not _is_noise_ip(value) and value not in ioc_ips:
+            if not _is_noise_ip(value) and value not in ioc_ips and value not in named_ips:
                 ioc_ips.append(value)
 
     # 유포지 조사에서 확인한 호스팅 IP는 기사 IOC와 같은 급으로 본다(그 페이지가 실제로
     # 그 IP에 있었다는 관측이다).
     shared_hosting = []
     for seed in seeds:
+        # 공용 서비스로 판정된 도메인의 호스팅 IP는 그 서비스의 IP다 — 막으면 도메인을
+        # 막는 것과 같다(실측: github.com은 차단 금지로 옮겼는데 140.82.113.6은 차단
+        # 후보에 남아 있었다).
+        seed_host = (seed.get("domain") or seed.get("host") or "").lower()
+        if seed_host and seed_host in host_roles["public_service"]:
+            if seed.get("ip") and not _is_noise_ip(seed["ip"]):
+                shared_hosting.append("{} ({} — {} 호스팅)".format(
+                    seed["ip"], seed.get("asnname") or "?", seed_host))
+            continue
         if seed.get("ip") and not _is_noise_ip(seed["ip"]) and seed["ip"] not in ioc_ips:
             if SHARED_HOSTING_RE.search(seed.get("asnname") or ""):
                 # CDN·대형 클라우드 IP는 차단 후보가 아니다 — 도메인으로 막아야 한다.
@@ -155,6 +196,9 @@ def _collect(block, iocs, text=""):
                 artifacts.append(name)
 
     return {
+        "named_ips": ["{} ({})".format(
+            ip, ", ".join((entry.get("hostnames") or [])[:3]) or entry.get("asn") or "?")
+            for ip, entry in list(named_ips.items())[:MAX_VALUES_PER_LIST]],
         "public_service": host_roles["public_service"][:MAX_VALUES_PER_LIST],
         "leak_site": host_roles["leak_site"][:MAX_VALUES_PER_LIST],
         "tor": host_roles["tor"][:MAX_VALUES_PER_LIST],
@@ -326,6 +370,14 @@ def build(block, iocs, primary="", text=""):
                     "있을 수 있으니, 도메인 차단을 우선하고 IP는 함께 쓸 때만 막는다.",
             "values": values["ips"],
         })
+    if values["named_ips"]:
+        blocklists.append({
+            "label": "차단 전 확인 — 운영 중인 서비스로 보이는 IP",
+            "note": "역방향 호스트명이 붙어 있어 공격자가 급히 띄운 서버가 아니라 운영 중인 "
+                    "서비스로 보인다. 기사가 C2로 지목했더라도 그 호스트명이 무엇인지 먼저 "
+                    "확인한다 — 확인 없이 막으면 정상 API가 끊긴다.",
+            "values": values["named_ips"],
+        })
     if values["hashes"]:
         blocklists.append({
             "label": "차단 후보 — 파일 해시(SHA-256)",
@@ -400,9 +452,10 @@ def build(block, iocs, primary="", text=""):
             "values": found["repos"],
         })
 
+    github_material = github_hunter.response_material(block.get("github"))
     supply_material = supply_chain_hunter.response_material(block.get("supply_chain"))
     vuln_material = vuln_hunter.response_material(block.get("vulnerability"))
-    if not blocklists and not queries and not vuln_material and not supply_material:
+    if not (blocklists or queries or vuln_material or supply_material or github_material):
         return None
 
     actions = []
@@ -424,12 +477,20 @@ def build(block, iocs, primary="", text=""):
                        "남는 신호이니 예외 처리 후 상시 탐지로 올리는 것을 권한다: {}."
                        .format(len(found["behaviours"]),
                                ", ".join(b["name"] for b in found["behaviours"][:4])))
-    actions.append("값 기반 쿼리는 인프라가 바뀌면 죽는다. 행위 기반 쿼리를 예외 처리한 뒤 "
-                   "상시 탐지로 남기는 것이 오래 쓰는 방법이다.")
+    # 이 문장은 기사와 무관한 일반론이라 모든 카드에 똑같이 붙었다. 매번 읽히면
+    # 정작 이 사건에만 해당하는 조치가 묻힌다 — 쿼리마다 붙는 "값 기반 / 행위 기반"
+    # 표시가 같은 말을 이미 하고 있다.
 
     # 공급망 재료를 맨 앞에 둔다 — 이 축이 주력인 기사에서 가장 먼저 볼 것이 "무엇이
     # 우리 쪽에 들어왔나"이기 때문이다.
     commands = []
+    # GitHub 재료를 맨 앞에 — 공급망 기사에서 가장 먼저 볼 것이 "그 저장소가 아직
+    # 살아 있나, 우리가 클론했나"다.
+    if github_material:
+        blocklists = github_material["blocklists"] + blocklists
+        queries = (github_material["kql"] + queries)[:MAX_KQL_QUERIES]
+        actions = github_material["actions"] + actions
+
     if supply_material:
         blocklists = supply_material["blocklists"] + blocklists
         queries = (supply_material["kql"] + queries)[:MAX_KQL_QUERIES]

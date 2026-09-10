@@ -580,6 +580,22 @@ PUBLIC_SERVICE_APEXES = {
     # 파일 공유·페이스트
     "pastebin.com", "anonfiles.com", "mega.nz", "gofile.io", "transfer.sh",
     "file.io", "catbox.moe", "temp.sh",
+    # 코드 호스팅·패키지 레지스트리. 공급망 공격 기사의 IOC는 대개 여기에 올라간
+    # 저장소·패키지 주소라, 이 목록에 없으면 유포지로 잡혀 차단 후보가 된다
+    # (실측: github.com과 140.82.113.6이 차단 후보 목록에 올라갔다 — 확인된 사실에
+    # "이 도메인을 차단하면 정상 사이트를 막게 됩니다"라고 적어 놓고서도 그랬다).
+    "github.com", "githubusercontent.com", "github.io", "gitlab.com",
+    "bitbucket.org", "sourceforge.net", "codeberg.org", "gitea.com", "gitee.com",
+    "npmjs.com", "npmjs.org", "pypi.org", "pythonhosted.org", "crates.io",
+    "rubygems.org", "nuget.org", "maven.org", "packagist.org", "pkg.go.dev",
+    "hub.docker.com", "docker.io", "docker.com", "quay.io", "ghcr.io",
+    # 협업·문서·클라우드 저장소. 페이로드 경유지로 자주 쓰이지만 아펙스를 막으면
+    # 업무가 멈춘다 — 막을 대상은 개별 URL이지 도메인이 아니다.
+    "notion.so", "atlassian.net", "slack.com", "discord.com", "discordapp.com",
+    "dropbox.com", "box.com", "onedrive.live.com", "sharepoint.com",
+    "drive.google.com", "googleapis.com", "googleusercontent.com",
+    "amazonaws.com", "cloudfront.net", "azureedge.net", "blob.core.windows.net",
+    "cloudflare.com", "cdn.jsdelivr.net", "jsdelivr.net", "unpkg.com",
 }
 # 명단에 없는 RPC 엔드포인트도 형태로 알아본다 — 체인 이름 + rpc/node 조합.
 PUBLIC_RPC_HINT_RE = re.compile(
@@ -715,6 +731,26 @@ def catalog_patterns(iocs=None, text=""):
             "observed": pattern.get("observed") or "",
         })
     return matched
+
+
+def _dedupe_seed_queries(seeds):
+    """시드끼리 겹치는 쿼리를 지운다.
+
+    같은 캠페인의 도메인들은 같은 ASN·같은 TLS 발급자를 쓰는 일이 흔해서, 시드마다
+    피벗을 만들면 글자까지 같은 쿼리가 여러 번 나온다(실측: TerminalFix 카드에서
+    page.asn:AS62005 조합 2건, tlsIssuer:"YR2" 조합 2건이 중복됐다).
+    """
+    seen = set()
+    for seed in seeds:
+        kept = []
+        for query in seed.get("queries") or []:
+            key = (query.get("query") or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            kept.append(query)
+        seed["queries"] = kept
+    return seeds
 
 
 def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS, text=""):
@@ -930,7 +966,8 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
     if not api_key:
         findings.append("URLSCAN_API_KEY가 없어 페이지 코드까지는 대조하지 않았습니다. 검색 "
                         "결과로 나온 도메인은 차단 전에 사람이 확인해야 합니다.")
-    return {"seeds": seeds, "patterns": catalog, "findings": findings, "steps": steps,
+    return {"seeds": _dedupe_seed_queries(seeds), "patterns": catalog,
+            "findings": findings, "steps": steps,
             "generated_at": common_utils.utc_now_iso()}
 
 

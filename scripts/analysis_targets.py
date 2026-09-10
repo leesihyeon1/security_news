@@ -29,7 +29,7 @@ import re
 
 # 프롬프트에 붙일 명세. 사람이 읽는 섹션이 아니라 도구가 읽는 목록이라는 점을 못박고,
 # 줄 이름을 고정해 파싱이 흔들리지 않게 한다.
-SPEC = """
+SPEC_TEMPLATE = """
 
 [조사 대상]
 이 섹션은 사람이 읽는 글이 아니라 자동 조사 도구가 읽는 목록이다. 아래 줄 이름을 그대로
@@ -53,7 +53,26 @@ CVE:
 명령: 공격자가 실행한 명령줄. 예) nltest /domain_trusts
 조사가능: 위 줄 중 하나라도 값이 있으면 "예", 전부 "없음"이면 "아니오"
 조사불가사유: "아니오"일 때만, 왜 조사할 지표가 없는 기사인지 한 문장(예: 통계 요약 기사다)
+목표: 이 기사에 대해 달성해야 할 것을 한 문장으로 정하라. 유형별 정답을 주지 않는다 —
+  기사를 읽고 이번 건에 무엇이 가장 중요한지 직접 판단하라. 다만 쓸모 있는 목표는
+  이런 성질을 갖는다:
+    · 이번 지표 하나가 아니라 같은 수법이 다시 왔을 때도 쓸 수 있는가
+    · 달성했는지 판정할 수 있는가(무엇이 나오면 끝난 것인지 분명한가)
+    · 우리가 실제로 할 수 있는 일인가(외부 조회·사내 헌팅으로 닿는 범위인가)
+  기사 요약을 되풀이하지 마라.
+성공기준: 위 목표를 달성하려면 무엇이 나와야 하는지를 아래 이름들 중에서 골라 쉼표로
+  나눠 쓰라. 이 사건에 필요한 것만 고르고, 필요 없는 것은 넣지 마라 — 나중에 실제로
+  나왔는지 대조하므로 넣은 것은 약속이 된다.
+{VOCAB}
+확인질문: 목표를 달성하려면 조회로 답해야 할 질문 2~4개를 쉼표로 나눠 쓴다.
+  예) 이 CVE가 실제 악용 중인가, 사내에 해당 버전이 있는가, 유포지가 아직 살아 있는가
 """
+
+import playbook
+
+# 어휘는 playbook이 갖고 있다 — 검증하는 쪽과 요구하는 쪽이 어긋나면
+# 모델이 낼 수 없는 것을 약속하게 된다.
+SPEC = SPEC_TEMPLATE.replace("{VOCAB}", playbook.vocabulary_spec())
 
 SECTION_RE = re.compile(r"\n?\s*\[\s*조사\s*대상\s*\]\s*\n(.*?)(?=\n\s*\[|\Z)", re.S)
 
@@ -75,16 +94,34 @@ def _clean(value):
 
 
 def _split(value):
-    """쉼표로 나누되, 값 자체에 쉼표가 없는 항목만 다룬다는 전제로 단순하게 자른다."""
-    parts = [_clean(part) for part in (value or "").split(",")]
-    return [part for part in parts if part and part.lower() not in EMPTY_VALUES]
+    """쉼표로 나눈다. 다만 괄호 안의 쉼표는 값의 일부다.
+
+    확인질문에 "도메인 정찰 명령(nltest, net group, ADSI) 실행 이력이 있는가"처럼
+    괄호 안에 목록이 들어오는데, 그대로 자르면 한 질문이 세 조각으로 쪼개진다
+    (실측: 질문 4개가 6개로 늘어나고 뜻이 사라졌다).
+    """
+    parts, buf, depth = [], [], 0
+    for char in (value or ""):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        if char == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(char)
+    parts.append("".join(buf))
+    cleaned = [_clean(part) for part in parts]
+    return [part for part in cleaned if part and part.lower() not in EMPTY_VALUES]
 
 
 # 모델이 헤더를 빼먹고 필드만 이어 쓰는 경우가 있다(실측: 35건 중 1건에서 "[조사 대상]"
 # 없이 "도메인: 없음"부터 시작했고, 헤더를 요구하는 정규식이 못 잡아 기계용 목록이
 # 그대로 화면에 나갔다). 그래서 헤더가 없으면 필드 줄이 이어지는 구간을 찾아서 쓴다.
 FIELD_LINE_RE = re.compile(
-    "^[ " + chr(9) + "]*(?:[-*][ ]*)?(" + "|".join(FIELD_MAP) + "|조사가능|조사불가사유)"
+    "^[ " + chr(9) + "]*(?:[-*][ ]*)?(" + "|".join(FIELD_MAP)
+    + "|조사가능|조사불가사유|목표|확인질문|성공기준)"
     "[ ]*[:：]", re.M)
 # 이만큼 이어져야 목록으로 본다. 한두 줄이면 본문 문장이 우연히 "제품: ..." 형태인
 # 경우와 구별되지 않는다.
@@ -117,6 +154,7 @@ def parse(text):
         return {}
     found = {key: [] for key in FIELD_MAP.values()}
     investigable, reason = None, ""
+    objective, questions, criteria = "", [], []
     for line in located[2].splitlines():
         parsed = LINE_RE.match(line)
         if not parsed:
@@ -129,6 +167,15 @@ def parse(text):
         if name == "조사불가사유":
             reason = _clean(value)
             continue
+        if name == "목표":
+            objective = _clean(value)
+            continue
+        if name == "확인질문":
+            questions = _split(value)
+            continue
+        if name == "성공기준":
+            criteria = _split(value)
+            continue
         key = FIELD_MAP.get(name)
         if key:
             found[key] = _split(value)
@@ -139,6 +186,15 @@ def parse(text):
     found["investigable"] = investigable
     if reason:
         found["reason"] = reason
+    # 목표는 조회 전에 세우는 것이라 지표가 없어도 의미가 있다 — 지표가 하나도 없는
+    # 기사에서도 "무엇을 확인해야 하는가"는 남는다.
+    if objective:
+        found["objective"] = objective
+    if questions:
+        found["questions"] = questions
+    # 성공기준은 모델이 스스로 건 약속이다. 나중에 실제 산출물과 대조한다.
+    if criteria:
+        found["criteria"] = criteria
     return found
 
 

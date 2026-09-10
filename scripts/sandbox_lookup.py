@@ -26,6 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+USER_AGENT = "boannews-intel/1.0 (threat research)"
 REQUEST_TIMEOUT = 25
 PAUSE_SECONDS = 1.0          # 서비스 간 간격 — 세 곳을 연달아 부른다
 MAX_ITEMS = 6                # 목록(태그·시그니처·도메인)은 이 정도만 보여준다
@@ -40,6 +41,8 @@ MB_BROWSE_URL = "https://bazaar.abuse.ch/sample/{}/"
 MB_SEARCH_PAGE = "https://bazaar.abuse.ch/browse.php?search=sha256%3A{}"
 
 HA_SEARCH_URL = "https://www.hybrid-analysis.com/api/v2/search/hash"
+# 검증된 조회 경로. 400을 내는 POST 검색 대신 이쪽을 쓴다.
+HA_OVERVIEW_URL = "https://www.hybrid-analysis.com/api/v2/overview/{}"
 HA_REPORT_URL = "https://www.hybrid-analysis.com/sample/{}"
 HA_SEARCH_PAGE = "https://www.hybrid-analysis.com/search?query={}"
 
@@ -68,13 +71,27 @@ def _request(url, headers=None, data=None):
     """JSON 요청. 실패는 (None, 사유)로 돌려준다 — 예외로 분석을 막지 않는다."""
     body = urllib.parse.urlencode(data).encode() if data else None
     request = urllib.request.Request(url, data=body, headers=headers or {})
+    # User-Agent를 주지 않으면 urllib이 "Python-urllib/3.x"로 나가고, tria.ge는 그것을
+    # 막는다(실측: 같은 키·같은 주소인데 UA만 넣으면 200, 없으면 403이었다).
+    if not any(key.lower() == "user-agent" for key in (headers or {})):
+        request.add_header("User-Agent", USER_AGENT)
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
             raw = response.read().decode("utf-8", errors="replace")
         return json.loads(raw), ""
     except urllib.error.HTTPError as error:
         # 401/403은 키 문제다 — 키 값 자체는 절대 로그에 남기지 않는다.
-        return None, "HTTP {}".format(error.code)
+        # 다만 본문에 실린 사유는 살린다. abuse.ch는 unknown_auth_key처럼 무엇이
+        # 잘못됐는지 알려 주는데, 상태 코드만 남기면 "만료"와 "미등록"이 구별되지 않는다.
+        reason = "HTTP {}".format(error.code)
+        try:
+            detail = json.loads(error.read().decode("utf-8", errors="replace"))
+            status = detail.get("query_status") or detail.get("error") or ""
+            if status:
+                reason = "{} ({})".format(reason, str(status)[:40])
+        except Exception:
+            pass
+        return None, reason
     except Exception as error:
         return None, str(error)[:80]
 
@@ -100,8 +117,11 @@ def lookup_triage(hash_value, api_key=None):
         return result
 
     headers = {"Authorization": "Bearer {}".format(api_key), "Accept": "application/json"}
+    # 검색어는 해시만 넣는다. "sha256:<해시>" 형태로 물으면 인증은 통과하는데 결과가
+    # 늘 비어서 "샘플 없음"으로 잘못 읽힌다(실측: EICAR 해시로 확인 — 접두를 붙이면
+    # 0건, 해시만 넣으면 리포트가 나온다).
     data, error = _request(TRIAGE_SEARCH_URL.format(
-        urllib.parse.quote("sha256:{}".format(hash_value))), headers=headers)
+        urllib.parse.quote(hash_value)), headers=headers)
     if data is None:
         result["error"] = error
         return result
@@ -157,6 +177,8 @@ def lookup_malwarebazaar(hash_value, api_key=None):
     if not api_key:
         return result
 
+    # abuse.ch는 query_status로 실패 이유를 준다. unknown_auth_key는 만료가 아니라
+    # "그 키를 모른다"는 뜻이라, auth.abuse.ch에서 새로 받아야 한다.
     data, error = _request(MB_API_URL, headers={"Auth-Key": api_key},
                            data={"query": "get_info", "hash": hash_value})
     if data is None:
@@ -217,18 +239,25 @@ def lookup_hybrid(hash_value, api_key=None):
 
     headers = {"api-key": api_key, "User-Agent": "Falcon Sandbox",
                "Accept": "application/json"}
-    data, error = _request(HA_SEARCH_URL, headers=headers, data={"hash": hash_value})
+    # POST /search/hash는 폼도 멀티파트도 본문이 전달되지 않아 늘 400을 낸다
+    # (실측: "hash: This value should not be blank"). GET /overview/{sha256}는
+    # 같은 정보를 주고 404로 "없음"을 분명히 알려 준다.
+    data, error = _request(HA_OVERVIEW_URL.format(urllib.parse.quote(hash_value)),
+                           headers=headers)
     if data is None:
-        result["error"] = error
+        # 404는 오류가 아니라 "이 샘플이 없다"는 결과다.
+        result["error"] = "" if error == "HTTP 404" else error
         return result
-    reports = data if isinstance(data, list) else (data.get("result") or [])
-    if not reports:
+    reports = (data.get("scanners_v2") and [data]) or [data]
+    if not data.get("sha256"):
         return result
 
     # 위협 점수가 가장 높은 리포트를 대표로 본다(환경마다 결과가 다르다).
     def score_of(report):
         return report.get("threat_score") or 0
     best = max(reports, key=score_of)
+    # overview는 환경별 목록 대신 대표 결과 하나를 준다.
+    best.setdefault("verdict", best.get("verdict") or "")
     result.update({
         "found": True,
         "url": HA_REPORT_URL.format(hash_value),

@@ -14,12 +14,19 @@
 import re
 
 import analysis_targets
+import github_hunter
+import intel_hunter
+import lookup_plan
 import lure_hunter
 import pattern_synth
+import playbook
+import primary_sources
 import response_builder
+import response_synth
 import supply_chain_hunter
 import vt_hunter
 import vuln_hunter
+import web_search
 
 # 키워드가 있느냐 없느냐로 방향을 정하면 틀린다. 실측(REVSTEALER 기사): 제목에
 # STEALER·Miner, 분류가 "악성코드", 해시 5건인데도 본문에 "클립보드 하이재킹"(악성코드의
@@ -162,6 +169,22 @@ def classify(iocs, text="", title="", category="", targets=None):
     supply_chain = supply_chain_hunter.is_supply_chain(text, title)
     if supply_chain:
         tracks.append("supply_chain")
+    # 저장소 주소가 있으면 그 저장소·계정·파일을 직접 본다. 예전에는 도메인만 보고
+    # github.com이 정상 인프라라는 것만 확인하고 끝냈다.
+    if github_hunter.refs_from(iocs, text, targets):
+        tracks.append("github")
+    # 지표가 하나라도 있으면 다른 인텔리전스에도 물어본다 — 한 곳만 보는 것은 조사가
+    # 아니라 조회다.
+    # URL도 조회 대상이다 — URLhaus는 "이 주소가 유포지로 신고됐나"에 답하고, 그건
+    # urlscan이 페이지 모양을 보는 것과 다른 질문이다.
+    if domains or hashes or any((i.get("type") or "").lower() in
+                                ("ip", "ipv4", "ip-dst", "ip-src", "url")
+                                for i in iocs or []):
+        tracks.append("intel")
+    # 웹 검색은 키가 있을 때만 성립한다. 키가 없으면 트랙 자체를 만들지 않아, 계획도
+    # 화면도 "없는 도구를 쓴다"고 말하지 않는다.
+    if web_search.available() and web_search.terms_from(targets):
+        tracks.append("web")
 
     strong_user = bool(USER_ACTION_STRONG_RE.search(head) or USER_ACTION_STRONG_RE.search(body))
     strong_malware = bool(MALWARE_STRONG_RE.search(head) or MALWARE_STRONG_RE.search(body))
@@ -340,6 +363,22 @@ def _run_malware(ctx):
                                     iocs=ctx["iocs"])
 
 
+def _run_github(ctx):
+    return github_hunter.analyze(ctx["iocs"], text=ctx["text"], targets=ctx["targets"])
+
+
+def _run_intel(ctx):
+    return intel_hunter.analyze(ctx["iocs"], targets=ctx["targets"])
+
+
+def _run_web(ctx):
+    # 다른 조회에서 이미 자료를 찾은 이름은 다시 검색하지 않는다 — 하루 한도가 있다.
+    answered = []
+    for hit in ((ctx.get("block") or {}).get("intel") or {}).get("references") or []:
+        answered.append(hit)
+    return web_search.analyze(ctx["targets"], answered=answered)
+
+
 def _run_supply(ctx):
     return supply_chain_hunter.analyze(ctx["text"], title=ctx["title"], iocs=ctx["iocs"])
 
@@ -365,6 +404,16 @@ LOOKUPS = (
      "merge": _merge_named("supply_chain")},
     {"key": "vulnerability", "label": "취약점 조회",
      "consumes": "CVE·제품 이름", "run": _run_vuln, "merge": _merge_named("vulnerability")},
+    {"key": "github", "label": "GitHub 조회",
+     "consumes": "저장소 주소(owner/repo)", "run": _run_github,
+     "merge": _merge_named("github")},
+    {"key": "intel", "label": "교차 인텔 조회",
+     "consumes": "도메인·IP·URL·해시(OTX·Shodan·RDAP·URLhaus·ThreatFox)",
+     "run": _run_intel,
+     "merge": _merge_named("intel")},
+    {"key": "web", "label": "연구 자료 검색",
+     "consumes": "캠페인·악성코드 이름·CVE(Google CSE)", "run": _run_web,
+     "merge": _merge_named("web")},
 )
 
 
@@ -396,8 +445,66 @@ def run_lookups(ctx, block, steps):
                      for line in track.get("steps") or [])
 
 
+# 후속 조회 — 종합 판단이 남긴 질문을 이미 가진 도구로 한 바퀴 더 돈다. 예전에는
+# "남은 질문"을 만들어 놓고 거기서 멈췄다(실측: Magento 건이 남긴 질문 5개 중 3개는
+# 우리가 가진 도구로 답할 수 있는 것이었다). 한 바퀴로 묶는 이유는 시간이다 —
+# 기사 하나에 이미 400초가 넘게 든다.
+def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
+    """요청받은 값을 종류별로 조회해 판단 재료로 쓸 문장을 만든다.
+
+    block을 주면 해시 후속 조회로 얻은 파일 정보를 악성코드 트랙에 합친다. 판단에
+    쓸 한 줄만 뽑고 버리면 샌드박스 분석 링크가 사라져, "샘플이 있는데 어디서 보나"에
+    답할 수 없다.
+    """
+    lines, steps = [], []
+    for item in requests or []:
+        kind, value = item.get("type"), item.get("value")
+        question = item.get("question") or ""
+        try:
+            if kind in ("domain", "ip"):
+                field = "page.domain" if kind == "domain" else "ip"
+                results, total = lure_hunter.urlscan_search(
+                    '{}:"{}"'.format(field, value), size=3, api_key=urlscan_key)
+                hosts = [((r.get("page") or {}).get("domain") or "") for r in results]
+                lines.append("{} {} — urlscan {}건{}".format(
+                    kind, value, total,
+                    "(예: " + ", ".join(h for h in hosts if h) + ")" if any(hosts) else ""))
+            elif kind == "hash":
+                track = vt_hunter.analyze_hashes([value], api_key=vt_key, iocs=[])
+                found = (track or {}).get("findings") or []
+                lines.append("해시 {} — {}".format(
+                    value[:20], found[0][:160] if found else "VT에 결과 없음"))
+                if block is not None and (track or {}).get("files"):
+                    existing = block.get("malware")
+                    if isinstance(existing, dict):
+                        seen = {f.get("hash") for f in existing.get("files") or []}
+                        existing["files"] = (existing.get("files") or []) + [
+                            f for f in track["files"] if f.get("hash") not in seen]
+                    else:
+                        # 기사에 해시가 없어 악성코드 트랙이 아예 없던 건이다. 후속
+                        # 조회로 샘플을 찾았으니 여기서 트랙이 생긴다.
+                        block["malware"] = track
+            elif kind == "cve":
+                track = vuln_hunter.analyze([value], text="")
+                found = (track or {}).get("findings") or []
+                lines.append("{} — {}".format(
+                    value, found[0][:160] if found else "조회 결과 없음"))
+            elif kind == "package":
+                ecosystem = "npm" if value.startswith("@") else "pip"
+                info = supply_chain_hunter.lookup_package(ecosystem, value)
+                lines.append("패키지 {} — 레지스트리 존재 {} · OSV {}건".format(
+                    value, info.get("exists"), info.get("osv_count")))
+            else:
+                continue
+            steps.append("후속 조회 \"{}\" — {} {}를 다시 확인했습니다.".format(
+                question[:60], kind, value[:40]))
+        except Exception as error:
+            steps.append("후속 조회 실패({} {}): {}".format(kind, value[:30], str(error)[:50]))
+    return lines, steps
+
+
 def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
-          body="", synthesize=True, targets=None):
+          body="", synthesize=True, targets=None, links=None, article_url=""):
     """조사&대응 블록. 트랙별 결과를 한 dict로 합친다.
 
     반환 형태는 기존(seeds/patterns/findings)을 그대로 유지하고 route·malware만
@@ -436,8 +543,34 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     # 작업인지 구분이 필요하다.
     steps = []
 
+    # 기사가 인용한 1차 자료를 먼저 읽는다 — 2차 보도가 생략한 내용이 판단을 바꾼다
+    # (실측: Sansec 원문 첫 줄에 기사가 "미할당"이라던 CVE 번호가 적혀 있었다).
+    primary = {"sources": [], "steps": []}
+    if links:
+        try:
+            primary = primary_sources.collect(links, article_url=article_url)
+            steps.extend({"track": "원문 확인", "text": line}
+                         for line in primary.get("steps") or [])
+        except Exception as error:
+            steps.append({"track": "원문 확인", "text": "실패: {}".format(error)})
+
+    # 목표를 보고 어떤 조회를 돌릴지 고른다. 예전에는 지표 종류만 보고 정해서, 목표와
+    # 무관한 조회가 돌고 시간을 썼다. 계획을 못 세우면 예전 방식 그대로다.
+    if synthesize and targets.get("objective"):
+        try:
+            chosen = lookup_plan.plan(targets.get("objective"), targets.get("questions"),
+                                      [{"key": l["key"], "label": l["label"],
+                                        "consumes": l["consumes"]} for l in LOOKUPS],
+                                      route, targets=targets)
+            route["tracks"] = chosen["tracks"]
+            steps.extend({"track": "조회 계획", "text": line}
+                         for line in chosen.get("steps") or [])
+        except Exception as error:
+            steps.append({"track": "조회 계획", "text": "실패: {}".format(error)})
+
     run_lookups({"iocs": iocs, "text": text, "title": title, "route": route,
-                 "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets},
+                 "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets,
+                 "block": block},
                 block, steps)
 
     block.setdefault("patterns", [])
@@ -449,7 +582,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     if synthesize and (text or body):
         try:
             synth = pattern_synth.synthesize(title, text, body=body, iocs=iocs,
-                                             api_key=urlscan_key)
+                                             api_key=urlscan_key, targets=targets)
             if synth.get("patterns"):
                 block["patterns"] = list(block["patterns"]) + synth["patterns"]
             steps.extend({"track": "패턴 합성", "text": line}
@@ -463,6 +596,79 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     block["steps_summary"] = summarize(block)
     # 대응 — 조사에서 나온 값과 본문의 구체값을 차단 목록·탐지 쿼리로 바꾼다.
     block["response"] = response_builder.build(block, iocs, primary=route["primary"], text=text)
+
+    # 마지막으로 조회 결과 전체를 읽고 판단한다. 여기까지는 값이 있으면 문장을 붙이는
+    # 조립이었고, "그래서 무엇을 해야 하는가"를 정하는 단계가 없었다. 실패해도 앞의
+    # 결과는 그대로 낸다 — 판단이 없어도 재료는 쓸 수 있다.
+    # 이 유형이 요구하는 산출물을 다 냈는지 대조한다. 빠진 것을 밝히지 않으면
+    # "완벽히 대응했다"를 확인할 방법이 없다 — 조용히 없는 것과 원래 필요 없는 것이
+    # 구별되지 않는다.
+    try:
+        # 내가 만든 유형 목록이 아니라, 모델이 목표를 세울 때 선언한 기준으로 본다.
+        cover = playbook.coverage(block, targets.get("criteria"))
+        if cover:
+            block["coverage"] = cover
+            steps.extend({"track": "산출물 점검", "text": line}
+                         for line in playbook.coverage_steps(cover))
+    except Exception as error:
+        steps.append({"track": "산출물 점검", "text": "실패: {}".format(error)})
+
+    if synthesize:
+        try:
+            # 교차 조회가 찾아 준 참고 링크(다른 연구자의 보고서)도 원문으로 읽는다.
+            # 기사가 인용하지 않은 자료라 여기서만 얻을 수 있다.
+            intel_refs = (((block.get("intel") or {}).get("references") or [])
+                          + ((block.get("web") or {}).get("references") or []))
+            if intel_refs:
+                try:
+                    more = primary_sources.collect(
+                        [{"url": u} for u in intel_refs], article_url=article_url, limit=1)
+                    primary["sources"] = (primary.get("sources") or []) + more["sources"]
+                    steps.extend({"track": "원문 확인", "text": line}
+                                 for line in more.get("steps") or [])
+                except Exception as error:
+                    steps.append({"track": "원문 확인",
+                                  "text": "참고 링크 원문 확인 실패: {}".format(error)})
+            evidence = primary_sources.as_evidence(primary.get("sources"))
+            verdict = response_synth.synthesize(title, text, targets, block,
+                                                primary=evidence)
+            # URLhaus가 URL에서 알려 준 페이로드 해시. 기사에 없던 값이라 판단이
+            # 요청할 수 없지만, 샘플 확보로 바로 이어지는 것이라 우리가 넣는다.
+            auto = []
+            known = {str(item.get("value") or "").lower() for item in iocs or []}
+            for value in ((block.get("intel") or {}).get("discovered_hashes") or []):
+                if value.lower() not in known:
+                    auto.append({"type": "hash", "value": value,
+                                 "question": "URLhaus가 이 URL의 페이로드로 준 해시가 "
+                                             "실제 무엇인지"})
+            pending = (verdict.get("followups") or []) if verdict else []
+            pending = auto + list(pending)
+            # 판단이 남긴 질문 중 우리 도구로 답할 수 있는 것을 한 바퀴 더 조회하고,
+            # 그 결과로 판단을 다시 받는다. 새로 얻은 것이 없으면 다시 받지 않는다.
+            if pending:
+                extra_lines, extra_steps = _run_followups(
+                    pending, urlscan_key=urlscan_key, vt_key=vt_key, block=block)
+                steps.extend({"track": "후속 조회", "text": line} for line in extra_steps)
+                if extra_lines:
+                    again = response_synth.synthesize(
+                        title, text, targets, block, primary=evidence,
+                        extra="\n".join(extra_lines))
+                    if again:
+                        again["followup_evidence"] = extra_lines
+                        # 2차 판단이 새로 낸 후속 조회 요청은 버린다. 한 바퀴만 돌기로
+                        # 했으니 그것들은 실행되지 않는데, 남겨 두면 화면에서
+                        # "요청한 것과 다른 것을 조회했다"로 읽힌다(실측: 요청 4건과
+                        # 실행 4건이 하나도 겹치지 않았다). 실행한 것만 남긴다.
+                        again["followups"] = pending
+                        verdict = again
+            if verdict:
+                block["synthesis"] = verdict
+                steps.extend({"track": "종합 판단", "text": line}
+                             for line in verdict.get("steps") or [])
+                block["steps"] = steps
+        except Exception as error:
+            steps.append({"track": "종합 판단", "text": "실패: {}".format(error)})
+            block["steps"] = steps
     if not route["tracks"] and not block["response"]:
         # 이유를 말할 수 있으면 카드를 남긴다 — 빈 화면보다 "왜 없는지"가 낫다.
         if targets and targets.get("investigable") is False:

@@ -21,6 +21,7 @@
     NVIDIA_API_KEY   기존 리포트 생성과 동일
 """
 
+import contextlib
 import json
 import os
 import re
@@ -60,6 +61,11 @@ BODY_MAX_CHARS = 24000
 # 이보다 짧으면 원문을 못 읽은 것으로 본다. 실측 분포: 정상 수집은 2,753~37,460자였고
 # 유일한 예외가 봇 차단 페이지(658자)였다.
 BODY_MIN_CHARS = 900
+# 차단 페이지 판정에 길이 조건을 함께 본다. 표현만 보면 그 표현을 다루는 기사를
+# 차단 페이지로 오인한다(실측: ClickFix 캠페인 기사가 본문에 "가짜 CAPTCHA"를
+# 설명해서, 29,727자를 정상 수집했는데도 봇 차단으로 판정돼 분석이 취소됐다).
+# 실제 차단 페이지는 짧다 — 안내 문구 몇 줄이 전부다.
+BLOCKED_PAGE_MAX_CHARS = 3000
 # 봇 차단·로그인 벽·자바스크립트 요구 페이지의 표식. 이런 페이지를 기사로 넘기면
 # LLM이 제목만 보고 그럴듯한 분석을 만들어 낸다 — 그게 더 위험하다.
 BLOCKED_PAGE_RE = re.compile(
@@ -462,7 +468,10 @@ def analyze_one(job):
 
     # 원문을 못 읽었으면 분석하지 않는다. 제목만으로 만든 분석은 근거가 없고, 화면에서
     # 정상 분석과 구별되지 않아 더 위험하다 — 실패 사실을 그대로 저장해 보여 준다.
-    blocked = BLOCKED_PAGE_RE.search(body[:2000]) if body else None
+    # 짧은 페이지에서만 차단 표현을 신호로 본다. 긴 본문에 그 표현이 있는 것은
+    # 그 주제를 다루는 기사이기 때문이다.
+    blocked = (BLOCKED_PAGE_RE.search(body[:2000])
+               if body and len(body) < BLOCKED_PAGE_MAX_CHARS else None)
     if not body or len(body) < BODY_MIN_CHARS or blocked:
         reason = ("봇 차단·로그인 벽 페이지가 반환됐습니다({})".format(blocked.group(0))
                   if blocked else
@@ -527,7 +536,7 @@ def analyze_one(job):
         # 부족하다(URL·경로·명령줄은 원문에만 원형으로 남는 경우가 있다).
         investigation_block = investigation.build(
             iocs, text=analysis, title=title, category=category or "",
-            body=body[:BODY_MAX_CHARS], targets=targets)
+            body=body[:BODY_MAX_CHARS], targets=targets, links=links, article_url=url)
         if investigation_block:
             route = investigation_block.get("route") or {}
             log("    조사&대응: {} / 시드 {}개 / 악성코드 {}건".format(
@@ -561,9 +570,12 @@ def analyze_one(job):
 
 def store_result(client, record):
     """analyze.js와 같은 키·형식으로 저장 — 대시보드 표시 코드를 그대로 쓴다."""
-    cached = {key: record[key] for key in
+    # 없는 키는 비워 둔다. 수집 실패 기록처럼 일부 필드가 아예 없는 경우가 있어,
+    # 인덱싱으로 꺼내면 저장이 통째로 실패한다(실측: 'targets' KeyError로 기록이
+    # 저장되지 않았다).
+    cached = {key: record.get(key) for key in
               ("analysis", "links", "iocs", "category", "attack_techniques", "glossary",
-               "attack_grouped", "investigation")}
+               "attack_grouped", "investigation", "targets")}
     if record.get("collection_failed"):
         cached["collection_failed"] = True
     cached["partial"] = False
@@ -590,7 +602,62 @@ def store_result(client, record):
     pipe.execute()
 
 
+# 회차가 겹치는 것을 막는 잠금. 예약 작업 자체는 MultipleInstances=IgnoreNew로 겹치지
+# 않지만, 손으로 돌리는 실행과는 겹친다(실측: 개발 중 여러 번 그랬다). 한 기사가
+# 분석 150초 + 패턴 합성 60~150초 + 종합 판단 160초로 400초를 넘기니, 같은 큐를 두
+# 프로세스가 동시에 pop하면 같은 기사를 두 번 분석하거나 결과를 서로 덮어쓴다.
+LOCK_FILE = common_utils.STATE_DIR / "analysis_worker.lock"
+# 한 회차가 이보다 오래 걸릴 일은 없다. 프로세스가 죽어 잠금만 남은 경우를 회수한다.
+LOCK_STALE_SECONDS = 30 * 60
+
+
+@contextlib.contextmanager
+def run_lock():
+    """이미 돌고 있으면 실행하지 않는다(기다리지 않는다).
+
+    기다리게 하면 5분마다 뜨는 회차가 줄줄이 쌓인다 — 큐는 다음 회차에 처리되니
+    이번 회차는 그냥 넘기는 것이 맞다.
+    """
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    try:
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            age = time.time() - LOCK_FILE.stat().st_mtime
+        except OSError:
+            age = 0
+        if age > LOCK_STALE_SECONDS:
+            log("[!] 오래된 잠금을 회수합니다(주인 프로세스가 죽은 것으로 판단, {:.0f}분).".format(
+                age / 60))
+            try:
+                LOCK_FILE.unlink()
+                fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except OSError:
+                pass
+        if fd is None:
+            log("[*] 앞 회차가 아직 돌고 있어 이번 회차는 건너뜁니다.")
+            yield False
+            return
+    try:
+        os.write(fd, str(os.getpid()).encode())
+        yield True
+    finally:
+        os.close(fd)
+        try:
+            LOCK_FILE.unlink()
+        except OSError:
+            pass
+
+
 def main():
+    with run_lock() as acquired:
+        if not acquired:
+            return
+        _run_once()
+
+
+def _run_once():
     client = get_client()
     if client is None:
         log("[-] REDIS_URL이 없거나 연결할 수 없어 건너뜁니다.")

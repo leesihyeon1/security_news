@@ -51,7 +51,13 @@ KQL_TABLES = {
     "EmailEvents", "EmailUrlInfo", "UrlClickEvents", "IdentityLogonEvents",
 }
 
-PLATFORMS = ("mde_kql", "urlscan", "virustotal")
+PLATFORMS = ("mde_kql", "urlscan", "virustotal", "google_dork")
+
+# dork에서 근거를 확인할 필요가 없는 연산자들.
+DORK_OPERATORS = {
+    "intitle", "inurl", "intext", "filetype", "site", "ext", "allintitle",
+    "allinurl", "related", "cache", "download", "index", "of",
+}
 
 # 근거 확인 대상만 남기기 위해, 문법 토큰은 리터럴로 보지 않는다.
 QUERY_KEYWORDS = {
@@ -63,6 +69,7 @@ QUERY_KEYWORDS = {
     "page", "task", "filename", "hash", "domain", "ip", "asn", "server", "url",
     "title", "time", "behaviour_files", "behaviour_processes", "behaviour_registry",
     "behaviour_network", "content", "imphash", "vhash", "entity", "type",
+    "intitle", "inurl", "intext", "filetype", "ext", "allintitle", "allinurl",
 }
 # 근거 확인에서 빼는 흔한 시스템 이름 — 본문에 없어도 쓸 수 있어야 하는 것들이다.
 COMMON_TOKENS = {
@@ -161,6 +168,7 @@ NESTED_FIELD_RE = re.compile("(behaviour_" + BS + "w+|content|entity)"
                               + BS + "s*:" + BS + "s*[a-z_]+" + BS + "s*:", re.I)
 TIME_FILTER_RE = re.compile("^\|?\s*where\s+\w*[Tt]ime\w*\s*[<>=!]+\s*ago\(", re.I)
 TIME_FILTER_INLINE_RE = re.compile("\|\s*where\s+\w*[Tt]ime\w*\s*[<>=!]+\s*ago\([^)]*\)\s*", re.I)
+DORK_RE = re.compile("(?:" + "|".join(sorted(DORK_OPERATORS)) + ")" + BS + "s*:", re.I)
 VT_FIELD_RE = re.compile("(behaviour_" + BS + "w+|content|imphash|vhash|entity)" + BS + "s*:")
 
 
@@ -191,6 +199,13 @@ PLATFORM_SPEC = """
 3) virustotal — VT Intelligence 검색
    쓸 수 있는 필드: behaviour_files, behaviour_processes, behaviour_registry,
    behaviour_network, content, imphash, vhash, entity:file
+
+4) google_dork — 검색 연산자로 가짜 배포 페이지를 찾는다
+   쓸 수 있는 연산자: intitle:, inurl:, intext:, filetype:, site:, -site:, "따옴표"
+   가짜 설치 파일·트로이목마화된 도구가 어디에 더 뿌려져 있는지 발굴하는 용도다.
+   정상 배포처는 -site:로 빼야 결과가 쓸모 있다.
+   예) intitle:"Download" intext:"설치 파일 이름" -site:정상배포처.com
+   예) inurl:download "제품명" filetype:exe -site:벤더도메인.com
 """
 
 TASK_SPEC = """
@@ -234,7 +249,28 @@ TASK_SPEC = """
 """
 
 
-def build_prompt(title, analysis, body, iocs):
+def _objective_block(targets):
+    """목표를 프롬프트에 넣는다.
+
+    목표를 안 주면 본문에 눈에 띄는 값 위주로 패턴이 나와서, 목표에 적힌 요소가
+    산출물 없이 남는다(실측: TerminalFix 목표 4요소 중 "스테가노그래피 PNG 다운로드"만
+    탐지 쿼리가 없었다 — 나머지 셋은 패턴으로 나왔다).
+    """
+    targets = targets or {}
+    objective = targets.get("objective") or ""
+    if not objective:
+        return ""
+    questions = targets.get("questions") or []
+    return (
+        "\n\n[이 건의 대응 목표]\n" + objective
+        + ("\n\n[확인해야 할 질문]\n" + "\n".join("- " + q for q in questions[:6])
+           if questions else "")
+        + "\n\n목표에 적힌 요소마다 최소 하나씩 쿼리가 나오게 하라. 목표에 있는데 "
+          "탐지 수단이 없으면 그 요소는 대응에서 빠진다. 본문에 눈에 띄는 값만 쫓지 마라."
+    )
+
+
+def build_prompt(title, analysis, body, iocs, targets=None):
     ioc_lines = "\n".join(
         "- {}: {}".format(item.get("type") or "?", item.get("value") or "")
         for item in (iocs or [])[:40])
@@ -245,6 +281,7 @@ def build_prompt(title, analysis, body, iocs):
         + "\n\n[분석 본문]\n" + (analysis or "")[:6000]
         + ("\n\n[원문에서 뽑은 지표]\n" + ioc_lines if ioc_lines else "")
         + ("\n\n[원문 발췌]\n" + (body or "")[:6000] if body else "")
+        + _objective_block(targets)
         + "\n\nJSON 배열만 출력하라."
     )
 
@@ -494,6 +531,23 @@ def validate_kql(candidate):
     return True, "", {}
 
 
+def validate_dork(candidate):
+    """검색 연산자 쿼리. 실행해 볼 수 없으니 형식만 본다.
+
+    연산자가 하나도 없으면 그냥 검색어라 dork가 아니다 — 그건 웹 검색 트랙이 할 일이고,
+    여기서 내보내면 "탐지 패턴"이라는 이름값을 못 한다.
+    """
+    query = (candidate.get("query") or "").strip()
+    if not query:
+        return False, "쿼리 없음", {}
+    if not DORK_RE.search(query):
+        return False, "검색 연산자가 없음(그냥 검색어)", {}
+    # 정상 배포처를 빼지 않으면 결과가 벤더 공식 페이지로 가득 찬다.
+    if "-site:" not in query.replace(" ", ""):
+        return True, "정상 배포처를 -site:로 빼지 않아 공식 페이지가 섞일 수 있습니다", {}
+    return True, "", {}
+
+
 def validate_vt(candidate):
     """VT Intelligence 검색은 유료 키가 필요해 조회로 확인할 수 없다 — 형식만 본다."""
     query = (candidate.get("query") or "").strip()
@@ -509,6 +563,8 @@ def validate_vt(candidate):
 
 
 def _query_url(platform, query):
+    if platform == "google_dork":
+        return GOOGLE_SEARCH_UI_URL.format(urllib.parse.quote(query, safe=""))
     if platform == "urlscan":
         return SEARCH_UI_URL.format(urllib.parse.quote(query, safe=""))
     if platform == "virustotal":
@@ -520,14 +576,18 @@ PLATFORM_LABEL = {
     "mde_kql": "MDE 고급 헌팅",
     "urlscan": "urlscan.io",
     "virustotal": "VirusTotal Intelligence",
+    "google_dork": "검색 연산자",
 }
 LINK_LABEL = {
     "urlscan": "urlscan에서 열기",
     "virustotal": "VT에서 열기",
+    "google_dork": "구글에서 열기",
 }
+GOOGLE_SEARCH_UI_URL = "https://www.google.com/search?q={}"
 
 
-def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240):
+def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240,
+               targets=None):
     """LLM으로 패턴을 만들고 검증해 통과한 것만 돌려준다.
 
     반환: {"patterns": [...], "steps": [...], "rejected": [...]}
@@ -535,7 +595,7 @@ def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240):
     패턴과 나란히 보여 준다.
     """
     steps, rejected, out = [], [], []
-    prompt = build_prompt(title, analysis, body, iocs)
+    prompt = build_prompt(title, analysis, body, iocs, targets)
     raw = common_utils.llm_generate(prompt, timeout=timeout)
     candidates = parse_candidates(raw)
     if not candidates:
@@ -567,6 +627,8 @@ def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240):
             ok, reason, facts = validate_urlscan(candidate, api_key=api_key)
         elif platform == "mde_kql":
             ok, reason, facts = validate_kql(candidate)
+        elif platform == "google_dork":
+            ok, reason, facts = validate_dork(candidate)
         else:
             ok, reason, facts = validate_vt(candidate)
         if not ok:
@@ -584,6 +646,9 @@ def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240):
             observed = "실행 검증은 불가 — 본문 근거와 테이블·문법만 확인했습니다. " + observed
         elif platform == "virustotal":
             observed = "VT Intelligence 검색은 유료 키가 필요합니다(문법만 확인). " + observed
+        elif platform == "google_dork":
+            observed = ("검색 결과 수는 확인하지 않았습니다(형식과 본문 근거만 확인) — "
+                        "링크를 눌러 직접 결과를 보십시오. " + observed)
         # 기사에 없던 값을 보탠 경우 반드시 밝힌다 — 어디까지가 이 기사의 근거인지
         # 구분되지 않으면 쿼리 결과를 잘못 해석한다.
         if note:
