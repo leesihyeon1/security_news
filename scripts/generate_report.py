@@ -20,6 +20,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timedelta
 
+import campaign_radar
 import common_utils
 import publish_web_dashboard
 
@@ -49,6 +50,12 @@ MAX_ITEMS_PER_SOURCE_IN_PROMPT = 15
 MAX_TOP_ITEMS_IN_REPORT = 10
 MAX_CVE_CARDS = 5
 MAX_ITEMS_PER_PIR = 5
+
+# 주간 리포트 전용 "전주 대비 급증" 집계 — 표본이 너무 적은 항목의 등락은 노이즈이므로
+# 이번 주 건수가 이 값 미만이면 아예 비교 대상에서 제외한다(예: 1건->3건을 "3배 증가"로
+# 보여주지 않음).
+MIN_WEEKLY_TREND_COUNT = 3
+MAX_WEEKLY_TREND_ITEMS = 5
 
 # CVE 카드 필드별 길이 상한 — 소비처마다 예산이 달라 값이 다르다:
 # 요약·영향은 전 채널 공통(카드 생성 시 한 번만 자르면 됨), 조치문은 LLM
@@ -115,7 +122,11 @@ SEARCH_INTEREST_WINDOW_DAYS = 7  # 이보다 오래된 검색어는 "요즘 관�
 SEARCH_INTEREST_MIN_SEARCHES = 2  # 한 번만 입력된 검색어는 우연한 호기심일 수 있어 제외
 
 REPORT_CUTOFF_HOUR_KST = int(os.environ.get("REPORT_CUTOFF_HOUR_KST", "9"))
+CVE_LABEL_MAX_SHOWN = 3   # 카드 제목에 늘어놓을 CVE 개수
 KST_OFFSET = timedelta(hours=9)
+# 수집은 구간 안이지만 발행일이 이보다 더 오래된 기사는 리포트에서 뺀다.
+# (아카이브를 통째로 들고 있는 피드가 옛 글을 새 글로 흘려보내는 것을 막는다)
+PUBLISHED_GRACE_DAYS = 2
 
 
 
@@ -201,7 +212,27 @@ def load_events(since):
     append-only 로그를 끝에서부터 거슬러 읽다가 since보다 오래된 이벤트를 만나면
     멈춘다 — 로그 전체 크기와 무관하게 이번 집계 기간만큼만 읽는다.
     """
+    return load_events_between(since, None)
+
+
+def load_events_between(since, until):
+    """load_events(since)와 같은 방식이지만 [since, until) 구간만 남긴다.
+
+    주간 리포트의 "전주 대비" 비교처럼 과거의 특정 구간만 필요할 때 쓴다(until=None이면
+    load_events(since)와 동일). since보다 오래된 이벤트를 만나면 조기 종료하는 성질은
+    그대로 유지된다.
+
+    구간 판정은 수집 시각(fetched_at)으로 한다 — 로그가 수집순으로 쌓여 있어서 그래야
+    조기 종료가 성립한다. 다만 그것만 보면 "오늘 수집됐지만 작년에 나온 기사"가 오늘
+    리포트에 들어간다. 실측(2026-09-09): Elastic Security Labs 피드가 전체 아카이브를
+    계속 들고 있어서, 회차당 몇 건씩 옛 글이 새 글로 수집돼 일간 리포트에 2025-05까지
+    섞였다(65건). 그래서 발행일 기준으로 한 번 더 거른다.
+    """
     events = {}
+    # 발행일이 구간 시작보다 이만큼 이전이면 오늘의 뉴스로 보지 않는다. 0으로 하지
+    # 않는 이유는 피드가 늦게 싣거나 수집이 밀리는 경우가 정상적으로 있기 때문이다.
+    published_floor = since - timedelta(days=PUBLISHED_GRACE_DAYS)
+    dropped = 0
 
     for path, legacy in ((common_utils.EVENTS_FILE, False), (LEGACY_BOANNEWS_EVENTS_FILE, True)):
         if not path.exists():
@@ -222,13 +253,69 @@ def load_events(since):
                 continue
             if fetched < since:
                 break  # 이 지점부터는 전부 더 오래된 이벤트 — 조기 종료
+            if until is not None and fetched >= until:
+                continue  # 구간 상한 이후 이벤트는 건너뛰되, 더 오래된 것을 계속 찾는다
+            # 발행일을 못 읽는 항목은 버리지 않는다 — 피드마다 형식이 달라서 판단
+            # 근거가 없는 것과 오래된 것을 구별할 수 없다.
+            # 취약점·어드바이저리 피드도 거르지 않는다. 거기서 published_at은 "기사가
+            # 나온 날"이 아니라 "CVE가 발행된 날"이고, NVD가 며칠 지나 올리는 일이
+            # 흔하다(실측: 09-09에 들어온 09-04 발행 CVE 6건). 뉴스와 달리 늦게 들어와도
+            # 대응 가치가 그대로여서, 오래됐다는 이유로 빼면 진짜 취약점을 놓친다.
+            published = parse_iso(event.get("published_at"))
+            if (published is not None and published < published_floor
+                    and event.get("source") not in common_utils.NON_NEWS_SOURCES):
+                dropped += 1
+                continue
             recent.append(event)
 
         for event in reversed(recent):  # 시간순으로 되돌려 기존 dedup(첫 등장 우선) 순서 유지
             key = "{}|{}".format(event.get("source"), event.get("url") or event.get("id"))
             events.setdefault(key, event)
 
+    if dropped:
+        print("[*] 발행일이 {} 이전인 항목 {}건 제외(수집은 구간 안이지만 옛 기사)".format(
+            published_floor.strftime("%Y-%m-%d"), dropped))
     return list(events.values())
+
+
+def _entity_counters(events):
+    """threat_actor/malware_family/ATT&CK 기법/자산매칭 이름별 등장 횟수.
+
+    build_stats()와 compute_weekly_trends()(주간 리포트의 전주 대비 비교)가 같은
+    집계 로직을 공유하기 위해 분리했다."""
+    actor_counter = Counter()
+    malware_counter = Counter()
+    technique_counter = Counter()
+    asset_counter = Counter()
+    for event in events:
+        if event.get("threat_actor"):
+            actor_counter[event["threat_actor"]] += 1
+        if event.get("malware_family"):
+            malware_counter[event["malware_family"]] += 1
+        for technique in event.get("attack_techniques") or []:
+            technique_counter[technique] += 1
+        # 별칭을 그대로 세면 제품 하나가 별칭 수만큼 부풀려진다 — 대표명으로 접어서 센다.
+        for term in common_utils.canonical_assets(event.get("matched_assets")):
+            asset_counter[term] += 1
+    return actor_counter, malware_counter, technique_counter, asset_counter
+
+
+def is_actionable(event):
+    """"우리가 실제로 봐야 하는 건"인지 — 볼륨 지표와 대응 지표를 구분하기 위한 기준.
+
+    NVD는 CVSS>=7.0만 받아도 하루 200건대가 들어온다(실측 2026-09-03: 그날 발행
+    353건 중 211건이 기준 통과). CVSS 4.0이 같은 취약점에 v3.1보다 높은 점수를
+    주면서 임계값이 선별 기능을 잃었기 때문이다. 그래서 "취약점 295건" 같은
+    카테고리 집계는 매일 비슷한 숫자만 찍혀 판단 근거가 못 된다.
+    여기서는 자산·악용·KEV처럼 대응 여부를 가르는 신호가 있는 건만 센다.
+    """
+    if event_level(event) in ("P1", "P2"):
+        return True
+    if event.get("matched_assets"):
+        return True
+    if event.get("kev"):
+        return True
+    return (event.get("exploitation_status") or "none") != "none"
 
 
 def build_stats(events):
@@ -243,28 +330,16 @@ def build_stats(events):
             if cve:
                 cve_counter[cve] += 1
 
-    asset_counter = Counter()
-    for event in asset_hits:
-        for term in event["matched_assets"]:
-            asset_counter[term] += 1
+    actor_counter, malware_counter, technique_counter, asset_counter = _entity_counters(events)
 
     by_category = Counter(
         event.get("category") or "미분류" for event in events
     )
     by_pir = Counter(pid for event in events for pid in event.get("pirs") or [])
 
-    actor_counter = Counter()
-    malware_counter = Counter()
-    technique_counter = Counter()
     ioc_seen = set()
     iocs = []
     for event in events:
-        if event.get("threat_actor"):
-            actor_counter[event["threat_actor"]] += 1
-        if event.get("malware_family"):
-            malware_counter[event["malware_family"]] += 1
-        for technique in event.get("attack_techniques") or []:
-            technique_counter[technique] += 1
         for ioc in event.get("iocs") or []:
             # 신규 형식은 {"type", "value"} — 구형 문자열도 방어적으로 수용
             if not isinstance(ioc, dict):
@@ -290,6 +365,20 @@ def build_stats(events):
             for event in events
             if event_level(event) not in ("P1", "P2")
         ),
+        "actionable": [event for event in events if is_actionable(event)],
+        # 대응 대상을 카테고리별로 센다. 비교 대상 지표와 모수를 맞춰야 나란히 놓고
+        # 읽을 수 있으므로 두 벌을 만든다 — by_category(전체)용과 info_by_category
+        # (P1/P2 제외, 대시보드 타일이 P1·P2 타일과 중복 계산되지 않게)용.
+        "actionable_by_category": Counter(
+            event.get("category") or "미분류"
+            for event in events
+            if is_actionable(event)
+        ),
+        "actionable_info_by_category": Counter(
+            event.get("category") or "미분류"
+            for event in events
+            if event_level(event) not in ("P1", "P2") and is_actionable(event)
+        ),
         "top_cves": cve_counter.most_common(10),
         "top_assets": asset_counter.most_common(10),
         "top_actors": actor_counter.most_common(10),
@@ -299,19 +388,84 @@ def build_stats(events):
     }
 
 
+def compute_weekly_trends(events, previous_events,
+                           min_count=MIN_WEEKLY_TREND_COUNT, max_items=MAX_WEEKLY_TREND_ITEMS):
+    """이번 주 vs 전주 위협 행위자/악성코드/ATT&CK 기법/자산매칭 언급 건수를 비교해
+    급증(또는 신규 등장)한 항목을 뽑는다 — 주간 리포트 전용.
+
+    표본이 너무 적은 항목은 등락을 봐도 의미가 없으므로(1건->3건을 "3배 증가"라 부르면
+    오해만 부름) 이번 주 건수가 min_count 미만인 항목은 아예 비교하지 않는다.
+    """
+    curr_counters = _entity_counters(events)
+    prev_counters = _entity_counters(previous_events)
+
+    def surges(curr_counter, prev_counter):
+        result = []
+        for name, count in curr_counter.items():
+            if count < min_count:
+                continue
+            previous = prev_counter.get(name, 0)
+            delta = count - previous
+            if delta <= 0:
+                continue
+            result.append({"name": name, "count": count, "previous": previous, "delta": delta})
+        result.sort(key=lambda item: item["delta"], reverse=True)
+        return result[:max_items]
+
+    keys = ("actors", "malware", "techniques", "assets")
+    result = {key: surges(curr, prev) for key, curr, prev in zip(keys, curr_counters, prev_counters)}
+    result["categories"] = _category_share_surges(events, previous_events, min_count, max_items)
+    return result
+
+
+def _category_share_surges(events, previous_events, min_count, max_items):
+    """카테고리별 비중(전체 대비 %) 변화 — raw count가 아니라 비중으로 비교해야 피드
+    추가/삭제나 수집량 변동 같은 인프라 변화가 "위협 증가"로 착시되는 걸 막는다.
+    미분류(카테고리 없는 이벤트, 예: NVD 등 API 소스)는 분모·분자 모두에서 제외한다."""
+    curr_cat = Counter(event.get("category") for event in events if event.get("category"))
+    prev_cat = Counter(event.get("category") for event in previous_events if event.get("category"))
+    curr_total = sum(curr_cat.values())
+    prev_total = sum(prev_cat.values())
+    if not curr_total:
+        return []
+
+    result = []
+    for name, count in curr_cat.items():
+        if count < min_count:
+            continue
+        curr_share = count / curr_total * 100
+        prev_count = prev_cat.get(name, 0)
+        prev_share = (prev_count / prev_total * 100) if prev_total else 0.0
+        delta = curr_share - prev_share
+        if delta <= 0:
+            continue
+        result.append({
+            "name": name, "count": count, "share": curr_share,
+            "previous_share": prev_share, "delta": delta,
+        })
+    result.sort(key=lambda item: item["delta"], reverse=True)
+    return result[:max_items]
+
+
 def event_sort_key(event):
-    """P1 > P2 > 자산 매칭 > KEV > CVSS 점수 순 우선순위 키"""
+    """P1 > P2 > 자산 매칭 > 중요도 점수 순 우선순위 키.
+
+    이전엔 3·4번째 기준이 KEV 소스 여부·CVSS 점수였는데, top_items()의 대상
+    범위에서 NON_NEWS_SOURCES(cisa_kev 포함)를 이미 제외하고 뉴스 소스는 score를
+    안 채워서 둘 다 죽은 기준이었다(항상 동일값이라 동률을 못 갈랐음). 이미 계산돼
+    있는 importance.score(악용 정황·심각도·관련성·PIR 등 종합 0~100점)로 대체해
+    같은 등급·자산매칭 안에서도 실질적인 우선순위가 매겨지도록 한다.
+    """
     level_rank = {"P1": 0, "P2": 1}.get(event_level(event), 2)
     return (
         level_rank,
         0 if event.get("matched_assets") else 1,
-        0 if event.get("source") == "cisa_kev" else 1,
-        -event_score(event),
+        -importance_score(event),
     )
 
 
 def top_items(events, limit=MAX_TOP_ITEMS_IN_REPORT):
-    """P1 > P2 > 자산 매칭 > KEV > CVSS 점수 순으로 우선순위 정렬"""
+    """P1 > P2 > 자산 매칭 > 중요도 점수 순으로 우선순위 정렬"""
     return sorted(events, key=event_sort_key)[:limit]
 
 
@@ -669,9 +823,21 @@ def build_cve_card(cve_label, cve_ids, group, sources):
             remediation = event["remediation"]
             break
 
-    # 요약은 한국어 맥락(뉴스·ASEC의 LLM 요약) 우선
+    # 요약은 한국어 맥락(뉴스·ASEC의 LLM 요약) 우선, 그 다음이 다른 뉴스, 기계 피드는
+    # 맨 뒤다. 예전에는 한국어 소스만 앞으로 빼고 나머지는 순서가 없었는데, 카드 하나에
+    # 여러 CVE가 묶이면서 대표 요약이 엉뚱해졌다(실측: 패치 화요일 101개 CVE를 묶은
+    # 카드의 요약이 NVD의 Skype for Business 설명 한 줄이었다 — 그 카드가 무엇에 대한
+    # 것인지 알 수 없다). 기계 피드의 설명은 CVE 하나만 서술하므로 묶음을 대표할 수 없다.
+    def _summary_rank(event):
+        source = event.get("source")
+        if source in ("boannews", "asec", "kisa", "dailysecu"):
+            return 0
+        if source in common_utils.NON_NEWS_SOURCES:
+            return 2
+        return 1
+
     summary = ""
-    for event in sorted(group, key=lambda e: 0 if e.get("source") in ("boannews", "asec", "kisa") else 1):
+    for event in sorted(group, key=_summary_rank):
         summary = (event.get("ai_summary") or event.get("summary") or "").strip()
         if summary:
             break
@@ -695,7 +861,7 @@ def build_cve_card(cve_label, cve_ids, group, sources):
         "remediation": remediation,
         "summary": summary[:CARD_SUMMARY_CHARS],
         "products": _union(group, "affected_products"),
-        "assets": _union(group, "matched_assets"),
+        "assets": common_utils.canonical_assets(_union(group, "matched_assets")),
         "actors": [event["threat_actor"] for event in group if event.get("threat_actor")],
         "items": [
             (event.get("source"), event.get("title") or "", event.get("url") or "", event.get("id"))
@@ -705,11 +871,237 @@ def build_cve_card(cve_label, cve_ids, group, sources):
     }
 
 
+# 같은 사건인데 카드가 갈리는 것을 막는 2차 병합 기준. 1차 묶음(이벤트 집합 완전
+# 일치)은 너무 엄격하다 — CVE마다 NVD 항목이 따로 있어서, 같은 패치 묶음을 다룬
+# CVE들도 집합이 절대 같아지지 않는다(실측 2026-09-10: 9월 패치 화요일이 TOP 3의
+# 1·2번을 동시에 차지해, 실질 위협 3건 중 2건이 같은 사건이었다).
+#
+# 그래서 "어느 기사들이 함께 다뤘는가"로 다시 본다. NVD·KEV 같은 기계 피드는 CVE
+# 단위로 항상 갈라지므로 세지 않고, 사람이 쓴 기사만 센다. 두 묶음이 공유하는
+# 기사가 작은 쪽의 이 비율을 넘으면 같은 사건으로 본다.
+STORY_MERGE_OVERLAP = 0.6
+# 기사 한 건이 이만큼 CVE를 달고 있으면 릴리스 정리 기사로 본다.
+ROUNDUP_MIN_CVES = 5
+
+
+def _news_event_ids(group):
+    """묶음에서 사람이 쓴 기사의 id만. 기계 피드(NVD·KEV·PSIRT)는 뺀다."""
+    return {event.get("id") for event in group
+            if event.get("source") not in common_utils.NON_NEWS_SOURCES}
+
+
+def _roundup_event_ids(group):
+    """묶음 안에서 "한 릴리스를 통째로 정리한 기사"의 id.
+
+    실측 분포(2026-09-08~09-10): 뉴스 기사 204건 중 162건이 CVE를 하나도 안 달고,
+    다는 것은 보통 1~4개다. 그보다 많이 다는 기사는 벤더 한 곳의 패치 묶음을 정리한
+    것이다(Talos 112개, KISA 83개, CrowdStrike 36개 — 전부 9월 패치 화요일 정리).
+    그런 기사 하나가 걸친 CVE들은 같은 사건이다.
+    """
+    return {event.get("id") for event in group
+            if event.get("source") not in common_utils.NON_NEWS_SOURCES
+            and len(event.get("cves") or []) >= ROUNDUP_MIN_CVES}
+
+
+def merge_same_story(clusters):
+    """같은 사건을 다룬 CVE 묶음끼리 하나로 합친다.
+
+    두 가지 신호를 쓴다.
+      (1) 같은 정리 기사에 함께 실렸다 — 한 기사가 CVE를 여러 개 달고 있으면 그건
+          벤더 한 곳의 패치 묶음이고, 거기 걸린 CVE들은 한 사건이다.
+      (2) 보도한 기사 목록이 대부분 겹친다 — 정리 기사가 없어도, 같은 기사들이 같이
+          다뤘으면 같은 사건으로 본다.
+
+    합치는 쪽이 안전한 이유: 갈라두면 TOP 3 자리를 한 사건이 두세 개 먹어서 다른
+    위협이 밀려난다(실측 2026-09-08: 상위 4장 중 3장이 전부 9월 패치 화요일이었다).
+    반대 방향의 위험(무관한 CVE가 한 카드에 섞임)은 기계 피드(NVD·KEV)를 신호에서
+    빼고 사람이 쓴 기사만 보기 때문에 크지 않다 — NVD는 CVE마다 항목이 따로라
+    어떤 묶음과도 겹치지 않는다.
+    """
+    items = [dict(cluster,
+                  news=_news_event_ids(cluster["group"]),
+                  roundups=_roundup_event_ids(cluster["group"]))
+             for cluster in clusters]
+
+    parent = list(range(len(items)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)   # 앞선 묶음이 대표가 되게 해 순서를 지킨다
+
+    # (1) 정리 기사 하나가 걸친 묶음은 전부 한 사건
+    by_roundup = {}
+    for index, item in enumerate(items):
+        for event_id in item["roundups"]:
+            by_roundup.setdefault(event_id, []).append(index)
+    for indexes in by_roundup.values():
+        for other in indexes[1:]:
+            union(indexes[0], other)
+
+    # (2) 보도 기사 목록이 대부분 겹치면 한 사건
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if find(i) == find(j):
+                continue
+            shared = items[i]["news"] & items[j]["news"]
+            if not shared:
+                continue
+            smaller = min(len(items[i]["news"]), len(items[j]["news"]))
+            if smaller and len(shared) / smaller >= STORY_MERGE_OVERLAP:
+                union(i, j)
+
+    merged = {}
+    order = []
+    for index, item in enumerate(items):
+        root = find(index)
+        if root not in merged:
+            merged[root] = {"cves": list(item["cves"]), "group": list(item["group"]),
+                            "sources": list(item["sources"])}
+            order.append(root)
+            continue
+        target = merged[root]
+        seen = {event.get("id") for event in target["group"]}
+        target["group"].extend(event for event in item["group"]
+                               if event.get("id") not in seen)
+        target["cves"].extend(c for c in item["cves"] if c not in target["cves"])
+        target["sources"] = sorted(set(target["sources"]) | set(item["sources"]))
+    return [merged[root] for root in order]
+
+
+def cve_label(cve_ids, max_shown=CVE_LABEL_MAX_SHOWN):
+    """카드 제목에 쓸 CVE 표기. 수백 건이 합쳐질 수 있어 앞의 몇 개만 보인다."""
+    ids = sorted(cve_ids)
+    if len(ids) <= max_shown:
+        return " / ".join(ids)
+    return "{} 외 {}건".format(" / ".join(ids[:max_shown]), len(ids) - max_shown)
+
+
+def correlate_by_entity(events, covered_event_ids):
+    """CVE가 없어 CVE 카드로 묶이지 못한 사건을 위협 행위자·악성코드명으로 묶는다.
+
+    공격 캠페인·침해사고·정보유출은 CVE가 없는 경우가 대부분이라(실측: 알림의 55%)
+    correlate_by_cve()의 그물에 걸리지 않고 기사 목록에 흩어진 채 남는다. 정작
+    "핵심 이슈"라 부를 만한 건 이쪽인데도 카드가 안 만들어진다.
+
+    묶는 기준은 CVE와 동일하게 "복수 소스가 같은 대상을 다뤘는가"다. 다만 키가
+    문자열이라 표기 흔들림이 있어 normalize_threat_actor()로 공식 명칭에 맞춘다.
+    제목 유사도는 여기서 쓰지 않는다 — 임계값에 따라 무관한 사건이 붙을 위험이 있어,
+    정확 일치로 잡히는 것만 먼저 처리한다.
+
+    covered_event_ids: 이미 CVE 카드에 들어간 이벤트. 같은 기사가 카드 두 개에
+    중복 노출되지 않도록 제외한다.
+    """
+    groups = {}
+    for event in events:
+        if event.get("id") in covered_event_ids:
+            continue
+        for field, kind in (("threat_actor", "actor"), ("malware_family", "malware")):
+            raw = common_utils.clean_text(event.get(field))
+            if not raw:
+                continue
+            name = common_utils.normalize_threat_actor(raw) if field == "threat_actor" else raw
+            groups.setdefault((kind, name.lower()), {"label": name, "events": []})["events"].append(event)
+
+    cards = []
+    used_event_ids = set()
+    # 근거 소스가 많은 묶음부터 확정해, 같은 기사가 행위자·악성코드 양쪽 카드에
+    # 중복으로 들어가지 않게 한다.
+    ordered = sorted(
+        groups.values(),
+        key=lambda g: -len({event.get("source") for event in g["events"]}),
+    )
+    for group in ordered:
+        remaining = [event for event in group["events"] if event.get("id") not in used_event_ids]
+        sources = sorted({event.get("source") or "unknown" for event in remaining})
+        if len(sources) < 2:
+            continue
+        card = build_cve_card(group["label"], [], remaining, sources)
+        used_event_ids |= card["event_ids"]
+        cards.append(card)
+    return cards
+
+
+# 제목 토큰 유사도로 묶을 임계값. find_related_events()의 0.5보다 낮은 이유는
+# 목적이 달라서다 — 거기는 "같은 사건인지" 판정해 알림을 억제하므로 오병합 비용이
+# 크지만, 여기는 카드를 만들 뿐이라 덜 치명적이고 다른 소스여야 한다는 조건이 붙는다.
+# 실측(2026-08 주간): 0.30에서 미커버 대응대상 57건이 짝을 찾아 커버율 26%→40%.
+TITLE_CLUSTER_THRESHOLD = 0.30
+
+
+def correlate_by_title(events, covered_event_ids):
+    """CVE도 행위자명도 없는 사건을 제목 유사도로 묶는다.
+
+    공급망 공격·인프라 공격(BGP 하이재킹 등)·국내 침해사고는 CVE와 행위자명이 모두
+    비어 있는 경우가 많아 앞의 두 단계 그물을 다 빠져나간다. 실제 사례:
+      [securityweek]  Malicious Virtualizor Update Served via BGP Hijacking
+      [thehackernews] BGP Hijack Delivers Malicious Virtualizor Update That ...
+    둘 다 cves=[], threat_actor='', malware_family=''이라 정확 일치로는 못 묶는다.
+
+    같은 소스끼리는 묶지 않는다 — 한 매체의 후속 보도는 교차 확인이 아니고,
+    연재물이 제목만 비슷해 묶이는 오병합의 주범이기도 하다.
+
+    카탈로그형 소스(NON_NEWS_SOURCES)는 아예 대상에서 뺀다. 이쪽 제목은 "Remote Code
+    Execution", "Denial of Service", "stack buffer overflow" 같은 정형 문구라 내용이
+    전혀 달라도 토큰이 크게 겹쳐 오병합이 난다(실측: Azure Cosmos DB RCE와 Entra ID
+    OAuth 피싱이 한 카드로 묶였다). 이들은 CVE ID라는 정확한 키가 이미 있어
+    correlate_by_cve()가 제대로 묶으므로, 제목으로 또 묶을 이유가 없다.
+    """
+    candidates = [
+        event for event in events
+        if event.get("id") not in covered_event_ids
+        and (event.get("source") or "") not in common_utils.NON_NEWS_SOURCES
+    ]
+    token_cache = {id(event): common_utils.title_tokens(event.get("title")) for event in candidates}
+
+    groups = []
+    for event in candidates:
+        tokens = token_cache[id(event)]
+        if not tokens:
+            continue
+        placed = False
+        for group in groups:
+            if not group["tokens"] or not tokens:
+                continue
+            overlap = len(tokens & group["tokens"]) / len(tokens | group["tokens"])
+            if overlap >= TITLE_CLUSTER_THRESHOLD:
+                group["events"].append(event)
+                group["tokens"] |= tokens
+                placed = True
+                break
+        if not placed:
+            groups.append({"events": [event], "tokens": set(tokens), "label": event.get("title") or ""})
+
+    cards = []
+    for group in groups:
+        sources = sorted({event.get("source") or "unknown" for event in group["events"]})
+        if len(sources) < 2:
+            continue
+        # 국내 매체 두 곳이 같은 보도자료를 받아쓰면 제목이 거의 같아 반드시 묶이는데,
+        # 제품 출시·행사·부고 같은 건 "복수 소스가 다뤘다"는 사실이 중요도를 뜻하지
+        # 않는다(실측: 이 단계 카드의 40%가 그런 묶음이었다). 대응 신호가 있는 기사가
+        # 하나도 없으면 카드로 만들지 않는다 — 리포트 집계와 같은 is_actionable 기준.
+        if not any(is_actionable(event) for event in group["events"]):
+            continue
+        cards.append(build_cve_card(group["label"][:80], [], group["events"], sources))
+    return cards
+
+
 def correlate_by_cve(events):
     """이벤트를 CVE 기준으로 묶어, 복수 소스(≥2)에 동시 등장한 CVE 카드 목록을 반환.
 
     복수 소스 동시 등장 자체가 가장 강한 중요도 신호다:
     NVD 단독 = 배경 소음, +KEV = 실제 악용, +국내 뉴스·ASEC = 국내에서 문제되는 위협.
+
+    예외로 CISA KEV는 단독 등장이어도 카드를 만든다 — "미 연방기관이 실제 악용을
+    공식 확인"이라는 신호 자체가 다른 매체의 corroboration보다도 강해서, 그날
+    다른 소스가 안 다뤘다는 이유로 TOP 3·총평에서 통째로 안 보이면 안 된다.
 
     완전히 같은 이벤트 집합(동일한 기사들이 여러 CVE를 함께 보도)에 걸린 CVE는
     같은 취약점 체인·공지의 일부이므로 카드 하나로 합쳐 반복 노출을 없앤다.
@@ -722,24 +1114,38 @@ def correlate_by_cve(events):
     clusters = {}
     for cve, group in groups.items():
         sources = sorted({event.get("source") or "unknown" for event in group})
-        if len(sources) < 2:
+        if len(sources) < 2 and "cisa_kev" not in sources:
             continue
         key = frozenset(event.get("id") for event in group)
         cluster = clusters.setdefault(key, {"cves": [], "group": group, "sources": sources})
         cluster["cves"].append(cve)
 
     cards = []
-    for cluster in clusters.values():
+    covered_event_ids = set()
+    for cluster in merge_same_story(list(clusters.values())):
         cve_ids = sorted(cluster["cves"])
-        cve_label = " / ".join(cve_ids)
-        cards.append(build_cve_card(cve_label, cve_ids, cluster["group"], cluster["sources"]))
+        card = build_cve_card(cve_label(cve_ids), cve_ids, cluster["group"], cluster["sources"])
+        covered_event_ids |= card["event_ids"]
+        cards.append(card)
 
+    entity_cards = correlate_by_entity(events, covered_event_ids)
+    for card in entity_cards:
+        covered_event_ids |= card["event_ids"]
+    cards.extend(entity_cards)
+    cards.extend(correlate_by_title(events, covered_event_ids))
+
+    # 순서 기준. KEV 등재와 조치 기한을 소스 개수보다 위에 둔다 — 소스 개수는 "언론이
+    # 얼마나 다뤘나"이고 KEV·기한은 "언제까지 조치해야 하나"다. 앞의 것을 위에 두면
+    # 기한이 걸린 항목이 밀린다(실측 2026-09-10: CISA가 09-12까지 패치를 의무화한
+    # Citrix NetScaler 인증 우회가, KEV 단독 등재라 소스가 1개뿐이어서 일반 뉴스보다
+    # 아래인 4위였다 — TOP 3에서 빠졌다).
     level_rank = {"P1": 0, "P2": 1, "": 2}
     cards.sort(
         key=lambda card: (
             level_rank.get(card["level"], 2),
-            -len(card["sources"]),
             0 if card["kev"] else 1,
+            0 if card["due_date"] else 1,
+            -len(card["sources"]),
             0 if card["ransomware"] else 1,
             0 if card["assets"] else 1,
             -(card["epss"] or 0.0),
@@ -757,7 +1163,7 @@ def card_severity_bits(card, include_assets=True):
     """
     bits = []
     if card["level"]:
-        bits.append(card["level"])
+        bits.append(common_utils.level_label(card["level"]))
     if card["score"] > 0:
         bits.append("CVSS {}".format(card["score"]))
     if card["epss"] is not None:
@@ -778,6 +1184,79 @@ def card_severity_bits(card, include_assets=True):
 
 
 MAX_GITHUB_POC_CVES_PER_CARD = 3  # 병합 카드에 CVE가 여러 개면 상위 몇 개까지만 조회 (API 호출 제한)
+
+
+# 이슈 분석: 카드 하나(같은 사건을 다룬 여러 매체)를 종합한 보고서를 미리 만들어 둔다.
+#
+# 원래는 대시보드의 서버리스 함수(click-tracker/api/analyze.js)에서 클릭 시 생성했는데,
+# 그 함수가 쓰던 모델(openai/gpt-oss-120b)이 폐기(HTTP 410)되면서 남은 대체 모델이
+# 전부 Vercel 60초 상한에 걸린다(실측: gpt-oss-20b 36~61초, nemotron 84.9초).
+# 여기서는 시간 제한이 없고(timeout=300), 요약을 입력으로 쓰면 프롬프트가 작아
+# 실측 25.9초에 끝난다. 즉시성이 필요한 기능이 아니라 미리 만들어 두는 편이 낫다.
+ISSUE_ANALYSIS_MAX_CARDS = 10
+ISSUE_ANALYSIS_MIN_ITEMS = 3   # 2건짜리는 요약 두 개를 붙인 것과 차이가 없어 제외
+ISSUE_ANALYSIS_INPUT_CHARS = 600
+
+
+def ai_issue_analysis(card, events_by_id):
+    """카드의 구성 기사 요약들을 종합해 이슈 단위 보고서를 만든다. 실패 시 빈 문자열.
+
+    본문은 events.jsonl에 저장하지 않으므로(body_chars만 남는다) 기사별 LLM 요약
+    (ai_summary)을 입력으로 쓴다 — 이미 본문을 읽고 만든 결과물이라 교차 종합에는
+    충분하고, 원문을 다시 긁어오는 네트워크 비용도 없다.
+    """
+    parts = []
+    for source, title, _url, event_id in card["items"]:
+        event = events_by_id.get(event_id) or {}
+        body = (event.get("ai_summary") or "").strip() or (event.get("summary") or "").strip()
+        if not body:
+            continue
+        parts.append("[{}] {} ({})\n{}".format(
+            source_label(source), title, str(event.get("published_at") or "")[:16],
+            body[:ISSUE_ANALYSIS_INPUT_CHARS],
+        ))
+    if len(parts) < 2:
+        return ""
+
+    prompt = (
+        "당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.\n"
+        "아래는 같은 사건(이슈)을 다룬 서로 다른 매체의 보도 요약이다. 이를 종합해 "
+        "이 이슈 하나에 대한 보고서를 한국어로 작성하라.\n\n"
+        "출력 형식:\n"
+        "[핵심 요약] 이 이슈가 무엇인지 2~3문장\n"
+        "[확인된 사실] 복수 매체가 공통으로 전하는 내용만. 각 항목 끝에 근거 매체를 "
+        "(출처: A, B) 형태로 적어라. 한 곳만 전한 내용은 여기 쓰지 마라.\n"
+        "[매체별 차이] 엇갈리거나 한 곳만 보도한 내용. 수치가 다르면 양쪽을 모두 적고 "
+        "어느 매체가 무엇을 말하는지 밝혀라. 차이가 없으면 \"없음\"이라고만 써라.\n"
+        "[전개 경과] 보도 시점 순서로 무엇이 밝혀졌는지.\n"
+        "[영향 범위 및 위험도] 영향받는 대상과 규모를 요약에 있는 수치로.\n"
+        "[권장 조치] 실무자가 바로 실행할 수 있는 것 3~5개.\n\n"
+        "추측 금지: 아래 요약에 없는 사실을 만들어내지 마라. 여러 보도를 합치는 것이 "
+        "목적이지 없는 내용을 채우는 것이 아니다.\n"
+        "문체: 모든 문장을 \"~합니다\"체가 아닌 간결한 서술체로 쓰되 반말은 쓰지 마라.\n\n"
+        "이슈명: {}\n\n{}".format(card["cve"], "\n\n".join(parts))
+    )
+    return common_utils.llm_generate(prompt, timeout=300, nvidia_max_attempts=3) or ""
+
+
+def enrich_cards_with_issue_analysis(cards, events):
+    """상위 카드에만 이슈 분석을 붙인다 — 카드 하나당 LLM 1회라 개수를 제한한다."""
+    events_by_id = {event.get("id"): event for event in events}
+    done = 0
+    for card in cards:
+        if done >= ISSUE_ANALYSIS_MAX_CARDS:
+            break
+        if len(card["items"]) < ISSUE_ANALYSIS_MIN_ITEMS:
+            continue
+        print("[*] 이슈 분석 생성 중: {} (기사 {}건)".format(card["cve"][:50], len(card["items"])))
+        analysis = ai_issue_analysis(card, events_by_id)
+        if analysis:
+            card["issue_analysis"] = analysis
+            done += 1
+        else:
+            print("[-] 이슈 분석 실패(건너뜀): {}".format(card["cve"][:50]))
+    if done:
+        print("[+] 이슈 분석 {}건 생성 완료".format(done))
 
 
 def enrich_cards_with_github_poc(cards):
@@ -813,7 +1292,7 @@ def event_line(event):
     if event.get("fix_available"):
         bits.append("패치 있음")
     if event.get("matched_assets"):
-        bits.append("자산매칭: {}".format(", ".join(event["matched_assets"])))
+        bits.append("자산매칭: {}".format(", ".join(common_utils.canonical_assets(event["matched_assets"]))))
     suffix = " ({})".format("; ".join(bits)) if bits else ""
 
     # 수집 시점 LLM 요약(ai_summary)이 있으면 원문 요약보다 우선 사용
@@ -842,9 +1321,13 @@ def build_digest(period_label, stats, events, cards):
 
     if len(stats["by_category"]) > 1 or "미분류" not in stats["by_category"]:
         lines.append("")
-        lines.append("[카테고리별 건수]")
+        # 수집 볼륨만 적으면 매일 비슷한 숫자라 판단 근거가 안 된다 — 자산·악용·KEV
+        # 신호가 있어 실제로 봐야 하는 건수를 괄호로 함께 적는다.
+        lines.append("[카테고리별 건수] (괄호는 자산·악용·KEV 신호가 있는 대응 대상)")
+        actionable_by_category = stats.get("actionable_by_category") or Counter()
         for category, count in stats["by_category"].most_common():
-            lines.append("- {}: {}건".format(category, count))
+            lines.append("- {}: {}건 (대응 대상 {}건)".format(
+                category, count, actionable_by_category.get(category, 0)))
 
     if stats.get("by_pir"):
         lines.append("")
@@ -869,7 +1352,7 @@ def build_digest(period_label, stats, events, cards):
 
     lines.append("")
     lines.append("[요약 통계]")
-    lines.append("- P1 긴급(악용 중 + 자사 자산): {}건".format(len(stats["p1"])))
+    lines.append("- 긴급 대응(악용 중 + 자사 자산): {}건".format(len(stats["p1"])))
     lines.append("- P2 주의: {}건".format(len(stats["p2"])))
     lines.append("- CVSS 9.0 이상(Critical): {}건".format(len(stats["critical"])))
     lines.append("- CISA KEV(실제 악용 확인): {}건".format(len(stats["kev"])))
@@ -885,7 +1368,8 @@ def build_digest(period_label, stats, events, cards):
     if cards:
         lines.append("")
         lines.append(
-            "[크로스소스 상관관계 — 복수 소스에 동시 등장한 CVE (신뢰도 높은 핵심 위협, 우선순위 순으로 이미 정렬됨)]"
+            "[크로스소스 상관관계 — 복수 소스에 동시 등장했거나 CISA KEV(실제 악용 공식 확인)에 등재된 CVE"
+            " (신뢰도 높은 핵심 위협, 우선순위 순으로 이미 정렬됨)]"
         )
         for idx, card in enumerate(cards[:MAX_CVE_CARDS], start=1):
             parts = [
@@ -904,6 +1388,28 @@ def build_digest(period_label, stats, events, cards):
             lines.append("{}. ".format(idx) + " | ".join(parts))
             if card["summary"]:
                 lines.append("  요약: {}".format(card["summary"]))
+
+    # [핵심 위협 TOP 3]는 CVE 상관관계 카드에서만 뽑히므로, CVE가 없는 P1 뉴스
+    # (캠페인·악성코드·유출 사고 등)는 여러 소스가 다뤘어도 구조적으로 TOP 3에
+    # 못 들어간다 — [총평]이 이 사각지대를 보완할 수 있게 별도로 짚어준다.
+    covered_ids = set()
+    for card in cards:
+        covered_ids.update(card.get("event_ids") or set())
+    uncovered_p1 = [
+        event for event in events
+        if event_level(event) == "P1"
+        and event.get("id") not in covered_ids
+        and (event.get("source") or "") not in common_utils.NON_NEWS_SOURCES
+    ]
+    if uncovered_p1:
+        # 5건으로 자르기 전에 importance_score 내림차순 정렬 — 안 그러면 수집 순서(임의)
+        # 대로 잘려서, 그날 6번째 이후로 밀린 진짜 중요한 항목이 통째로 프롬프트에서
+        # 빠질 수 있다.
+        uncovered_p1 = sorted(uncovered_p1, key=importance_score, reverse=True)
+        lines.append("")
+        lines.append("[CVE 상관관계 카드에 없는 P1 긴급 항목 — 총평에서 반드시 언급할 것]")
+        for event in uncovered_p1[:5]:
+            lines.append(event_line(event))
 
     grouped = {}
     for event in events:
@@ -954,6 +1460,69 @@ def _truncate_summary_section(narrative, max_chars=SUMMARY_MAX_CHARS):
 
 ITEM_MAX_CHARS = 140
 
+# 항목 마커(1. / -)는 줄 맨 앞에 오는 게 원칙이지만, LLM이 들여쓰거나("   1. ")
+# 굵게 감싸면("**1. ") 마커가 줄 첫 칸에 없어 분리가 통째로 실패한다. 그러면 항목
+# 전부가 한 덩어리가 되고 max_chars 절단에 걸려 2·3번 항목이 사라진다
+# (2026-08-31 일간 리포트에서 [핵심 위협 TOP 3]·[권고 조치]가 각 1개만 나간 실제 원인).
+# 마커 앞의 공백과 강조 기호를 허용해 분리 자체가 깨지지 않게 한다.
+ITEM_SPLIT_RE = re.compile(r"(?m)^[ \t]*(?:\*\*)?(?=\d+\.(?:\s|$)|-(?:\s|$))")
+# 항목 첫 줄이 아닌 뒷줄에 또 번호 마커가 있으면 분리에 실패한 것이다
+# (첫 줄 마커는 그 항목 자신의 것이므로 앞에 줄바꿈이 있는 경우만 센다)
+EMBEDDED_MARKER_RE = re.compile(r"\n[ \t]*(?:\*\*)?\d+\.(?:\s|$)")
+
+
+RETRY_COVERAGE_HINT = (
+    "\n\n[재작성 지시] 방금 만든 답에서 [핵심 위협 TOP 3]에 올린 항목 중 일부가 "
+    "[권고 조치]에 빠졌다. 위협으로 올린 것에 조치가 없으면 읽는 사람이 그것을 "
+    "놓친다. 위협 항목 수와 조치 항목 수를 같게, 같은 순서로 다시 작성하라."
+)
+
+
+def _clean_narrative(narrative):
+    """LLM 응답을 리포트에 실을 형태로 다듬는다(길이 자르기·빈 항목 제거·번호 정리).
+
+    첫 응답과 재시도 응답이 같은 처리를 거쳐야 항목 수를 같은 기준으로 셀 수 있어서
+    따로 뺐다.
+    """
+    narrative = _truncate_summary_section(narrative)
+    narrative = _truncate_numbered_items(narrative, "핵심 위협 TOP 3")
+    narrative = _truncate_numbered_items(narrative, "자사 자산 관련")
+    narrative = _truncate_numbered_items(narrative, "권고 조치", max_items=3)
+    narrative = _remove_bare_markers(narrative)
+    return _renumber_lists(narrative)
+
+
+def _uncovered_threat_count(narrative):
+    """조치가 붙지 않은 위협 항목 수. 0이면 1:1이 지켜진 것이다."""
+    threats = _count_numbered_items(narrative, "핵심 위협 TOP 3")
+    actions = _count_numbered_items(narrative, "권고 조치")
+    return max(0, threats - actions) if threats else 0
+
+
+def _count_numbered_items(narrative, header):
+    """섹션 안의 번호·불릿 항목 수. 개수 지침이 지켜졌는지 확인하는 데 쓴다."""
+    pattern = r"(\[{}\]\s*\n?)(.*?)(?=\n\[|\Z)".format(re.escape(header))
+    match = re.search(pattern, narrative, re.S)
+    if not match:
+        return 0
+    return len([line for line in match.group(2).splitlines()
+                if re.match(r"\s*(?:\d+\.|[-*])\s*\S", line)])
+
+
+def _warn_uncovered_threats(narrative):
+    """TOP 3에 올린 위협 수보다 권고 조치가 적으면 로그로 알린다.
+
+    프롬프트로 1:1을 강제하지만 LLM이 어길 때가 있다. 자동으로 채워 넣지는 않는다 —
+    없는 조치를 코드가 지어내면 더 나쁘다. 대신 실행 로그에 남겨서, 조치가 빠진 채로
+    나간 회차를 나중에 찾을 수 있게 한다(2026-09-10에 실제로 그렇게 나갔다).
+    """
+    threats = _count_numbered_items(narrative, "핵심 위협 TOP 3")
+    actions = _count_numbered_items(narrative, "권고 조치")
+    if _uncovered_threat_count(narrative):
+        print("[-] 총평 점검: 핵심 위협 {}건인데 권고 조치는 {}건 — 조치 없는 위협이 "
+              "{}건 있습니다.".format(threats, actions, threats - actions))
+    return narrative
+
 
 def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_items=None):
     """[핵심 위협 TOP 3]/[자사 자산 관련]/[권고 조치] 같은 번호·불릿 리스트의 항목별 설명이 길면 문장 단위로 자르고,
@@ -967,7 +1536,15 @@ def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_it
 
     # 마커(숫자.·-) 뒤에 공백이 아니라 문자열 끝이 오는 경우("...\n1.")도 분리해야 한다 —
     # 안 그러면 내용 없는 마지막 항목이 바로 앞 항목에 그대로 붙어버린다.
-    items = [item.rstrip() for item in re.split(r"(?m)^(?=\d+\.(?:\s|$)|-(?:\s|$))", match.group(2).strip()) if item.strip()]
+    items = [item.strip() for item in ITEM_SPLIT_RE.split(match.group(2).strip()) if item.strip()]
+
+    # 분리에 실패해 여러 항목이 한 덩어리로 합쳐지면, 아래 max_chars 절단이 뒤쪽 항목을
+    # 통째로 먹어치운다 — 조용히 사라지면 알아챌 방법이 없으므로 로그로 남긴다.
+    for item in items:
+        if EMBEDDED_MARKER_RE.search(item):
+            print("[!] [{}] 항목 분리 실패로 여러 항목이 한 덩어리가 됐습니다 — 뒤쪽 항목이 잘릴 수 있습니다: {}".format(
+                header, item[:80].replace("\n", " ")
+            ))
     if max_items is not None:
         items = items[:max_items]
 
@@ -1005,7 +1582,15 @@ def _truncate_numbered_items(narrative, header, max_chars=ITEM_MAX_CHARS, max_it
             entry = "{}. {}".format(numbered_index, entry[marker_match.end():])
         final_items.append(entry)
 
-    return narrative[:match.start(2)] + "\n".join(final_items) + _normalize_tail(narrative, match.end(2))
+    # 헤더 정규식의 \s*가 본문 첫 줄의 들여쓰기까지 흡수하기 때문에, 그대로 이어붙이면
+    # 첫 항목만 들여쓰인 채 남는다 — 그러면 뒤의 번호 재정렬이 첫 항목을 항목으로 못 세서
+    # 번호가 "1. 1. 2."처럼 어긋난다. 줄바꿈 뒤의 들여쓰기만 걷어낸다.
+    prefix = narrative[:match.start(2)]
+    head, newline, indent = prefix.rpartition("\n")
+    if newline and not indent.strip():
+        prefix = head + newline
+
+    return prefix + "\n".join(final_items) + _normalize_tail(narrative, match.end(2))
 
 
 def _strip_narrative_section(narrative, header):
@@ -1053,6 +1638,39 @@ def _extract_keywords(narrative, header=KEYWORD_HEADER, max_items=MAX_KEYWORDS):
     return keywords
 
 
+def _keywords_grounded_in_digest(keywords, digest):
+    """LLM이 실제 데이터에 없는 용어를 지어내는 걸 거른다 — attack_techniques를 공식
+    카탈로그로 검증하는 것과 같은 목적의 환각 방지 장치. 그 기간 실제 소스 데이터인
+    digest에 문자열로(대소문자 무관) 등장하지 않는 키워드는 제외한다."""
+    digest_lower = digest.lower()
+    return [kw for kw in keywords if kw.lower() in digest_lower]
+
+
+# "Iranian state-sponsored actors"처럼 국적 형용사 + 일반 명사만으로 구성된 키워드 —
+# 프롬프트에 "일반 용어·범주명은 넣지 마라, 구체적 고유명사만"이라고 이미 명시했는데도
+# LLM이 종종 어긴다. _keywords_grounded_in_digest는 digest에 그 문구가 실제로 있는지만
+# 보므로(환각 방지 목적), 이런 서술적 범주 표현이 digest에 그대로 있으면 통과시켜버린다
+# — 그래서 별도로, 키워드를 구성하는 단어 전부가 이 목록(국적·일반 위협 명사)에 속하면
+# "구체적 고유명사가 하나도 없다"고 보고 제외한다. 한 단어라도 목록 밖이면(예: SilverFox,
+# Lazarus) 살아남는다 — 실제 그룹·악성코드명을 잘못 걸러내지 않기 위한 보수적 기준이다.
+_GENERIC_KEYWORD_WORDS = {
+    "north", "korean", "korea", "south", "chinese", "china", "russian", "russia",
+    "iranian", "iran", "dprk", "state-sponsored", "state", "sponsored", "nation-state",
+    "nation", "government-backed", "government", "backed", "advanced", "sophisticated",
+    "unnamed", "unidentified", "linked", "affiliated", "backed", "based",
+    "actors", "actor", "attackers", "attacker", "hackers", "hacker", "group", "groups",
+    "gang", "gangs", "campaign", "campaigns", "operators", "operator", "criminals",
+    "criminal", "threat",
+}
+
+
+def _is_generic_keyword(keyword):
+    tokens = re.findall(r"[a-z0-9-]+", keyword.lower())
+    if not tokens:
+        return True
+    return all(token in _GENERIC_KEYWORD_WORDS for token in tokens)
+
+
 def _remove_bare_markers(narrative):
     """번호("1.")나 불릿("-")만 있고 내용이 없는 줄을, 어느 섹션에 있든 통째로 제거하는
     마지막 안전망. _truncate_numbered_items()가 섹션별로 이미 같은 일을 하지만, 그
@@ -1071,6 +1689,41 @@ def _remove_bare_markers(narrative):
         blank_run = is_blank
         result.append(line)
     return "\n".join(result).strip()
+
+
+def _renumber_lists(narrative):
+    """번호 목록("1. ...")의 연속 구간을 찾아 항상 1부터 순서대로 다시 매기는 최종 방어선.
+
+    _truncate_numbered_items()가 섹션별로 이미 번호를 재정렬하지만, 실제 리포트에서
+    간헐적으로 [권고 조치] 등이 "2. / 3. "로 시작해 "1."이 빠진 채 나가는 사례가
+    확인됐다 — 원인을 섹션별 파싱 로직 안에서 재현하지 못해서, 어떤 경로로 깨지든
+    최종 출력만큼은 항상 올바르게 나가도록 narrative 전체를 대상으로 한 번 더
+    강제한다. 불릿("-")은 건드리지 않는다(원래 순서가 없는 목록).
+    """
+    lines = narrative.split("\n")
+    i = 0
+    while i < len(lines):
+        if not re.match(r"^[ \t]*\d+\.\s", lines[i]):
+            i += 1
+            continue
+        # 번호 줄들의 연속 구간 — 빈 줄이나 "[다음 섹션]" 줄에서 끊긴다. 번호로
+        # 시작하지 않는 중간 줄은 앞 항목이 여러 줄에 걸친 것으로 보고 구간에는
+        # 포함하되(건너뛰기만) 새 항목으로 세지는 않는다.
+        numbered_positions = []
+        j = i
+        while j < len(lines):
+            stripped = lines[j].strip()
+            if stripped == "" or re.match(r"^\[.+\]\s*$", stripped):
+                break
+            if re.match(r"^[ \t]*\d+\.\s", lines[j]):
+                numbered_positions.append(j)
+            j += 1
+        for order, pos in enumerate(numbered_positions, start=1):
+            # 들여쓰인 항목도 같은 목록의 일부로 세되, 출력은 들여쓰기 없이 통일한다
+            rest = re.sub(r"^[ \t]*\d+\.\s", "", lines[pos], count=1)
+            lines[pos] = "{}. {}".format(order, rest)
+        i = j
+    return "\n".join(lines)
 
 
 def fallback_keywords(stats, cards, max_items=MAX_KEYWORDS):
@@ -1099,7 +1752,14 @@ def fallback_keywords(stats, cards, max_items=MAX_KEYWORDS):
     return keywords[:max_items]
 
 
-def ai_narrative(period_label, digest):
+# 총평 생성 재시도 횟수. 주간은 실패하면 다음 시도가 일주일 뒤라 그 주 리포트가
+# "AI 해석을 생성하지 못해..."로 확정된다(실측: 5회 중 1회 실패). 지수 백오프와
+# 함께 쓰므로 6회면 마지막 시도까지 누적 대기가 약 5분 — 몇 초~몇 분짜리 장애
+# 구간을 넘기기에 충분하고, 주 1회 호출이라 비용 부담도 없다.
+NARRATIVE_ATTEMPTS = {"daily": 3, "weekly": 6}
+
+
+def ai_narrative(period_label, digest, period="daily"):
     prompt = """당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.
 아래는 {period} 동안 수집된 보안 이벤트 요약이다. 이를 바탕으로 보안담당자용 리포트 본문을 한국어로 작성하라.
 
@@ -1111,6 +1771,7 @@ def ai_narrative(period_label, digest):
 출력 형식:
 [총평]
 - 가장 중요한 임팩트만 짧게 서술 (분량 제한이 목적이 아니라 핵심만 압축하는 것이 목적)
+- 데이터에 "[CVE 상관관계 카드에 없는 P1 긴급 항목]" 섹션이 있으면 그 존재를 반드시 한 문장으로라도 언급하라 — [핵심 위협 TOP 3]는 CVE가 있는 사건만 다루므로, 그쪽에서 못 다루는 P1 캠페인·악성코드·유출 사고 등을 짚어줄 수 있는 곳은 총평뿐이다
 - CVE ID, PIR별 세부 수치, MITRE 기법 등 개별 데이터 나열 금지 — 이런 디테일은 아래 다른 섹션과 리포트의 통계 섹션에 이미 있으므로 총평에서 반복하지 말 것
 - 숫자를 쓰더라도 전체 건수 등 꼭 필요한 것 한두 개만, 나열식으로 늘어놓지 말 것
 
@@ -1118,14 +1779,18 @@ def ai_narrative(period_label, digest):
 - 데이터의 [크로스소스 상관관계] 목록은 이미 우선순위 순으로 정렬돼 있다. 그 목록의 1번·2번·3번 항목을 그 순서 그대로 다뤄라 (목록에 없는 CVE·위협을 임의로 추가하거나 순서를 바꾸지 말 것)
 - 목록 항목이 3개 미만이면 있는 개수만큼만 쓰고, 목록이 비어 있으면 전체 데이터에서 가장 중요한 것 최대 3건을 골라 써라
 - 각 항목마다 무엇이 왜 중요한지 1문장
-- EPSS/CVSS 수치, 소스명, 패치 일자 등 세부 데이터 나열 금지 — 이미 [핵심 취약점 TOP N] 카드 섹션에 있으므로 반복하지 말 것. 실무 임팩트(무엇이 뚫리고 왜 위험한지) 중심으로만 쓸 것
+- EPSS/CVSS 수치, 소스명, 패치 일자 등 세부 데이터 나열 금지 — 이미 [핵심 이슈 TOP N] 카드 섹션에 있으므로 반복하지 말 것. 실무 임팩트(무엇이 뚫리고 왜 위험한지) 중심으로만 쓸 것
 
 [자사 자산 관련]
 - 매칭된 항목이 있으면 조치 우선순위를 제시하고, 없으면 "해당 없음"이라고만 작성
 - CVE ID, EPSS/CVSS 수치, KEV 등재 여부 등 세부 데이터 나열 금지 — 이미 다른 섹션에 있으므로 반복하지 말 것. 자산별로 뭘 먼저 조치해야 하는지 1문장만
 
 [권고 조치]
-- 정확히 3개 이내, 각 항목은 무엇을 해야 하는지 행동 중심으로 1문장
+- [핵심 위협 TOP 3]에 쓴 항목마다 하나씩, 같은 순서로 대응 조치를 써라. TOP 3에 2개만 썼으면 여기도 2개다
+  (실제 사고 2026-09-10: 총평에 "제로데이 2건 최우선 대응 필요"라고 써 놓고 권고 조치에는 다른 취약점 1건만 올라가,
+   권고만 읽은 사람은 정작 가장 급한 것을 놓쳤다. 위협으로 올린 것에 조치가 없으면 그 위협은 안 쓴 것과 같다)
+- 위협 목록에 없지만 반드시 해야 하는 조치가 있으면 그 뒤에 덧붙여도 되지만, 전체는 3개를 넘기지 마라
+- 각 항목은 무엇을 해야 하는지 행동 중심으로 1문장
 - CVE ID, CVSS 수치, PIR 번호, 공격 그룹명 등 세부 데이터 나열 금지 — 이미 다른 섹션에 있으므로 반복하지 말 것
 
 [핵심 키워드] (다른 섹션과 달리 이 섹션은 절대 생략하면 안 됨 — 반드시 작성할 것)
@@ -1148,28 +1813,83 @@ def ai_narrative(period_label, digest):
 {digest}
 """.format(period=period_label, digest=digest)
 
-    narrative = common_utils.llm_generate(prompt, timeout=300) or ""
+    # 실패 시 "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"로 대체할 수단이
+    # 없는 단발성 호출이라(하루/주 1번), 재시도를 넉넉히 줘서 일시적 실패로
+    # 통째로 못 만드는 상황을 줄인다.
+    narrative = common_utils.llm_generate(
+        prompt, timeout=300, nvidia_max_attempts=NARRATIVE_ATTEMPTS.get(period, 3)
+    ) or ""
     if not narrative:
         return narrative, []
-    narrative = _truncate_summary_section(narrative)
-    narrative = _truncate_numbered_items(narrative, "핵심 위협 TOP 3")
-    narrative = _truncate_numbered_items(narrative, "자사 자산 관련")
-    narrative = _truncate_numbered_items(narrative, "권고 조치", max_items=3)
-    narrative = _remove_bare_markers(narrative)
+    narrative = _clean_narrative(narrative)
+
+    # 프롬프트로 "위협마다 조치 하나"를 강제해도 LLM이 어긴다(실측: 두 번 중 한 번).
+    # 조치가 빠진 위협은 읽는 사람이 놓치는 것이므로 한 번만 다시 받아 본다. 검사가
+    # 걸릴 때만 도는 경로라 평소 비용은 늘지 않는다. 두 번째도 모자라면 더 조르지 않고
+    # 둘 중 더 많이 채운 쪽을 쓴다 — 계속 다시 받는다고 나아진다는 근거가 없고,
+    # 리포트 발송이 그만큼 늦어진다.
+    missing = _uncovered_threat_count(narrative)
+    if missing:
+        print("[*] 조치 없는 위협 {}건 — 총평을 한 번 다시 받습니다.".format(missing))
+        retry = common_utils.llm_generate(
+            prompt + RETRY_COVERAGE_HINT, timeout=300,
+            nvidia_max_attempts=NARRATIVE_ATTEMPTS.get(period, 3)
+        ) or ""
+        if retry:
+            retry = _clean_narrative(retry)
+            if _uncovered_threat_count(retry) < missing:
+                narrative = retry
+    _warn_uncovered_threats(narrative)
     keywords = _extract_keywords(narrative)
+    keywords = _keywords_grounded_in_digest(keywords, digest)
+    keywords = [kw for kw in keywords if not _is_generic_keyword(kw)]
     narrative = _strip_narrative_section(narrative, KEYWORD_HEADER)
     return narrative, keywords
 
 
+def _format_weekly_trend_item(item):
+    """단일 항목을 '이름 N건 (전주 M건, +D)' 또는 '이름 N건 (신규)' 텍스트로."""
+    if item["previous"] == 0:
+        return "{} {}건 (신규)".format(item["name"], item["count"])
+    return "{} {}건 (전주 {}건, +{})".format(item["name"], item["count"], item["previous"], item["delta"])
+
+
+def _format_category_trend_item(item):
+    """단일 항목을 '이름 비중 M%→N% (+D%p)' 텍스트로 — 카테고리는 건수가 아니라 비중으로 비교한다."""
+    return "{} 비중 {:.0f}%→{:.0f}% (+{:.0f}%p)".format(
+        item["name"], item["previous_share"], item["share"], item["delta"]
+    )
+
+
+WEEKLY_TREND_GROUPS = (
+    ("actors", "위협 행위자", _format_weekly_trend_item),
+    ("malware", "악성코드", _format_weekly_trend_item),
+    ("techniques", "ATT&CK 기법", _format_weekly_trend_item),
+    ("assets", "자산 매칭", _format_weekly_trend_item),
+    ("categories", "기사 분류", _format_category_trend_item),
+)
+
+
+def _weekly_trend_groups(weekly_trends):
+    """compute_weekly_trends() 결과에서 항목이 있는 그룹만 (라벨, 항목 리스트, 포맷 함수) 순서로 반환."""
+    if not weekly_trends:
+        return []
+    return [
+        (label, weekly_trends[key], formatter)
+        for key, label, formatter in WEEKLY_TREND_GROUPS
+        if weekly_trends.get(key)
+    ]
+
+
 def build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups,
-                      trend_reads):
+                      trend_reads, weekly_trends=None):
     lines = [
         title,
         "기간: {}".format(period_label),
         "생성 시각: {}".format(datetime.now().strftime("%Y-%m-%d %H:%M")),
         "",
         "[수집 현황]",
-        "- 총 {}건 (P1 {} / P2 {} / Critical {} / KEV {} / 랜섬웨어 {} / 자산매칭 {})".format(
+        "- 총 {}건 (긴급 대응 {} / 주의 {} / Critical {} / KEV {} / 랜섬웨어 {} / 자산매칭 {})".format(
             stats["total"], len(stats["p1"]), len(stats["p2"]),
             len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
             len(stats["asset_hits"])
@@ -1177,9 +1897,24 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
     ]
     category_counts = [(c, n) for c, n in stats["by_category"].most_common() if c != "미분류"]
     if category_counts:
-        lines.append("- 카테고리: {}".format(
-            ", ".join("{} {}건".format(category, count) for category, count in category_counts)
+        # 수집 볼륨만 적으면 매일 비슷한 숫자라(NVD가 CVSS>=7.0만으로도 하루 200건대)
+        # 판단 근거가 안 된다 — 자산·악용·KEV 신호가 있는 대응 대상을 괄호로 병기한다.
+        actionable_categories = stats.get("actionable_by_category") or Counter()
+        lines.append("- 카테고리(괄호는 대응 대상): {}".format(
+            ", ".join(
+                "{} {}건({})".format(category, count, actionable_categories.get(category, 0))
+                for category, count in category_counts
+            )
         ))
+
+    weekly_trend_groups = _weekly_trend_groups(weekly_trends)
+    if weekly_trend_groups:
+        lines.append("")
+        lines.append("[주간 동향 — 전주 대비 급증]")
+        for label, items, formatter in weekly_trend_groups:
+            lines.append("- {}: {}".format(
+                label, " · ".join(formatter(item) for item in items)
+            ))
 
     if narrative:
         lines.append("")
@@ -1207,7 +1942,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
 
     if cards:
         lines.append("")
-        lines.append("[핵심 취약점 TOP {} — 복수 소스 교차 확인]".format(min(len(cards), MAX_CVE_CARDS)))
+        lines.append("[핵심 이슈 TOP {} — 복수 소스 교차 확인]".format(min(len(cards), MAX_CVE_CARDS)))
         for idx, card in enumerate(cards[:MAX_CVE_CARDS], start=1):
             lines.append("{}. {} (소스 {}개: {})".format(
                 idx, card["cve"], len(card["sources"]),
@@ -1264,7 +1999,7 @@ def build_text_report(title, period_label, stats, narrative, highlights, cards, 
 
 
 def build_html_report(title, period_label, stats, narrative, highlights, cards, pir_groups,
-                      trend_reads):
+                      trend_reads, weekly_trends=None):
     parts = [
         "<html><body>",
         "<h2>{}</h2>".format(html.escape(title)),
@@ -1272,7 +2007,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             html.escape(period_label), datetime.now().strftime("%Y-%m-%d %H:%M")
         ),
         "<h3>수집 현황</h3>",
-        "<p>총 <b>{}</b>건 — <b>P1 {}</b> / P2 {} / Critical {} / KEV {} / 랜섬웨어 {} / 자산매칭 {}</p>".format(
+        "<p>총 <b>{}</b>건 — <b>긴급 대응 {}</b> / 주의 {} / Critical {} / KEV {} / 랜섬웨어 {} / 자산매칭 {}</p>".format(
             stats["total"], len(stats["p1"]), len(stats["p2"]),
             len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
             len(stats["asset_hits"])
@@ -1281,10 +2016,25 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
     ]
     category_counts = [(c, n) for c, n in stats["by_category"].most_common() if c != "미분류"]
     if category_counts:
-        parts.append("<li>카테고리: {}</li>".format(html.escape(
-            ", ".join("{} {}건".format(category, count) for category, count in category_counts)
+        actionable_categories = stats.get("actionable_by_category") or Counter()
+        parts.append("<li>카테고리(괄호는 대응 대상): {}</li>".format(html.escape(
+            ", ".join(
+                "{} {}건({})".format(category, count, actionable_categories.get(category, 0))
+                for category, count in category_counts
+            )
         )))
     parts.append("</ul>")
+
+    weekly_trend_groups = _weekly_trend_groups(weekly_trends)
+    if weekly_trend_groups:
+        parts.append("<h3>주간 동향 — 전주 대비 급증</h3>")
+        parts.append("<ul>")
+        for label, items, formatter in weekly_trend_groups:
+            parts.append("<li>{}: {}</li>".format(
+                html.escape(label),
+                html.escape(" · ".join(formatter(item) for item in items)),
+            ))
+        parts.append("</ul>")
 
     if narrative:
         parts.append("<h3>AI 분석</h3>")
@@ -1315,7 +2065,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
             parts.append("</ul>")
 
     if cards:
-        parts.append("<h3>핵심 취약점 TOP {} — 복수 소스 교차 확인</h3>".format(min(len(cards), MAX_CVE_CARDS)))
+        parts.append("<h3>핵심 이슈 TOP {} — 복수 소스 교차 확인</h3>".format(min(len(cards), MAX_CVE_CARDS)))
         parts.append("<ol>")
         for card in cards[:MAX_CVE_CARDS]:
             card_parts = [
@@ -1363,7 +2113,7 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
         if event_score(event) > 0:
             extra.append("CVSS {}".format(event["score"]))
         if event.get("matched_assets"):
-            extra.append("자산매칭: {}".format(html.escape(", ".join(event["matched_assets"]))))
+            extra.append("자산매칭: {}".format(html.escape(", ".join(common_utils.canonical_assets(event["matched_assets"])))))
         suffix = " ({})".format(" / ".join(extra)) if extra else ""
 
         parts.append(
@@ -1411,8 +2161,8 @@ def build_html_report(title, period_label, stats, narrative, highlights, cards, 
 
 
 def build_slack_blocks(title, period_label, stats, narrative, highlights, cards, pir_groups,
-                       trend_reads):
-    stat_text = "총 *{}건* 수집 — 🚨 P1 `{}` / ⚠️ P2 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`".format(
+                       trend_reads, weekly_trends=None):
+    stat_text = "총 *{}건* 수집 — 🚨 긴급 대응 `{}` / ⚠️ 주의 `{}` / Critical `{}` / KEV `{}` / 🔒 랜섬웨어 `{}` / 자산매칭 `{}`".format(
         stats["total"], len(stats["p1"]), len(stats["p2"]),
         len(stats["critical"]), len(stats["kev"]), len(stats["ransomware"]),
         len(stats["asset_hits"])
@@ -1427,6 +2177,18 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
         {"type": "divider"},
         {"type": "section", "text": {"type": "mrkdwn", "text": stat_text}},
     ]
+
+    weekly_trend_groups = _weekly_trend_groups(weekly_trends)
+    if weekly_trend_groups:
+        trend_lines = [
+            "*{}*: {}".format(label, " · ".join(formatter(item) for item in items))
+            for label, items, formatter in weekly_trend_groups
+        ]
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "📈 *주간 동향 — 전주 대비 급증*\n" + "\n".join(trend_lines)},
+        })
 
     if narrative:
         blocks.append({"type": "divider"})
@@ -1483,7 +2245,7 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
         blocks.append({"type": "divider"})
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": "*핵심 취약점 — 복수 소스 교차 확인*\n" + "\n".join(card_lines)},
+            "text": {"type": "mrkdwn", "text": "*핵심 이슈 — 복수 소스 교차 확인*\n" + "\n".join(card_lines)},
         })
 
     if highlights:
@@ -1553,7 +2315,24 @@ def build_slack_blocks(title, period_label, stats, narrative, highlights, cards,
     return blocks
 
 
-def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads, keywords=None):
+def dashboard_trend_bits(event):
+    """trend_bits()와 같은 "왜 추천됐는지" 근거 조각이지만, PIR 이름은 뺀다 — 공개 대시보드에서
+    PIR·자산매칭 정보를 노출하지 않는 build_dashboard_payload()의 원칙과 동일하게 적용."""
+    bits = []
+    if (event.get("novelty") or "") == "new":
+        bits.append("신규")
+    depth_label = {"analysis": "심층 분석", "report": "보고서"}.get(event.get("content_depth") or "")
+    if depth_label:
+        bits.append(depth_label)
+    if event.get("relevance") == "high":
+        bits.append("관련성 높음")
+    if importance_score(event):
+        bits.append("우선도 {}점".format(importance_score(event)))
+    return bits
+
+
+def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads,
+                             keywords=None, weekly_trends=None, campaigns=None):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
 
     이메일/슬랙/텍스트 리포트는 지면이 한정돼 있어 highlights·cards를 상위 N개로
@@ -1575,10 +2354,13 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
     않을 뿐이다. AI 총평(narrative)의 [자사 자산 관련] 섹션도 같은 이유로 여기서만 잘라낸다
     (이메일/슬랙에 넘어가는 narrative 원본은 그대로 유지).
     """
-    def serialize_event(event):
+    def serialize_event(event, include_reason=False):
         # matched_assets는 의도적으로 뺀다 — 공개 웹 대시보드에 자사 보유 자산/제품명이
         # 노출되면 안 되므로(이메일/슬랙 리포트는 내부용이라 그대로 유지, 여기만 예외).
-        return {
+        payload = {
+            # 대시보드의 "심층분석" 버튼이 이 값으로 분석 결과를 캐싱·식별한다(클릭
+            # 추적용 ref와 같은 해시 함수 — tracking_url 설정 여부와 무관하게 항상 존재).
+            "ref": common_utils.event_ref(event.get("id")),
             "title": event.get("title") or "(제목 없음)",
             "url": common_utils.tracking_url(event.get("id"), event.get("url") or "") or "",
             "source": event.get("source") or "",
@@ -1588,12 +2370,19 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "published_at": event.get("published_at") or "",
             "summary": (event.get("ai_summary") or event.get("summary") or "")[:300],
         }
+        if include_reason:
+            # 추천기사(trend_reads) 전용 — 심층분석을 누르기 전에도 "왜 추천됐는지"와
+            # 우선순위 정렬 기준을 보여준다. highlights(국내/해외 전체 목록)는 캡 없이
+            # 수백 건이라 여기서 굳이 계산해 페이로드를 불릴 필요가 없어 대상에서 뺀다.
+            payload["score"] = importance_score(event)
+            payload["reason_bits"] = dashboard_trend_bits(event)
+        return payload
 
-    def split_by_region(events):
+    def split_by_region(events, include_reason=False):
         domestic, overseas = [], []
         for event in events:
             bucket = domestic if source_region(event.get("source")) == "domestic" else overseas
-            bucket.append(serialize_event(event))
+            bucket.append(serialize_event(event, include_reason=include_reason))
         return domestic, overseas
 
     def serialize_card(card):
@@ -1614,6 +2403,25 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
                 }
                 for source, item_title, item_url, item_id in card["items"]
             ],
+            # 미리 만들어 둔 이슈 분석 — 대시보드는 클릭 없이 바로 펼쳐 보여준다.
+            "issue_analysis": card.get("issue_analysis") or "",
+        }
+
+    def serialize_campaign(row):
+        # campaign_radar는 판정 근거로 pirs·assets를 함께 담아 주지만(내부 CLI·로그용)
+        # 대시보드에는 넘기지 않는다 — 자산매칭·PIR을 빼는 것과 같은 원칙. 캠페인 카드는
+        # 근거 대신 "얼마나 여러 곳에서 다뤄졌는지"(소스 수·신규 보도 수)로 신뢰도를 보여준다.
+        return {
+            "names": row.get("names") or [],
+            "first_seen": row.get("first_seen") or "",
+            "level": row.get("level") or "",
+            "sources": row.get("sources") or [],
+            "categories": row.get("categories") or [],
+            "techniques": row.get("techniques") or [],
+            "ioc_count": row.get("ioc_count") or 0,
+            "novelty_new": row.get("novelty_new") or 0,
+            "summary": row.get("summary") or "",
+            "items": row.get("items") or [],
         }
 
     # PIR(우선 정보 요구사항) 구분·문항은 대시보드에서 뺀다 — 조직이 무엇을 우선순위로
@@ -1622,7 +2430,14 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
     # 이 함수의 출력에는 반영하지 않는다.
 
     highlight_domestic, highlight_overseas = split_by_region(highlights)
-    trend_domestic, trend_overseas = split_by_region(trend_reads)
+    trend_domestic, trend_overseas = split_by_region(trend_reads, include_reason=True)
+
+    # 주간 동향(전주 대비 급증)의 "자산 매칭" 그룹은 자사 보유 자산/제품명을 그대로
+    # 노출하므로, PIR·자산매칭 정보를 안 담는 것과 같은 원칙으로 공개 대시보드에서 뺀다
+    # (위협 행위자·악성코드·ATT&CK 기법·카테고리는 자사 정보가 아니라 그대로 노출해도 됨).
+    dashboard_weekly_trends = None
+    if weekly_trends:
+        dashboard_weekly_trends = {key: value for key, value in weekly_trends.items() if key != "assets"}
 
     return {
         "title": title,
@@ -1635,13 +2450,30 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "p1": len(stats["p1"]),
             "p2": len(stats["p2"]),
             "info": stats["total"] - len(stats["p1"]) - len(stats["p2"]),
-            "info_by_category": dict(stats["info_by_category"].most_common()),
+            "info_by_category": dict(
+                (c, n) for c, n in stats["info_by_category"].most_common() if c != "미분류"
+            ),
+            # 대시보드 상단 타일은 이 값을 우선 쓴다(없는 옛 파일은 info_by_category로 폴백).
+            # P1/P2 타일과 중복 계산되지 않도록 info_by_category와 같은 모수를 쓴다.
+            "actionable": len(stats.get("actionable") or []),
+            "actionable_info_by_category": dict(
+                (c, n) for c, n in (stats.get("actionable_info_by_category") or Counter()).most_common()
+                if c != "미분류"
+            ),
             "by_source": dict(stats["by_source"].most_common()),
+            "top_actors": stats.get("top_actors") or [],
+            "top_malware": stats.get("top_malware") or [],
+            "top_cves": stats.get("top_cves") or [],
         },
+        # 신규 공격 캠페인 — 추천기사 탭 최상단에 별도 카드로 노출한다. 추천기사와는
+        # 후보군이 거의 겹치지 않는다(실측 3%): 추천기사는 알림 문턱을 못 넘은 기사를
+        # 뽑고, 이쪽은 새로 등장한 캠페인이라 대개 P1/P2로 이미 알림된 건들이다.
+        "campaigns": [serialize_campaign(row) for row in (campaigns or [])],
         "cards": [serialize_card(card) for card in cards],
         "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
         "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
         "keywords": keywords or [],
+        "weekly_trends": dashboard_weekly_trends,
     }
 
 
@@ -1650,6 +2482,11 @@ def main():
     parser.add_argument("--period", choices=["daily", "weekly"], default="daily")
     parser.add_argument("--days", type=int, default=None, help="집계 기간 직접 지정(테스트용)")
     parser.add_argument("--dry-run", action="store_true", help="발송하지 않고 콘솔에 출력")
+    # 데이터가 잘못 실린 것을 고친 뒤 대시보드만 다시 만들어야 할 때가 있다. --dry-run은
+    # 발행까지 건너뛰어서 쓸 수 없고, 그렇다고 그냥 돌리면 같은 리포트가 메일·슬랙으로
+    # 두 번 나간다.
+    parser.add_argument("--no-send", action="store_true",
+                        help="메일·슬랙은 보내지 않고 대시보드만 갱신한다")
     args = parser.parse_args()
 
     if args.period == "daily":
@@ -1669,10 +2506,22 @@ def main():
 
     stats = build_stats(events)
 
+    # 주간 리포트 전용: 전주(같은 길이의 직전 구간)와 비교해 급증한 위협 행위자/
+    # 악성코드/ATT&CK 기법/자산매칭을 뽑는다. 일간은 비교 기준(전날 하루)이 표본이
+    # 너무 적어 의미가 없으므로 주간에서만 계산한다.
+    weekly_trends = None
+    if args.period == "weekly":
+        previous_events = load_events_between(since - timedelta(days=days), since)
+        weekly_trends = compute_weekly_trends(events, previous_events)
+
     # CVE 크로스소스 상관관계: 복수 소스 등장 CVE는 카드로 병합하고,
     # 카드에 포함된 이벤트는 개별 TOP 목록에서 제외해 중복 표시를 막는다
     cards = correlate_by_cve(events)
     enrich_cards_with_github_poc(cards[:MAX_CVE_CARDS])  # 이메일/슬랙 상위 카드에만 API 호출(비용 절약)
+    # 이슈 분석은 주간에만 붙인다 — 일간 카드는 기사가 평균 2.2건(3건 이상이 15%)이라
+    # 종합할 이점이 거의 없고, 주간은 평균 2.6건에 3건 이상이 33%다.
+    if args.period == "weekly":
+        enrich_cards_with_issue_analysis(cards, events)
     shown_card_event_ids = set()
     for card in cards:  # 대시보드는 카드를 전부 보여주므로, 카드로 이미 다루는 이벤트는 전부 제외해야 중복이 없다
         shown_card_event_ids.update(card["event_ids"])
@@ -1693,23 +2542,39 @@ def main():
     # 쓴다 — 대시보드 국내/해외 탭이 이미 그 기간 전체를 보여주는 아카이브가 된 이상,
     # "추천기사"와 일부 겹치는 건 자연스럽다(오히려 all_highlights 기준으로 제외하면
     # 후보 풀이 거의 안 남아 추천기사가 텅 비어버린다).
+    # include_alerted=True — curator_digest.py와 동일하게, 이미 알림이 나간(P1/P2 등)
+    # 기사도 인사이트 신호가 있으면 추천 후보에 포함한다. 여기서 빼면 "알림 안 된
+    # 것들 중에서만" 추천기사가 뽑혀서, 그날 진짜 중요했던 기사가 오히려 대시보드
+    # 추천기사 탭에서 배제되는 역설이 생긴다 — 하루치 "진짜 추천할 만한 것"을
+    # 보여주는 게 목적이므로 알림 여부와 무관하게 뽑아야 한다.
     all_trend_reads = pick_trend_reads(
-        events, shown_card_event_ids | highlight_ids, max_items=len(events),
+        events, shown_card_event_ids | highlight_ids, max_items=len(events), include_alerted=True,
     )
 
     print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, PIR {}종). AI 해석 생성 중...".format(
         stats["total"], len(cards), len(pir_groups)
     ))
     digest = build_digest(period_label, stats, events, cards)
-    narrative, keywords = ai_narrative(period_label, digest)
+    narrative, keywords = ai_narrative(period_label, digest, period=args.period)
     if not narrative:
         narrative = "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"
+        # 실패해도 메일·슬랙은 나가므로, 리포트를 열어보기 전에는 알 수 없었다.
+        print("[-] AI 해석 생성 실패 — 통계 요약만으로 발송합니다({} 리포트).".format(args.period))
     if not keywords:
         keywords = fallback_keywords(stats, cards)
 
-    text_body = build_text_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
-    html_body = build_html_report(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
-    blocks = build_slack_blocks(title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads)
+    text_body = build_text_report(
+        title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+        weekly_trends=weekly_trends,
+    )
+    html_body = build_html_report(
+        title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+        weekly_trends=weekly_trends,
+    )
+    blocks = build_slack_blocks(
+        title, period_label, stats, narrative, highlights, cards, pir_groups, trend_reads,
+        weekly_trends=weekly_trends,
+    )
 
     if args.dry_run:
         print("===== DRY RUN: 발송 생략 =====")
@@ -1717,16 +2582,31 @@ def main():
         return
 
     subject = "[{}] {} - {}건".format("일간" if args.period == "daily" else "주간", title, stats["total"])
-    email_sent = common_utils.send_email_message(subject, text_body, html_body)
+    if args.no_send:
+        print("[*] --no-send: 메일·슬랙 발송을 건너뛰고 대시보드만 갱신합니다.")
+    else:
+        email_sent = common_utils.send_email_message(subject, text_body, html_body)
 
-    payload = {"text": subject, "blocks": blocks}
-    webhook_url = os.environ.get("SLACK_WEBHOOK_REPORT") or common_utils.SLACK_WEBHOOK_URL
-    slack_sent = common_utils.send_slack_webhook(payload, webhook_url)
+        payload = {"text": subject, "blocks": blocks}
+        webhook_url = os.environ.get("SLACK_WEBHOOK_REPORT") or common_utils.SLACK_WEBHOOK_URL
+        slack_sent = common_utils.send_slack_webhook(payload, webhook_url)
 
-    print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
+        print("리포트 발송 결과: email={}, slack={}".format(email_sent, slack_sent))
+
+    # 신규 공격 캠페인 탐지 — 최초 등장일을 알아야 해서 코퍼스 전체를 훑는다.
+    # 실패해도 리포트 본체를 막지 않는다(부가 섹션이다).
+    try:
+        campaigns = campaign_radar.detect()
+        if campaigns:
+            print("[+] 신규 공격 캠페인 {}건 탐지: {}".format(
+                len(campaigns), ", ".join(c["names"][0] for c in campaigns)))
+    except Exception as error:
+        print("[-] 신규 공격 캠페인 탐지 실패(리포트에는 영향 없음): {}".format(error))
+        campaigns = []
 
     dashboard_payload = build_dashboard_payload(
         title, args.period, period_label, stats, narrative, all_highlights, cards, all_trend_reads, keywords,
+        weekly_trends=weekly_trends, campaigns=campaigns,
     )
     publish_web_dashboard.publish(dashboard_payload)
 
