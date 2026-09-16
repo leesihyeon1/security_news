@@ -104,6 +104,28 @@ def html_to_text(raw_html):
     return common_utils.clean_text(BeautifulSoup(raw_html, "html.parser").get_text(" ", strip=True))
 
 
+class FeedNotServedError(RuntimeError):
+    """HTTP 200인데 돌아온 것이 피드가 아닐 때.
+
+    왜 예외로 올리나
+        조용한 실패가 제일 찾기 어렵다. 실측(2026-09-16): Google Security Blog 요청에
+        피드 대신 가로채기 페이지가 200으로 돌아왔다 — meta refresh로 feedburner를
+        가리키고 iframe이 IP 리터럴을 열도록 되어 있었다(재시도하면 정상 XML 513KB가
+        온다). 파서는 항목 0건을 돌려주고, 수집기는 그것을 "신규 기사가 없습니다"로
+        찍고 넘어갔다. 새 글이 없는 것과 피드를 못 받은 것이 화면에서 구별되지 않았다.
+
+        항목이 0건인 것 자체는 정상일 수 있다(그날 글이 없는 피드). 그래서 항목 수가
+        아니라 문서의 뿌리를 본다 — rss·feed·channel·RDF 중 아무것도 없으면 피드가
+        아니다.
+    """
+
+
+# 피드 문서의 뿌리. 이 중 하나라도 있으면 항목이 0건이어도 "빈 피드"로 본다.
+FEED_ROOT_TAGS = ("rss", "feed", "channel", "RDF")
+# 실패 메시지에 본문 앞부분을 조금 남긴다 — 차단 페이지인지 리다이렉트인지 바로 보인다.
+NOT_FEED_SNIPPET_CHARS = 160
+
+
 def fetch_feed_items(feed):
     resp = requests.get(feed["rss_url"], headers=REQUEST_HEADERS, timeout=20)
     resp.raise_for_status()
@@ -149,6 +171,11 @@ def fetch_feed_items(feed):
                 "pub_date": item_text(entry, "published") or item_text(entry, "updated"),
             }
         )
+    if not items and not any(soup.find(tag) for tag in FEED_ROOT_TAGS):
+        snippet = " ".join((resp.text or "")[:NOT_FEED_SNIPPET_CHARS * 3].split())
+        raise FeedNotServedError(
+            "HTTP {}인데 피드가 아닙니다(최종 URL {}): {}".format(
+                resp.status_code, resp.url[:80], snippet[:NOT_FEED_SNIPPET_CHARS]))
     return items
 
 
