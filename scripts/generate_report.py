@@ -2538,6 +2538,13 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "ioc_count": row.get("ioc_count") or 0,
             "novelty_new": row.get("novelty_new") or 0,
             "summary": row.get("summary") or "",
+            # 우리 수집 로그가 언제 시작됐는지. 이게 없으면 "최초 확인 2026-09-09"가
+            # 세계 최초로 읽힌다 — 실제로는 우리가 처음 본 날이고, 코퍼스가 두 달
+            # 남짓이라 그 전부터 알려진 그룹도 신규로 올라온다(실측: Rhysida·APT37).
+            # 화면에는 이미 "· {날짜} 수집 시작 기준"을 붙일 자리가 있는데 이 필드가
+            # 빠져 있어 한 번도 표시된 적이 없었다. 자산·PIR과 달리 조직 정보가
+            # 아니라 공개해도 되는 값이다.
+            "corpus_start": row.get("corpus_start") or "",
             "items": row.get("items") or [],
         }
 
