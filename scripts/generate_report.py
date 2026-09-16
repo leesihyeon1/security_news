@@ -69,6 +69,8 @@ CARD_REMEDIATION_CHARS = 150
 # "읽을만한 동향" 큐레이션: 긴급도 점수가 낮아 알림되지 않은 기사 중
 # 인사이트 신호(PIR 매칭, 또는 high 관련성의 위협 분석 기사)가 있는 것을 고른다.
 MAX_TREND_ITEMS = 5
+# PIR 매칭 개수를 이만큼까지만 점수에 반영한다(위 pir_any 주석 참고).
+PIR_ANY_COUNT_CAP = 2
 MAX_TREND_PER_CATEGORY = 2  # 카테고리 쏠림 방지 (슬롯이 남으면 상한 해제)
 TREND_CATEGORIES = {"공격캠페인", "침해사고", "개인정보유출", "악성코드", "공급망공격", "기술동향"}
 EXPLORE_SLOT_COUNT = 1  # 개인화(feedback_useful·search_interest) 없이 quality_score만으로
@@ -79,16 +81,32 @@ EXPLORE_SLOT_COUNT = 1  # 개인화(feedback_useful·search_interest) 없이 qua
 # 깊이·인텔풍부도·HN화제성·중요도에서 압도적으로 우세한 기사가 무조건 지는 게 부자연스럽다.
 # 값 자체는 실측 튜닝 전 추정치 — 피드백 데이터가 쌓이면 재조정이 필요하다.
 INSIGHT_WEIGHTS = {
-    "pir_high": 40,       # 고가중치 PIR 매칭 1개당
-    "pir_any": 8,         # PIR 매칭 1개당(고가중치 포함 전체 개수)
+    "pir_high": 40,       # 고가중치 PIR에 하나라도 걸리면 한 번만(개수만큼 곱하지 않는다)
+    "pir_any": 8,         # PIR 매칭 1개당, 단 PIR_ANY_COUNT_CAP개까지만
+                          # 예전엔 둘 다 매칭 개수만큼 그대로 곱했다. 그러면 PIR 3개에
+                          # 걸린 기사가 PIR 축에서만 144점을 받는데, 나머지 축(관련성·
+                          # 신규성·깊이·중요도·최신성)을 전부 만점 받아도 59점이다.
+                          # 실측(2026-09-16 추천기사): "여러 주제를 한 문단씩 훑는" 칼럼이
+                          # AI·엔드포인트·공급망 PIR 3개를 맞춰 192점으로 1·2위를 차지하고,
+                          # 실제 악용이 확인된 GitLab 최고심각도 취약점(PIR 1개)이 95점으로
+                          # 밀렸다. "PIR에 답하는가"는 살리되 "몇 개나 스치는가"로는 이기지
+                          # 못하게 개수 의존을 끊는다.
     "topic_repeat": -15,  # 이미 알림된 행위자·멀웨어 재탕
     "confidence_low": -8,  # LLM 스스로 모호하다고 판정
     "relevance": 25,      # high=1.0 / medium=0.5 / 미판정=0.0
     "novelty": 12,        # new=1.0 / update=0.5 / known=0.0 / 미판정=0.3
-    "depth": 10,          # analyst_review rubric(기술적실체+실행가능성+신뢰성, 0~8)/8 — rubric
+    "depth": 35,          # analyst_review rubric(기술적실체+실행가능성+신뢰성, 0~8)/8 — rubric
                           # 없는 이벤트는 하위호환으로 content_depth 근사값(analysis=1.0/.../미판정=0.4) 사용.
                           # IOC·ATT&CK 풍부도는 rubric의 technical_substance 채점 근거에 이미 포함되므로
                           # 별도 intel_richness 축(구 버전에 있었음)은 제거 — 같은 사실의 이중계산 방지.
+                          # 10점이었는데 35로 올렸다. 10점이면 rubric 만점(8/8)과 0점의 차이가
+                          # 10점뿐이라 PIR 하나 차이(48점)의 1/5도 안 됐고, 사람 기준으로
+                          # 채점한 "읽을 가치"가 순위에 사실상 반영되지 않았다.
+    "actionability_zero": -25,  # rubric의 실행가능성이 명시적으로 0점일 때. 채점자가 "읽어도
+                          # 할 일이 없다"고 판정한 글이다. 가중합 안에서 rubric 총점의 일부로만
+                          # 반영하면 나머지 두 항목이 상쇄해 버려서(실측: 실행가능성 0인 칼럼이
+                          # 기술적실체·신뢰성으로 3/8을 받아 1위) 그 판정을 따로 세운다.
+                          # 0점과 미채점을 구별한다 — 채점이 없는 이벤트는 감점하지 않는다.
     "hn_buzz": 6,          # log1p(HN 포인트)
     "importance": 7,      # importance_score / 100 — importance_score 자체가 pir_high/relevance/
                            # confidence_low를 이미 피처로 쓰고 있어 그 3개와 중복 계산됨. 겹치는
@@ -520,6 +538,17 @@ def _cluster_representatives(ranked_candidates):
     return representatives
 
 
+def _actionability_is_zero(event):
+    """분석가 rubric이 실행가능성을 명시적으로 0점으로 채점했는가.
+
+    채점이 없는 이벤트(rubric 도입 전 수집분·enrichment 실패)와 구별한다 — 채점이
+    없는 것은 "할 일이 없다"는 판정이 아니라 판정 자체가 없는 것이라, 감점하면
+    옛 이벤트가 일괄로 불이익을 받는다.
+    """
+    value = (event.get("analyst_review") or {}).get("actionability")
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+
+
 def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False):
     """알림 문턱을 못 넘었지만 읽을 가치가 있는 동향 기사 큐레이션.
 
@@ -649,13 +678,14 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         recency_days = (now_ts - published_ts(event)) / 86400 if published_ts(event) else 999
         w = INSIGHT_WEIGHTS
         return (
-            w["pir_high"] * sum(1 for weight in weights if weight == "high")
-            + w["pir_any"] * len(weights)
+            w["pir_high"] * (1 if any(weight == "high" for weight in weights) else 0)
+            + w["pir_any"] * min(len(weights), PIR_ANY_COUNT_CAP)
             + w["topic_repeat"] * (1 if event_topics(event) & alerted_topics else 0)
             + w["confidence_low"] * (1 if (event.get("confidence") or "") == "low" else 0)
             + w["relevance"] * relevance_value.get(event.get("relevance") or "", 0.0)
             + w["novelty"] * novelty_value.get(event.get("novelty") or "", 0.3)
             + w["depth"] * analyst_quality_value(event)
+            + w["actionability_zero"] * (1 if _actionability_is_zero(event) else 0)
             + w["hn_buzz"] * math.log1p(hn_points(event))
             + w["importance"] * (importance_score(event) / 100.0)
             + w["recency"] * max(0.0, 1.0 - recency_days / 7.0)
