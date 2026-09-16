@@ -77,8 +77,10 @@ ARTIFACTS = {
         "KEV·EPSS로 본 패치 긴급도",
         lambda b: bool((b.get("vulnerability") or {}).get("cves"))),
     "registry_status": (
-        "패키지 레지스트리 등재 현황",
-        lambda b: bool(b.get("supply_chain"))),
+        "배포 경로 등재 현황(패키지 레지스트리·확장 스토어)",
+        # 확장 스토어도 "받아 쓰는 통로"라는 점에서 레지스트리와 같은 자리다. 이걸
+        # 빼놓으면 확장 건이 스토어 조회를 내고도 미달로 찍힌다.
+        lambda b: bool(b.get("supply_chain") or b.get("extension"))),
     "repo_status": (
         "저장소·계정 상태 확인",
         lambda b: bool(b.get("github"))),

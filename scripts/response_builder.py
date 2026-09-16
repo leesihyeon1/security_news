@@ -22,6 +22,7 @@ import re
 
 import artifact_extractor
 import common_utils
+import extension_hunter
 import github_hunter
 import lure_hunter
 import supply_chain_hunter
@@ -455,7 +456,9 @@ def build(block, iocs, primary="", text=""):
     github_material = github_hunter.response_material(block.get("github"))
     supply_material = supply_chain_hunter.response_material(block.get("supply_chain"))
     vuln_material = vuln_hunter.response_material(block.get("vulnerability"))
-    if not (blocklists or queries or vuln_material or supply_material or github_material):
+    extension_material = extension_hunter.response_material(block.get("extension"))
+    if not (blocklists or queries or vuln_material or supply_material or github_material
+            or extension_material):
         return None
 
     actions = []
@@ -490,6 +493,11 @@ def build(block, iocs, primary="", text=""):
         blocklists = github_material["blocklists"] + blocklists
         queries = (github_material["kql"] + queries)[:MAX_KQL_QUERIES]
         actions = github_material["actions"] + actions
+
+    if extension_material:
+        blocklists = extension_material["blocklists"] + blocklists
+        queries = (extension_material["kql"] + queries)[:MAX_KQL_QUERIES]
+        actions = extension_material["actions"] + actions
 
     if supply_material:
         blocklists = supply_material["blocklists"] + blocklists

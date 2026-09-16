@@ -70,6 +70,8 @@ def _availability(route, targets):
         # 트랙이 성립했다는 것 자체가 입력이 있다는 뜻이므로 그것으로 판단한다.
         "github": ("저장소 주소 있음" if "github" in (route.get("tracks") or [])
                    else "없음"),
+        "extension": ("확장 프로그램 ID 있음" if "extension" in (route.get("tracks") or [])
+                      else "없음"),
         "intel": ("도메인·IP·해시 있음" if "intel" in (route.get("tracks") or [])
                   else "없음"),
         "web": ("검색할 이름 있음" if "web" in (route.get("tracks") or []) else "없음"),

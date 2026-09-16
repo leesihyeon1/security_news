@@ -14,6 +14,7 @@
 import re
 
 import analysis_targets
+import extension_hunter
 import github_hunter
 import intel_hunter
 import lookup_plan
@@ -95,6 +96,12 @@ TRACK_LABELS = {
     "malware": "악성코드 기반 — VT 동적 분석",
     "vulnerability": "취약점 기반 — 패치 우선순위",
     "supply_chain": "공급망 기반 — 패키지 레지스트리",
+    # 보조 조회도 이름을 갖는다. 예전에는 넷만 있어서, 트랙 목록에 github·intel·web이
+    # 섞이면 "판정 보류" 안내문을 만들다가 KeyError로 조사&대응이 통째로 사라졌다.
+    "extension": "확장 프로그램 기반 — 스토어 조회",
+    "github": "저장소 기반 — GitHub 조회",
+    "intel": "교차 인텔 — OTX·Shodan·abuse.ch",
+    "web": "공개 자료 — 웹 검색",
 }
 
 
@@ -126,7 +133,7 @@ def _score(head, body, strong_re, weak_re):
     return score, reasons
 
 
-def classify(iocs, text="", title="", category="", targets=None):
+def classify(iocs, text="", title="", category="", targets=None, raw_body=""):
     """어떤 트랙이 필요한지, 그중 무엇이 주력인지 판단한다.
 
     트랙 존재 여부는 증거(IOC 종류)로 정하고, 무엇을 주력으로 볼지는 사건의 성격
@@ -173,6 +180,10 @@ def classify(iocs, text="", title="", category="", targets=None):
     # github.com이 정상 인프라라는 것만 확인하고 끝냈다.
     if github_hunter.refs_from(iocs, text, targets):
         tracks.append("github")
+    # 확장 프로그램 ID가 본문에 있으면 스토어에 직접 조회한다. 공급망 기사인데
+    # 패키지 레지스트리에는 없는 통로라, 이게 없으면 조사가 빈손으로 끝난다.
+    if extension_hunter.ids_from_text(text, raw_body):
+        tracks.append("extension")
     # 지표가 하나라도 있으면 다른 인텔리전스에도 물어본다 — 한 곳만 보는 것은 조사가
     # 아니라 조회다.
     # URL도 조회 대상이다 — URLhaus는 "이 주소가 유포지로 신고됐나"에 답하고, 그건
@@ -263,7 +274,8 @@ def classify(iocs, text="", title="", category="", targets=None):
 
     if not primary and tracks:
         # 트랙은 있는데 주력을 못 정한 경우 — 무엇이 있는지만 알리고 판단은 넘긴다.
-        available = " / ".join(TRACK_LABELS[track].split(" — ")[1] for track in tracks)
+        available = " / ".join(
+            TRACK_LABELS.get(track, track).split(" — ")[-1] for track in tracks)
         return {
             "primary": "",
             "label": "분석 방향 판정 보류",
@@ -292,6 +304,11 @@ def classify(iocs, text="", title="", category="", targets=None):
                   "vulnerability": vuln_reasons, "supply_chain": supply_reasons}
     basis = "; ".join((reason_map.get(primary) or [])[:3])
     explain = ""
+    if primary == "extension":
+        explain = ("브라우저 확장이 통로인 유형입니다. 확장은 정상 개발자 계정이 넘어가면 "
+                   "기존 사용자에게 악성 업데이트가 그대로 밀려 들어가므로, 기사에 적힌 ID가 "
+                   "스토어에 아직 살아 있는지와 그 확장이 어떤 권한을 요구하는지를 직접 "
+                   "조회합니다.")
     if primary == "user_action":
         explain = ("사용자가 직접 명령을 실행해야 하는 유형입니다. 파일을 막는 것보다 "
                    "유포지(미끼 페이지)를 찾아 차단하는 쪽이 효과가 크므로, URL 분석을 "
@@ -405,6 +422,13 @@ def _run_malware(ctx):
                                     iocs=ctx["iocs"])
 
 
+def _run_extension(ctx):
+    # 확장 ID는 모델에게 묻지 않고 본문에서 직접 뽑는다 — 32자 a-p 문자열이라
+    # 오인할 수 없는 형태다. 1차 자료에도 ID가 실리는 경우가 많아 함께 본다.
+    ids = extension_hunter.ids_from_text(ctx["text"], ctx.get("body") or "")
+    return extension_hunter.analyze(ids, objective=(ctx["targets"] or {}).get("objective") or "")
+
+
 def _run_github(ctx):
     return github_hunter.analyze(ctx["iocs"], text=ctx["text"], targets=ctx["targets"])
 
@@ -446,6 +470,9 @@ LOOKUPS = (
      "merge": _merge_named("supply_chain")},
     {"key": "vulnerability", "label": "취약점 조회",
      "consumes": "CVE·제품 이름", "run": _run_vuln, "merge": _merge_named("vulnerability")},
+    {"key": "extension", "label": "확장 프로그램 조회",
+     "consumes": "브라우저 확장 ID(크롬 웹 스토어·엣지 애드온)", "run": _run_extension,
+     "merge": _merge_named("extension")},
     {"key": "github", "label": "GitHub 조회",
      "consumes": "저장소 주소(owner/repo)", "run": _run_github,
      "merge": _merge_named("github")},
@@ -553,7 +580,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     추가한다 — 이미 저장된 분석 기록을 그리는 화면 코드가 깨지지 않게.
     """
     targets = targets or {}
-    route = classify(iocs, text=text, title=title, category=category, targets=targets)
+    route = classify(iocs, text=text, title=title, category=category, targets=targets,
+                     raw_body=body)
     block = {"route": {key: route[key]
                        for key in ("primary", "label", "explain", "tracks", "scores")}}
 
@@ -616,7 +644,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
 
     run_lookups({"iocs": iocs, "text": text, "title": title, "route": route,
                  "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets,
-                 "block": block},
+                 "body": body, "block": block},
                 block, steps)
 
     block.setdefault("patterns", [])
