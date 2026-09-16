@@ -73,7 +73,7 @@
     "name": "darkreading",
     "label": "Dark Reading",
     "reliability": "C",
-    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신 확인해 복구. 기사 페이지는 403으로 막혀 본문 수집을 켤 수 없다(2026-09-16 기사 4건 모두 403) — RSS 요약 200자 안팎만 들어온다.",
     "rss_url": "https://www.darkreading.com/rss.xml",
     "fetch_body": false,
     "enrich": true,
@@ -211,13 +211,14 @@
     "name": "welivesecurity",
     "label": "ESET WeLiveSecurity",
     "reliability": "B",
-    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신 확인해 복구. RSS 요약이 100자 안팎이라 본문 수집을 켰다 — 기사 3건에서 5,483~6,173자 추출 확인.",
     "rss_url": "https://www.welivesecurity.com/en/rss/feed/",
-    "fetch_body": false,
+    "fetch_body": true,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": true
+    "enabled": true,
+    "body_selector": "div[class*='article-body']"
   },
   {
     "name": "sophos",
