@@ -639,18 +639,24 @@ def enrich_file(hash_value, api_key, pause=True):
     """
     # 외부 조회는 VT 키와 무관하다 — VT 키가 없어도 이쪽은 돌린다.
     outside = sandbox_lookup.lookup_all(hash_value, pause=pause)
+    # 세 곳 모두 못 찾았을 때만 검색한다. 이미 확보처가 있으면 CSE 한도를 쓸 이유가
+    # 없고, 못 찾았을 때는 VirusShare·MalShare처럼 우리가 조회기를 안 붙인 저장소나
+    # 연구자 분석 글에 받는 곳이 적혀 있는 경우가 있다.
+    searched = None
+    if not any(item.get("found") for item in outside):
+        searched = sandbox_lookup.search_sample(hash_value)
 
     if not api_key:
         return {"sandboxes": [], "comments": [],
                 "external": external_reports(hash_value, []),
-                "outside": outside}
+                "outside": outside, "searched": searched}
     sandboxes = fetch_sandboxes(hash_value, api_key)
     if pause:
         time.sleep(PAUSE_SECONDS)
     comments = fetch_community(hash_value, api_key)
     return {"sandboxes": sandboxes, "comments": comments,
             "external": external_reports(hash_value, comments),
-            "outside": outside}
+            "outside": outside, "searched": searched}
 
 
 def _enrichment_findings(hash_value, enrichment):
@@ -688,6 +694,10 @@ def _enrichment_findings(hash_value, enrichment):
     if outside:
         # 실제 조회 결과(판정·추출 C2·다른 서비스 판정)를 그대로 붙인다.
         lines.extend(sandbox_lookup.findings(outside))
+        # 셋 다 못 찾아 검색까지 간 경우, 어디서 받을 수 있는지도 함께 말한다.
+        if enrichment.get("searched"):
+            lines.extend(sandbox_lookup.search_findings(
+                hash_value, enrichment["searched"]))
     else:
         confirmed = [e["name"] for e in enrichment.get("external") or [] if e["confirmed"]]
         if confirmed:
@@ -741,6 +751,12 @@ def _external_queries(enrichment):
             "url": sandbox["url"],
             "link_label": "VT에서 열기",
             "paid": False,
+        })
+    for row in ((enrichment or {}).get("searched") or {}).get("sources") or []:
+        rows.append({
+            "name": "{} — 검색으로 찾은 확보처 후보".format(row["site"]),
+            "query": row["url"], "url": row["url"],
+            "link_label": "열기", "paid": False,
         })
     outside = (enrichment or {}).get("outside") or []
     if outside:

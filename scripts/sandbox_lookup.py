@@ -296,6 +296,92 @@ def lookup_all(hash_value, pause=True):
     return results
 
 
+# 검색으로 샘플 확보처를 찾을 때 "여기 걸리면 실제로 받을 수 있다"고 볼 사이트.
+# 세 서비스에 없는 샘플이 다른 저장소에는 있는 일이 흔하다 — 해시는 전 세계가 같은
+# 문자열을 쓰므로 검색이 잘 듣는다.
+SAMPLE_HOSTS = {
+    "bazaar.abuse.ch", "tria.ge", "hybrid-analysis.com", "virusshare.com",
+    "malshare.com", "vx-underground.org", "app.any.run", "filescan.io",
+    "joesandbox.com", "malware-traffic-analysis.net", "urlhaus.abuse.ch",
+    "threatfox.abuse.ch", "github.com", "objective-see.org", "polyswarm.network",
+    "capesandbox.com", "malwarebazaar.com", "unpac.me", "yaraify.abuse.ch",
+}
+# 한 기사에서 검색으로 쓸 해시 수. CSE는 하루 한도가 있어 아껴 써야 한다.
+MAX_SEARCHED_HASHES = 2
+SEARCH_RESULTS = 5
+
+
+def _host_of(url):
+    try:
+        import urllib.parse as _p
+        return (_p.urlparse(url).hostname or "").lower().lstrip("www.")
+    except Exception:
+        return ""
+
+
+def search_sample(hash_value, filename="", searcher=None):
+    """해시(필요하면 파일명)로 공개 웹에서 확보처를 찾는다.
+
+    왜 필요한가
+        Triage·MalwareBazaar·Hybrid Analysis 셋에 없다고 해서 샘플을 못 구하는 것이
+        아니다. VirusShare·MalShare·vx-underground처럼 우리가 조회기를 붙이지 않은
+        저장소도 있고, 연구자가 분석 글에 해시와 함께 받는 곳을 적어 두기도 한다.
+        해시는 전 세계가 같은 문자열을 쓰므로 검색이 정확히 듣는다.
+
+    무엇을 돌려주나
+        sources  실제로 샘플을 받을 수 있을 법한 곳(SAMPLE_HOSTS에 걸린 결과)
+        writeups 그 밖의 결과 — 샘플은 아니지만 분석 글일 수 있다
+        "검색에 걸렸다"와 "받을 수 있다"는 다르므로 섞지 않는다.
+    """
+    if searcher is None:
+        import web_search
+        if not web_search.available():
+            return {"sources": [], "writeups": [], "error": "웹 검색 키가 없습니다"}
+        searcher = web_search.search
+    query = '"{}"'.format(hash_value.strip())
+    items, error = searcher(query, SEARCH_RESULTS)
+    if error:
+        return {"sources": [], "writeups": [], "error": error}
+    sources, writeups = [], []
+    for item in items or []:
+        host = _host_of(item.get("link") or "") or (item.get("site") or "").lower()
+        row = {"site": host, "title": item.get("title") or "", "url": item.get("link") or ""}
+        if any(host == known or host.endswith("." + known) for known in SAMPLE_HOSTS):
+            sources.append(row)
+        else:
+            writeups.append(row)
+    return {"sources": sources[:MAX_ITEMS], "writeups": writeups[:3],
+            "error": "", "query": query}
+
+
+def search_findings(hash_value, found):
+    """검색 결과를 확인내용 문장으로. 확보처와 분석 글을 나눠 말한다."""
+    lines = []
+    if found.get("error"):
+        lines.append("해시 {}로 공개 웹을 검색하지 못했습니다 — {}.".format(
+            hash_value[:16], found["error"]))
+        return lines
+    if found.get("sources"):
+        names = ", ".join(sorted({row["site"] for row in found["sources"] if row["site"]}))
+        lines.append(
+            "세 서비스에는 없지만 해시로 검색하니 {}에서 걸립니다 — 여기서 샘플을 "
+            "받을 수 있는지 확인해 볼 만합니다.".format(names))
+        for row in found["sources"][:3]:
+            lines.append("· {} — {}".format(row["site"], (row["title"] or row["url"])[:80]))
+    elif found.get("writeups"):
+        lines.append(
+            "해시로 검색했지만 샘플을 받을 수 있는 저장소는 걸리지 않았습니다. "
+            "분석 글로 보이는 결과만 {}건 있습니다.".format(len(found["writeups"])))
+        for row in found["writeups"][:2]:
+            lines.append("· {} — {}".format(row["site"], (row["title"] or row["url"])[:80]))
+    else:
+        lines.append(
+            "해시로 공개 웹을 검색했지만 아무 곳에도 걸리지 않았습니다 — 아직 공개 "
+            "저장소에 올라오지 않은 샘플이라는 뜻이고, 받으려면 기사를 쓴 쪽에 "
+            "요청하는 수밖에 없습니다.")
+    return lines
+
+
 def findings(results):
     """조회 결과를 확인내용 문장으로. 키가 없어 못 본 것은 그렇다고 밝힌다."""
     lines = []

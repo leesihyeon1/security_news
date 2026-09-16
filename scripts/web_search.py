@@ -149,11 +149,13 @@ def analyze(targets=None, answered=()):
         return None
 
     findings, steps, references = [], [], []
+    failures = []
     for term in terms:
         items, reason = search(term)
         time.sleep(PAUSE_SECONDS)
         if items is None:
             steps.append("\"{}\" 웹 검색을 건너뛰었습니다 — {}.".format(term, reason))
+            failures.append(reason)
             continue
         if not items:
             steps.append("\"{}\"로 검색했지만 지정한 연구 사이트에서는 결과가 없었습니다."
@@ -172,7 +174,15 @@ def analyze(targets=None, answered=()):
         references.extend(item["link"] for item in items if item["link"])
 
     if not findings:
-        return None
+        # 검색이 한 번도 성공하지 못한 것과 "찾았는데 없더라"는 다르다. None을
+        # 돌려주면 위에서 "결과가 없었습니다"로 덮여, 키 제한 때문에 한 번도 돌지
+        # 않았다는 사실이 화면에서 사라진다(실측 2026-09-17: API 키에 Android 앱
+        # 제한이 걸려 모든 호출이 403이었는데 카드에는 자료 없음으로 나왔다).
+        if failures:
+            findings = ["웹 검색이 돌지 않아 공개 자료를 확인하지 못했습니다 — {}. "
+                        "자료가 없다는 뜻이 아닙니다.".format(failures[0][:70])]
+        else:
+            return None
     seen, unique = set(), []
     for link in references:
         if link not in seen:

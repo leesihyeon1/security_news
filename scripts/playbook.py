@@ -62,6 +62,10 @@ def _sample_source(block):
         for service in enrichment.get("external") or []:
             if service.get("confirmed"):
                 return True
+        # 셋 다 없을 때 해시로 검색해 찾은 공개 저장소도 확보 경로다. 분석 글만
+        # 걸린 경우(writeups)는 세지 않는다 — 읽을 거리이지 받을 곳이 아니다.
+        if (enrichment.get("searched") or {}).get("sources"):
+            return True
     return False
 
 
