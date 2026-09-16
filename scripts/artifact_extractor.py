@@ -27,8 +27,8 @@ FILE_RE = re.compile(
     r"msi|lnk|zip|rar|7z|iso|img|py|jar|apk|dmg|pkg|chm|inf|reg)(?![A-Za-z0-9_])", re.I)
 PATH_RE = re.compile(
     r"(?:[A-Za-z]:" + BS + BS + r"|%[A-Za-z]+%" + BS + BS + r"|/(?:usr|tmp|etc|opt|var)/)"
-    r"[^" + BS + r"s`'" + '"' + r"*)]{3,90}")
-REGISTRY_RE = re.compile(r"HK(?:LM|CU|CR|U|EY_[A-Z_]+)[" + BS + BS + r"/][^" + BS + r"s`'" + '"' + r"*)]{3,90}")
+    r"[^" + BS + r"s`'" + '"' + r"*()]{3,90}")
+REGISTRY_RE = re.compile(r"HK(?:LM|CU|CR|U|EY_[A-Z_]+)[" + BS + BS + r"/][^" + BS + r"s`'" + '"' + r"*()]{3,90}")
 EXTENSION_RE = re.compile(
     r"" + BS + r".([a-z0-9]{3,10})(?=" + BS + r"s*(?:확장자|파일로|로 변경|로 바꾸|를 붙))", re.I)
 REPO_RE = re.compile(
@@ -161,10 +161,19 @@ MAX_ITEMS = 12
 HANGUL_TAIL_RE = re.compile(r"[가-힣]+$")
 
 
+DECOR_CHARS = "`*'" + chr(34) + "()[]，,"
+
+
 def _clean(value):
-    """앞뒤 장식과 뒤에 붙은 한글 조사를 떼어낸다("...df4e에" -> "...df4e")."""
-    text = str(value or "").strip().strip("`*'\"()[]，,")
-    return HANGUL_TAIL_RE.sub("", text).rstrip(".,·")
+    """앞뒤 장식과 뒤에 붙은 한글 조사를 떼어낸다("...df4e에" -> "...df4e").
+
+    조사를 뗀 뒤에 한 번 더 떼는 이유: 장식을 먼저 떼면 조사에 가려져 있던 구두점이
+    그대로 남는다. 실측(2026-09-17) — 본문의 "…DefaultIcon(기본값)에"에서 값이
+    "…DefaultIcon(" 으로 나와, 레지스트리 헌팅 쿼리가 맞을 수 없는 문자열을 찾았다.
+    """
+    text = str(value or "").strip().strip(DECOR_CHARS)
+    text = HANGUL_TAIL_RE.sub("", text).rstrip(".,·")
+    return text.strip(DECOR_CHARS).rstrip(".,·")
 
 
 def extract(text):
