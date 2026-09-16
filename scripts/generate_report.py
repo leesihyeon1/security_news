@@ -2725,6 +2725,9 @@ def main():
         if campaigns:
             print("[+] 신규 공격 캠페인 {}건 탐지: {}".format(
                 len(campaigns), ", ".join(c["names"][0] for c in campaigns)))
+            # 공격 동향에 오른 건 이미 여러 문턱을 통과한 것이라, 사람이 누르기를
+            # 기다리지 않고 바로 심층분석을 건다. 같은 캠페인을 두 번 걸지는 않는다.
+            campaign_radar.queue_deep_analysis(campaigns)
     except Exception as error:
         print("[-] 신규 공격 캠페인 탐지 실패(리포트에는 영향 없음): {}".format(error))
         campaigns = []

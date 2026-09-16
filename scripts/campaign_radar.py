@@ -35,6 +35,7 @@
 
 import io
 import json
+import os
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -355,6 +356,94 @@ def _build_rows(groups):
     for row in rows:
         row["corpus_start"] = started
     return rows
+
+
+# 새로 뜬 캠페인은 사람이 누르기를 기다리지 않고 바로 심층분석에 건다.
+#
+# 왜 자동인가
+#     공격 동향에 오르는 것은 이미 "최근 14일 안에 처음 등장했고, 서로 다른 매체
+#     두 곳 이상이 다뤘고, 우리 PIR이나 자산에 걸린" 것만 남은 목록이다. 거기까지
+#     통과한 건을 놓고 다시 사람의 클릭을 기다릴 이유가 없다.
+#
+# 한 번만 건다
+#     캠페인은 창 안에 있는 동안 매일 같은 카드로 다시 나온다(14일). 그때마다 큐에
+#     넣으면 같은 기사를 열네 번 분석한다. 이름 집합을 상태 파일에 적어 두고, 이미
+#     건 것은 건너뛴다. 분석 결과가 이미 캐시에 있는 경우도 건너뛴다 — 사람이 먼저
+#     눌러서 분석된 건이 그렇다.
+ANALYSIS_QUEUE_KEY = "analysis:queue"
+ANALYSIS_CACHE_PREFIX = "analysis:"
+QUEUE_STATE_FILE = common_utils.STATE_DIR / "campaign_analysis_state.json"
+# 한 회차에 거는 최대 건수. 워커가 한 건에 2~3분을 쓰므로 한꺼번에 밀어 넣으면
+# 그날 대기열이 다른 요청으로 막힌다.
+MAX_QUEUED_PER_RUN = 3
+
+
+def _queue_client():
+    """Redis 클라이언트. 없으면 None — 큐잉은 부가 기능이라 리포트를 막지 않는다."""
+    url = os.environ.get("REDIS_URL", "")
+    if not url:
+        return None
+    try:
+        import redis
+    except ImportError:
+        return None
+    try:
+        client = redis.from_url(url, decode_responses=True,
+                                socket_connect_timeout=10, socket_timeout=15)
+        client.ping()
+        return client
+    except Exception as error:
+        print("[-] 심층분석 큐 연결 실패(리포트에는 영향 없음): {}".format(error))
+        return None
+
+
+def campaign_key(row):
+    """같은 캠페인인지 가리는 열쇠. 이름 집합이 같으면 같은 것으로 본다."""
+    return "|".join(sorted(name.lower() for name in (row.get("names") or [])))
+
+
+def queue_deep_analysis(rows):
+    """새로 뜬 캠페인의 대표 기사를 심층분석 큐에 넣는다. 넣은 건수를 돌려준다."""
+    rows = [row for row in rows or [] if row.get("items")]
+    if not rows:
+        return 0
+    client = _queue_client()
+    if client is None:
+        return 0
+    state = common_utils.load_json_state(QUEUE_STATE_FILE, lambda: {"queued": []})
+    already = set(state.get("queued") or [])
+
+    queued = 0
+    for row in rows:
+        if queued >= MAX_QUEUED_PER_RUN:
+            break
+        key = campaign_key(row)
+        if not key or key in already:
+            continue
+        # items[0]은 캠페인 이름이 제목에 있는 기사다(_build_rows에서 그렇게 정렬했다).
+        item = row["items"][0]
+        ref = item.get("ref") or ""
+        if not ref or not item.get("url"):
+            continue
+        try:
+            if client.exists(ANALYSIS_CACHE_PREFIX + ref):
+                already.add(key)          # 이미 분석된 건 — 다시 걸지 않는다
+                continue
+            client.rpush(ANALYSIS_QUEUE_KEY, json.dumps(
+                {"ref": ref, "title": item.get("title") or "", "url": item["url"]},
+                ensure_ascii=False))
+        except Exception as error:
+            print("[-] 심층분석 큐 등록 실패({}): {}".format(row["names"][0][:24], error))
+            continue
+        already.add(key)
+        queued += 1
+        print("[+] 신규 캠페인 심층분석 큐 등록: {} — {}".format(
+            " / ".join(row["names"][:2]), (item.get("title") or "")[:52]))
+
+    if already != set(state.get("queued") or []):
+        common_utils.save_json_state(QUEUE_STATE_FILE, {"queued": sorted(already)},
+                                     max_items=500, keys_to_trim=["queued"])
+    return queued
 
 
 if __name__ == "__main__":
