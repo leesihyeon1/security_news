@@ -496,6 +496,67 @@ def importance_score(event):
     return ((event.get("importance") or {}).get("score")) or 0
 
 
+# 같은 사건을 다룬 다른 매체 기사를 묶는 데 쓰는 어휘.
+# 제품명에서 사건을 가르는 이름만 남긴다 — "software"·"enterprise" 같은 수식어와
+# "windows"·"chrome" 같은 범용 플랫폼은 서로 무관한 사건이 흔히 공유한다.
+# 실측(2026-09-11): "microsoft windows"를 공유한다는 이유로 ShieldCrash 제로데이와
+# BlueMoon 익스플로잇킷이, "google chrome"으로 BlueMoon과 LegionLoader ClickFix가
+# 한 사건으로 묶였다. 둘 다 다른 사건이다.
+GENERIC_PRODUCT_TOKENS = {
+    "software", "server", "enterprise", "community", "edition", "gateway", "security",
+    "cloud", "service", "services", "system", "systems", "platform", "mobile", "suite",
+    "manager", "management", "center", "centre", "studio", "framework", "library",
+    "browser", "desktop", "client", "agent", "engine", "portal", "appliance",
+}
+PLATFORM_PRODUCT_TOKENS = {
+    "microsoft", "google", "apple", "anthropic", "openai", "windows", "chrome",
+    "chromium", "android", "linux", "macos", "ipados", "safari", "firefox", "edge", "office",
+}
+MIN_PRODUCT_TOKEN_CHARS = 4
+PRODUCT_TOKEN_RE = re.compile(r"[^a-z0-9가-힣]+")
+
+
+def _product_tokens(product):
+    return {token for token in PRODUCT_TOKEN_RE.split(str(product or "").lower())
+            if len(token) >= MIN_PRODUCT_TOKEN_CHARS
+            and token not in GENERIC_PRODUCT_TOKENS
+            and token not in PLATFORM_PRODUCT_TOKENS}
+
+
+def _same_story(left, right):
+    """두 기사가 같은 사건을 다루는가. 맞으면 근거가 된 이름을 돌려준다.
+
+    enrichment가 붙여 준 affected_products를 사건의 열쇠로 쓴다. 제목 자카드로는
+    안 잡힌다 — 실측(2026-09-16): "What we know about the Revolut data breach so far"와
+    "Revolut gave customer IDs and financial data to a government impostor"는 같은
+    사건인데 공유 토큰이 revolut 하나뿐이라 유사도가 문턱을 못 넘고, 추천기사 2위·6위에
+    나란히 실렸다.
+
+    세 가지를 모두 요구한다.
+      · 같은 제품을 지목했고
+      · 분류가 같고(다른 분류면 같은 제품이라도 다른 각도의 사건이다)
+      · 다른 매체이며(같은 매체의 연재물은 같은 사건이 아니다 — 안랩 월간
+        다크웹 보고서가 "위협 행위자 편"과 "이슈 편"으로 따로 나온다)
+      · 그 제품 이름이 양쪽 제목에 모두 나온다.
+
+    마지막 조건이 정밀도를 만든다. 한쪽 제목에만 나와도 된다고 풀면 본문에서 스친
+    제품으로 무관한 사건이 묶인다.
+    """
+    if (left.get("category") or "") != (right.get("category") or ""):
+        return ""
+    if (left.get("source") or "") == (right.get("source") or ""):
+        return ""
+    left_title = (left.get("title") or "").lower()
+    right_title = (right.get("title") or "").lower()
+    left_products = {str(p).strip().lower() for p in (left.get("affected_products") or []) if str(p).strip()}
+    right_products = {str(p).strip().lower() for p in (right.get("affected_products") or []) if str(p).strip()}
+    for product in left_products & right_products:
+        for token in _product_tokens(product):
+            if token in left_title and token in right_title:
+                return token
+    return ""
+
+
 def _cluster_representatives(ranked_candidates):
     """related_ids 관계를 Union-Find로 전이적으로 묶어, 같은 사건 클러스터당
     1건(대표)만 남긴다.
@@ -528,6 +589,15 @@ def _cluster_representatives(ranked_candidates):
             if related_id in ids:
                 union(event.get("id"), related_id)
 
+    # related_ids가 비어 있어도 같은 사건인 경우가 있다. 제품·분류·제목이 함께
+    # 가리키면 묶는다(_same_story 참고). 후보 수가 수십 건이라 쌍 비교로 충분하다.
+    for index, event in enumerate(ranked_candidates):
+        for other in ranked_candidates[index + 1:]:
+            if find(event.get("id")) == find(other.get("id")):
+                continue
+            if _same_story(event, other):
+                union(event.get("id"), other.get("id"))
+
     seen_roots = set()
     representatives = []
     for event in ranked_candidates:
@@ -549,7 +619,8 @@ def _actionability_is_zero(event):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
 
 
-def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False):
+def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False,
+                     rank_by_importance=False):
     """알림 문턱을 못 넘었지만 읽을 가치가 있는 동향 기사 큐레이션.
 
     긴급도(악용·자산) 축과 별개로 '읽을 가치' 축을 보완한다.
@@ -578,6 +649,18 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
     다른 표현"(0.93)보다 "다른 사건, 같은 행위자명 공유"(0.98)가 더 높게 나와
     신뢰할 수 없었다 — 그래서 이미 있던 신뢰할 만한 신호(CVE 겹침·제목 자카드
     기반 related_ids)를 전이적으로 클러스터링하는 방식으로 대체했다.
+
+    rank_by_importance=True면 아래 큐레이션(탐색 슬롯·PIR 커버리지·카테고리 캡)을
+    건너뛰고 중요도순으로만 돌려준다. 대시보드처럼 상한 없이 전부 보여주는 곳을 위한
+    것이다 — 거기서는 큐레이션이 순서만 바꾸는데, 상한이 없으니 어차피 전부 실리고
+    화면(app.js)도 중요도순으로 다시 정렬해서 큐레이션 결과가 그대로 사라진다.
+    실측(2026-09-16): 시드를 바꿔 순서를 흔들어도 화면 결과가 한 글자도 달라지지
+    않았다.
+
+    그리고 상한을 둬 큐레이션 순서를 살려도 대시보드에는 맞지 않았다. 12건으로 잘라
+    비교하니 큐레이션 순서는 실제 악용이 확인된 GitLab 최고심각도 취약점(중요도 69)과
+    이란 APT(68)를 둘 다 밖으로 떨어뜨렸다 — insight_score는 기사의 질을 보고
+    importance_score는 사건의 중대성을 보는데, 전부 보여주는 화면에는 후자가 맞다.
 
     선택은 그리디 — PIR 커버리지는 기간 내 알림된 기사가 이미 답한 PIR을
     커버된 것으로 시드해서, 추천이 "알림이 못 채운 정보 요구의 빈틈"을
@@ -726,8 +809,12 @@ def pick_trend_reads(events, exclude_ids, max_items=None, include_alerted=False)
         )
         if has_insight:
             candidates.append(event)
-    candidates.sort(key=insight_score, reverse=True)
+    # 정렬 기준이 클러스터 대표도 정한다 — 같은 사건이면 이 기준으로 가장 앞선 것이 남는다.
+    candidates.sort(key=importance_score if rank_by_importance else insight_score,
+                    reverse=True)
     candidates = _cluster_representatives(candidates)  # 같은 사건 클러스터당 대표 1건만
+    if rank_by_importance:
+        return candidates[:max_items]
 
     picked, picked_ids = [], set()
     category_counts = Counter()
@@ -2578,7 +2665,8 @@ def main():
     # 추천기사 탭에서 배제되는 역설이 생긴다 — 하루치 "진짜 추천할 만한 것"을
     # 보여주는 게 목적이므로 알림 여부와 무관하게 뽑아야 한다.
     all_trend_reads = pick_trend_reads(
-        events, shown_card_event_ids | highlight_ids, max_items=len(events), include_alerted=True,
+        events, shown_card_event_ids | highlight_ids, max_items=len(events),
+        include_alerted=True, rank_by_importance=True,
     )
 
     print("[*] 이벤트 {}건 집계 완료 (CVE 상관관계 카드 {}건, PIR {}종). AI 해석 생성 중...".format(
