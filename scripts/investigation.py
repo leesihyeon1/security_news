@@ -222,6 +222,45 @@ def classify(iocs, text="", title="", category="", targets=None):
         # 동점이면 강한 표현이 있는 쪽. 둘 다 강하면 침투 단계를 먼저 본다.
         primary = "user_action" if strong_user else "malware"
 
+    # 모델이 선언한 주력 축이 있으면 규칙 판정보다 앞세운다.
+    #
+    # 왜 규칙만으로는 안 되는가
+    #     주력 판정은 미리 적어 둔 정규식 어휘로만 돌아간다. 어휘에 없는 수법은 영원히
+    #     못 맞추고, 실제로 그렇게 됐다(실측 44건): 공급망으로 분류된 기사 3건이 각각
+    #     user_action·malware·user_action으로 갔고 supply_chain이 주력인 것은 0건이었다.
+    #     결정 트리에서 supply_chain만 "strong_malware·strong_vuln이 없을 때"라는 조건을
+    #     달고 있는데, strong_malware는 본문 전체에서 backdoor·loader·악성코드 같은 말을
+    #     찾는다. 공급망 침해 기사는 유포된 페이로드를 반드시 설명하므로 이 조건이 거의
+    #     항상 깨진다 — 본문이 길수록 불리해지는 구조였다(같은 기사도 요약만 넣으면
+    #     supply_chain, 본문까지 넣으면 user_action이 나왔다).
+    #
+    #     어휘를 더 채우는 방법도 있지만 그건 새 수법이 나올 때마다 같은 일이 반복된다.
+    #     기사를 읽고 "무엇을 끊어야 이 공격이 멈추는가"를 정하는 것은 판단이라 모델에
+    #     맡기고, 코드는 그 선언대로 조사를 돌릴 수 있는지만 본다.
+    declared = str(targets.get("primary") or "").strip()
+    declared_note = ""
+    if declared in TRACK_LABELS:
+        if declared == "supply_chain" and "supply_chain" not in tracks:
+            # 공급망 조사는 기사에 적힌 지표가 아니라 레지스트리 자체를 조회하므로
+            # 지표가 없어도 돌아간다. 규칙이 제목에서 못 알아본 건을 선언이 메운다.
+            tracks.append("supply_chain")
+            supply_chain = True
+        if declared in tracks:
+            if declared != primary:
+                declared_note = (
+                    "주력 축을 {}으로 잡았습니다 — 기사를 읽고 판단한 결과이며, 표현만 "
+                    "세는 규칙 판정({})과 다릅니다.".format(
+                        TRACK_LABELS[declared].split(" — ")[0],
+                        TRACK_LABELS[primary].split(" — ")[0] if primary in TRACK_LABELS
+                        else "보류"))
+            primary = declared
+        else:
+            # 선언은 있는데 그 조사를 돌릴 입력이 없다. 억지로 주력이라고 적으면
+            # 화면에는 "공급망 기반"이라 쓰여 있는데 조회는 하나도 안 도는 일이 생긴다.
+            declared_note = (
+                "주력을 {}으로 보려 했지만 그 조사를 돌릴 입력이 없어 확보된 지표 "
+                "기준으로 되돌립니다.".format(TRACK_LABELS[declared].split(" — ")[0]))
+
     if not primary and tracks:
         # 트랙은 있는데 주력을 못 정한 경우 — 무엇이 있는지만 알리고 판단은 넘긴다.
         available = " / ".join(TRACK_LABELS[track].split(" — ")[1] for track in tracks)
@@ -238,6 +277,7 @@ def classify(iocs, text="", title="", category="", targets=None):
             "products": products,
             "scores": {"malware": malware_score, "user_action": user_score,
                        "vulnerability": vuln_score},
+            "declared_note": declared_note,
         }
 
     supply_reasons = []
@@ -288,6 +328,8 @@ def classify(iocs, text="", title="", category="", targets=None):
         "products": products,
         "scores": {"malware": malware_score, "user_action": user_score,
                    "vulnerability": vuln_score},
+        # 선언이 판정을 바꿨거나 못 바꿨으면 그 사실을 조사 과정에 남긴다.
+        "declared_note": declared_note,
     }
 
 
@@ -542,6 +584,10 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     # 조사 과정은 트랙별로 모아 한 목록으로 합친다 — 두 트랙이 같이 돌면 어느 쪽
     # 작업인지 구분이 필요하다.
     steps = []
+    # 주력 축을 모델 선언으로 바꿨거나 바꾸지 못했으면 그 사실을 맨 앞에 남긴다.
+    # 조용히 바뀌면 "왜 이 축으로 봤나"를 되짚을 수 없다.
+    if route.get("declared_note"):
+        steps.append({"track": "분석 방향", "text": route["declared_note"]})
 
     # 기사가 인용한 1차 자료를 먼저 읽는다 — 2차 보도가 생략한 내용이 판단을 바꾼다
     # (실측: Sansec 원문 첫 줄에 기사가 "미할당"이라던 CVE 번호가 적혀 있었다).

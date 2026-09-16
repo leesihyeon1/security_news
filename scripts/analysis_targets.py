@@ -51,6 +51,17 @@ CVE:
 경로: 예) C:\\ProgramData\\f47f2a8c21c9df4e
 레지스트리키:
 명령: 공격자가 실행한 명령줄. 예) nltest /domain_trusts
+주력: 이 건을 어느 축으로 조사해야 하는지 하나만 골라라. 아래 넷 중 이름 그대로 쓴다.
+  user_action  = 사람이 속아서 직접 실행·입력하게 만드는 수법이 핵심이다. 막아야 할 것은
+                 파일이 아니라 미끼(가짜 페이지·사칭 전화·가짜 안내)다.
+  malware      = 실행되면 스스로 동작하는 파일이 핵심이다. 무엇을 하는 물건인지가 쟁점이다.
+  vulnerability= 제품의 결함이 핵심이다. 쟁점은 "지금 패치해야 하는가"다.
+  supply_chain = 신뢰하던 배포 경로가 오염된 것이 핵심이다. 패키지·확장·업데이트·빌드·
+                 저장소처럼 "받아 쓰는 통로"로 들어온 건이면 여기다.
+  고르는 기준은 기사에 무슨 단어가 많이 나오는지가 아니라 "무엇을 끊어야 이 공격이
+  멈추는가"다. 공급망 침해는 악성코드를 함께 설명하지만, 끊어야 할 것은 오염된 배포
+  경로이므로 supply_chain이다. 판단이 안 서면 "없음"이라고 쓰고 비워 둬라 — 억지로
+  고르면 엉뚱한 조사가 돌아간다.
 조사가능: 위 줄 중 하나라도 값이 있으면 "예", 전부 "없음"이면 "아니오"
 조사불가사유: "아니오"일 때만, 왜 조사할 지표가 없는 기사인지 한 문장(예: 통계 요약 기사다)
 목표: 이 기사에 대해 달성해야 할 것을 한 문장으로 정하라. 유형별 정답을 주지 않는다 —
@@ -85,6 +96,9 @@ FIELD_MAP = {
 EMPTY_VALUES = {"없음", "해당 없음", "해당없음", "-", "n/a", "na", "none", "null", ""}
 
 LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?([A-Za-z가-힣]+)\s*[:：]\s*(.*)$")
+# 모델이 "주력"으로 쓸 수 있는 축. investigation.TRACK_LABELS와 같은 이름이어야 한다 —
+# 여기서만 아는 이름을 쓰면 선언이 조용히 버려진다.
+PRIMARY_AXES = ("user_action", "malware", "vulnerability", "supply_chain")
 # 값에 붙어 오는 장식. 모델이 지시를 어기고 볼드나 따옴표를 붙이는 경우가 있다.
 DECOR_RE = re.compile(r"^[\s*_`\"']+|[\s*_`\"']+$")
 
@@ -121,7 +135,7 @@ def _split(value):
 # 그대로 화면에 나갔다). 그래서 헤더가 없으면 필드 줄이 이어지는 구간을 찾아서 쓴다.
 FIELD_LINE_RE = re.compile(
     "^[ " + chr(9) + "]*(?:[-*][ ]*)?(" + "|".join(FIELD_MAP)
-    + "|조사가능|조사불가사유|목표|확인질문|성공기준)"
+    + "|조사가능|조사불가사유|목표|확인질문|성공기준|주력)"
     "[ ]*[:：]", re.M)
 # 이만큼 이어져야 목록으로 본다. 한두 줄이면 본문 문장이 우연히 "제품: ..." 형태인
 # 경우와 구별되지 않는다.
@@ -154,7 +168,7 @@ def parse(text):
         return {}
     found = {key: [] for key in FIELD_MAP.values()}
     investigable, reason = None, ""
-    objective, questions, criteria = "", [], []
+    objective, questions, criteria, primary = "", [], [], ""
     for line in located[2].splitlines():
         parsed = LINE_RE.match(line)
         if not parsed:
@@ -176,6 +190,12 @@ def parse(text):
         if name == "성공기준":
             criteria = _split(value)
             continue
+        if name == "주력":
+            # 어휘 밖의 값은 버린다. 여기서 거르지 않으면 "네트워크 침투" 같은
+            # 자유 문장이 트랙 이름 자리에 들어와 조사 계획이 통째로 어긋난다.
+            candidate = _clean(value).lower().replace("-", "_").replace(" ", "_")
+            primary = candidate if candidate in PRIMARY_AXES else ""
+            continue
         key = FIELD_MAP.get(name)
         if key:
             found[key] = _split(value)
@@ -195,6 +215,9 @@ def parse(text):
     # 성공기준은 모델이 스스로 건 약속이다. 나중에 실제 산출물과 대조한다.
     if criteria:
         found["criteria"] = criteria
+    # 주력 축은 모델의 판단이고, 실제로 그 조사를 돌릴 수 있는지는 investigation이 본다.
+    if primary:
+        found["primary"] = primary
     return found
 
 
