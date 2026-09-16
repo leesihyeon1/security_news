@@ -79,6 +79,18 @@ COMMON_TOKENS = {
     "http", "https", "com", "net", "org", "exe", "dll", "js", "php", "png", "zip",
 }
 
+# 브라우저 확장 API의 최상위 이름. 이 아래 이름들(chrome.runtime.sendMessage 등)은
+# 점으로 이어져 있어 도메인 정규식에 그대로 걸린다 — "sendmessage"가 TLD처럼 보이기
+# 때문이다. 실측(2026-09-16, 악성 확장 프로그램 건): manifest.json과
+# chrome.runtime.sendMessage, chrome.webRequest.onHeadersReceived 때문에 확장 행위
+# 탐지 쿼리가 통째로 폐기됐다. MDE 컬럼·열거형을 플랫폼 어휘로 봐주는 것과 같은 이유로
+# 이것도 봐준다 — 기사에 API 이름이 적혀 있을 이유가 없다.
+#
+# 이름 전체를 열거하지 않고 최상위 이름만 두는 이유는 API가 수백 개라서다. 대신
+# 범위를 좁게 잡는다 — 이 세 이름으로 시작하는 값만 면제되므로, 지어낸 C2가 여기로
+# 새어 나가려면 chrome.으로 시작하는 도메인이어야 한다.
+API_NAMESPACES = {"chrome", "browser", "manifest"}
+
 # 플랫폼 어휘 — 컬럼 이름과 열거형 값이다. 기사에 있을 이유가 없고, 없다고 폐기하면
 # 정상 쿼리가 죽는다(실측: ScheduledTaskCreated 때문에 예약 작업 탐지 쿼리가 폐기됨).
 PLATFORM_VOCAB = {
@@ -335,6 +347,9 @@ def _skippable(value):
         return True
     # 필드 이름(점 포함)과 접두 형태
     if low.split(".")[0] in QUERY_KEYWORDS and "." in low:
+        return True
+    # 브라우저 확장 API 이름(chrome.runtime.sendMessage, manifest.json 등)
+    if "." in low and low.split(".")[0] in API_NAMESPACES:
         return True
     if OS_STRUCTURE_RE.match(low):
         return True

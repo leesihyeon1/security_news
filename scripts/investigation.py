@@ -675,6 +675,14 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 except Exception as error:
                     steps.append({"track": "원문 확인",
                                   "text": "참고 링크 원문 확인 실패: {}".format(error)})
+            # 읽은 1차 자료를 블록에 남긴다. 남기지 않으면 산출물 점검이 "공개 분석·
+            # 1차 자료"를 미달로 찍는다 — 실제로는 읽었는데도(실측: socket.dev·
+            # DomainTools 2건을 읽고 external_reports 미달).
+            if primary.get("sources"):
+                block["primary"] = {"sources": [
+                    {"url": source.get("url") or "", "host": source.get("host") or "",
+                     "chars": source.get("chars") or 0}
+                    for source in primary["sources"]]}
             evidence = primary_sources.as_evidence(primary.get("sources"))
             verdict = response_synth.synthesize(title, text, targets, block,
                                                 primary=evidence)

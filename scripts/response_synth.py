@@ -179,9 +179,19 @@ def parse(raw):
     return data if isinstance(data, dict) else {}
 
 
-def _corpus(investigation, analysis):
-    """근거 대조용 텍스트 — 조회 재료와 기사 분석을 합친 것."""
-    return (json.dumps(investigation, ensure_ascii=False) + " " + (analysis or "")).lower()
+def _corpus(investigation, analysis, primary="", extra=""):
+    """근거 대조용 텍스트 — 조회 재료·기사 분석·1차 자료·후속 조회를 합친 것.
+
+    1차 자료를 빼놓았다가 크게 틀렸다. 실측(2026-09-16, 악성 확장 프로그램 건):
+    socket.dev와 DomainTools 원문을 읽어 프롬프트에 넣어 놓고, 판단이 거기서 인용한
+    manusai.sbs·forti-vpn.com·api.sprocketwhirl 같은 값을 "기사에 없다"며 폐기했다.
+    대응 계획 4건이 그렇게 잘려 나갔다 — 1차 자료를 읽는 기능이 읽을수록 손해를 내는
+    상태였다. 모델에게 근거로 준 글은 검증에서도 근거로 쳐야 한다.
+    """
+    return " ".join([
+        json.dumps(investigation, ensure_ascii=False),
+        analysis or "", primary or "", extra or "",
+    ]).lower()
 
 
 def _invented(text, corpus):
@@ -265,7 +275,7 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
     if not data:
         return None
 
-    corpus = _corpus(investigation, analysis)
+    corpus = _corpus(investigation, analysis, primary=primary, extra=extra)
     dropped = []
     plan = []
     for item in (data.get("plan") or [])[:MAX_PLAN_STEPS]:

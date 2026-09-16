@@ -87,8 +87,11 @@ ARTIFACTS = {
         lambda b: _response(b, "commands")),
     "external_reports": (
         "다른 연구자의 공개 분석·1차 자료",
+        # 기사가 인용한 1차 자료를 직접 읽은 것도 여기 해당한다. 교차 인텔·웹 검색의
+        # 참고 링크만 세다가, 벤더 원문 2건을 읽고도 미달로 찍은 적이 있다.
         lambda b: bool((b.get("intel") or {}).get("references")
-                       or (b.get("web") or {}).get("references"))),
+                       or (b.get("web") or {}).get("references")
+                       or (b.get("primary") or {}).get("sources"))),
 }
 
 
