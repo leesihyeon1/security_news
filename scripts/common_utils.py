@@ -237,6 +237,48 @@ def inventory_canonical_map(inventory_file=None):
     return mapping
 
 
+def environment_brief(inventory_file=None, max_products=40):
+    """모델에게 줄 "우리 환경" 요약 — 보유 제품군과 정보 요구.
+
+    왜 필요한가
+        분석 프롬프트는 "우리 쪽에서 무엇이 위험한가"를 묻는데, 정작 우리가 무엇을
+        쓰는지는 한 번도 알려 주지 않았다(실측 2026-09-17: 인벤토리를 분석 프롬프트에
+        넣는 코드가 0곳). 자산 목록은 이미 파일에 있고 CVE 매칭에만 쓰고 있었다.
+
+    왜 출력에는 못 쓰게 하는가
+        대시보드는 공개된 곳이다. "우리가 Citrix를 쓴다"가 카드에 실리면 그것 자체가
+        자산 정보 유출이다. 그래서 판단의 재료로만 주고, 결과 문장에는 제품명을
+        나열하지 못하게 한다 — pirs·assets를 페이로드에서 빼는 것과 같은 원칙이다.
+    """
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    names = []
+    try:
+        for item in _load_inventory_items(path):
+            name = str(item.get("name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+    except Exception:
+        names = []
+    pirs = load_pirs() or {}
+    if not (names or pirs):
+        return ""
+
+    lines = ["[우리 환경 — 판단의 재료로만 쓰라]"]
+    if names:
+        lines.append("보유·운영 중인 제품군: " + ", ".join(names[:max_products]))
+    if pirs:
+        lines.append("우리가 우선해서 알고자 하는 것:")
+        for pid in sorted(pirs):
+            question = (pirs[pid] or {}).get("question") or ""
+            if question:
+                lines.append("  - {} {}".format(pid, question))
+    lines.append("이 목록은 우리 내부 정보다. 기사가 지목한 제품이 여기 있으면 그 사실을 "
+                 "판단에 반영하되, 결과 문장에 우리 제품명을 나열하거나 '우리는 무엇을 "
+                 "쓴다'고 쓰지 마라 — 결과는 공개되는 화면에 실린다. "
+                 "'사내 자산 목록과 대조가 필요한 제품' 정도로 쓰면 된다.")
+    return chr(10).join(lines)
+
+
 def canonical_assets(terms, inventory_file=None):
     """매칭된 자산 용어들을 제품 대표명 기준으로 중복 제거해 반환 (등장 순서 유지)."""
     mapping = inventory_canonical_map(inventory_file)

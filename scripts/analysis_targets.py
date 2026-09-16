@@ -82,6 +82,7 @@ CVE:
   나눠 쓰라. 이 사건에 필요한 것만 고르고, 필요 없는 것은 넣지 마라 — 나중에 실제로
   나왔는지 대조하므로 넣은 것은 약속이 된다.
 {VOCAB}
+{ENV}
 부족한것: 이 건을 제대로 대응하려면 필요한데 위 어휘로는 표현할 수 없는 것을 적어라.
   우리가 지금 가진 도구로 낼 수 없어도 된다 — "무엇이 있어야 이 대응이 완결되는가"를
   말하는 것이 목적이고, 그 자리를 비워 두면 우리가 가진 도구가 곧 대응의 한계가 된다.
@@ -92,11 +93,23 @@ CVE:
   예) 이 CVE가 실제 악용 중인가, 사내에 해당 버전이 있는가, 유포지가 아직 살아 있는가
 """
 
+import common_utils
 import playbook
 
 # 어휘는 playbook이 갖고 있다 — 검증하는 쪽과 요구하는 쪽이 어긋나면
 # 모델이 낼 수 없는 것을 약속하게 된다.
-SPEC = SPEC_TEMPLATE.replace("{VOCAB}", playbook.vocabulary_spec())
+# 우리 환경은 import 시점이 아니라 쓸 때 읽는다 — 인벤토리·PIR 파일이 바뀌면
+# 다음 분석부터 반영돼야 한다.
+SPEC_WITH_VOCAB = SPEC_TEMPLATE.replace("{VOCAB}", playbook.vocabulary_spec())
+
+
+def spec():
+    """분석 프롬프트에 붙일 [조사 대상] 지시문."""
+    return SPEC_WITH_VOCAB.replace("{ENV}", common_utils.environment_brief())
+
+
+# 예전 이름을 쓰는 곳이 있어 남겨 둔다(환경 블록이 빠진 형태).
+SPEC = SPEC_WITH_VOCAB.replace("{ENV}", "")
 
 SECTION_RE = re.compile(r"\n?\s*\[\s*조사\s*대상\s*\]\s*\n(.*?)(?=\n\s*\[|\Z)", re.S)
 

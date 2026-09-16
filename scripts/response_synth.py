@@ -163,6 +163,9 @@ def build_prompt(title, analysis, targets, investigation, primary="", extra="",
     questions = (targets or {}).get("questions") or []
     return (
         PROMPT_HEAD
+        # 우리 환경. 이걸 안 주면 "우리 쪽에서 무엇이 위험한가"를 재료 없이 묻는 셈이다.
+        + ("\n" + common_utils.environment_brief() + "\n"
+           if common_utils.environment_brief() else "")
         + "\n[기사 제목]\n" + (title or "")
         + "\n\n[기사 분석]\n" + (analysis or "")[:4000]
         + "\n\n[이 건의 대응 목표]\n" + (objective or "(설정되지 않음 — 조회 결과로 직접 판단하라)")

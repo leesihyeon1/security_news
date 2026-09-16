@@ -206,6 +206,45 @@ def log(message):
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
 # 플랫폼 문법을 프롬프트에 직접 넣는다. 넣지 않으면 LLM이 문법을 섞어 쓴다
 # (urlscan 쿼리에 KQL 파이프를 붙이거나 Splunk의 index=를 쓴다).
+MDE_SCHEMA_FILE = common_utils.ASSETS_DIR / "intel" / "mde_schema.json"
+_schema_cache = None
+
+
+def mde_schema():
+    """테이블→열 목록. 없으면 빈 dict — 스키마를 못 읽었다고 합성을 멈추지는 않는다."""
+    global _schema_cache
+    if _schema_cache is None:
+        try:
+            _schema_cache = json.loads(MDE_SCHEMA_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _schema_cache = {}
+    return _schema_cache
+
+
+def mde_schema_spec():
+    """프롬프트에 넣을 스키마 설명.
+
+    "최신 문서를 보라"는 지시만으로는 모자랐다 — 실측(2026-09-17): 저장된 쿼리에서
+    RegistryValue·ProcessName·UserName이 나왔고, 검증기는 내가 손으로 적은 오답
+    목록으로만 막을 수 있었다. 열 이름은 고정된 지식이라 프롬프트에 그냥 주면 된다.
+    """
+    schema = mde_schema()
+    tables = schema.get("tables") or {}
+    if not tables:
+        return ""
+    lines = ["", "   [테이블별 열 — 여기 적힌 이름만 쓰라. 여기 없는 열은 지어낸 것이다]",
+             "   모든 테이블 공통: " + ", ".join((schema.get("common_columns") or [])[:14])
+             + " 등"]
+    for table, columns in tables.items():
+        lines.append("   {}: {}".format(table, ", ".join(columns)))
+    action_types = schema.get("action_types") or {}
+    if action_types:
+        lines.append("   [자주 쓰는 ActionType 값]")
+        for table, values in action_types.items():
+            lines.append("   {}: {}".format(table, ", ".join(values)))
+    return chr(10).join(lines)
+
+
 PLATFORM_SPEC = """
 [플랫폼별 문법 — 이 문법만 쓰라]
 
@@ -219,6 +258,7 @@ PLATFORM_SPEC = """
    DeviceFileCertificateInfo, DeviceTvmSoftwareVulnerabilities
    형식: 테이블 이름으로 시작하고 파이프(|)로 이어간다. 시간 범위는 넣지 마라.
    정규식이 필요하면 matches regex "..." 를 쓰라.
+{MDE_SCHEMA}
 
    자주 나오는 오류 — 아래는 전부 실행이 안 된다(실측한 것들이다):
    · 파이프 다음에 or/and 를 쓰는 것. KQL에 "| or ..."는 없다. 조건을 이으려면
@@ -322,7 +362,7 @@ def build_prompt(title, analysis, body, iocs, targets=None):
         for item in (iocs or [])[:40])
     return (
         "당신은 위협 헌팅 엔지니어다. 아래 기사 분석을 읽고 헌팅 쿼리를 만든다.\n"
-        + TASK_SPEC + PLATFORM_SPEC
+        + TASK_SPEC + PLATFORM_SPEC.replace("{MDE_SCHEMA}", mde_schema_spec())
         + "\n[기사 제목]\n" + (title or "")
         + "\n\n[분석 본문]\n" + (analysis or "")[:6000]
         + ("\n\n[원문에서 뽑은 지표]\n" + ioc_lines if ioc_lines else "")
