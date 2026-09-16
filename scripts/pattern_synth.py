@@ -195,11 +195,30 @@ PLATFORM_SPEC = """
 [플랫폼별 문법 — 이 문법만 쓰라]
 
 1) mde_kql — Microsoft Defender 고급 헌팅(Kusto)
+   **최신 Microsoft Learn "고급 헌팅 스키마 참조"(Advanced hunting schema reference)에
+   실제로 정의된 테이블과 열 이름만 쓰라.** 기억이 확실하지 않은 열은 쓰지 말고, 그
+   테이블에 분명히 있는 열로 같은 뜻을 표현하라. 지어낸 열 이름 하나면 쿼리 전체가
+   실행되지 않는다.
    쓸 수 있는 테이블: DeviceProcessEvents, DeviceFileEvents, DeviceNetworkEvents,
    DeviceRegistryEvents, DeviceImageLoadEvents, DeviceEvents, DeviceLogonEvents,
    DeviceFileCertificateInfo, DeviceTvmSoftwareVulnerabilities
    형식: 테이블 이름으로 시작하고 파이프(|)로 이어간다. 시간 범위는 넣지 마라.
    정규식이 필요하면 matches regex "..." 를 쓰라.
+
+   자주 나오는 오류 — 아래는 전부 실행이 안 된다(실측한 것들이다):
+   · 파이프 다음에 or/and 를 쓰는 것. KQL에 "| or ..."는 없다. 조건을 이으려면
+     한 where 안에서 or로 묶어라.
+       나쁨) | where FileName has "a"
+             | or ProcessCommandLine has "a"
+       좋음) | where FileName has "a" or ProcessCommandLine has "a"
+   · 없는 열 이름. DeviceRegistryEvents에는 RegistryValue가 없다
+     (RegistryValueName·RegistryValueData다). DeviceProcessEvents에는 ProcessName·
+     CommandLine·UserName이 없다(FileName·ProcessCommandLine·AccountName이다).
+   · join을 Timestamp 정확일치로 거는 것. 두 이벤트의 시각이 같을 일이 없어 결과가
+     항상 0건이다. 시간으로 묶으려면 bin()이나 시간 차 조건을 쓰라.
+       좋음) | join kind=inner (...) on DeviceId
+             | where abs(datetime_diff('second', Timestamp, Timestamp1)) <= 300
+   · 괄호·따옴표가 안 맞는 것. 여러 줄 join과 case를 쓸 때 특히 자주 깨진다.
 
 2) urlscan — urlscan.io 검색(Elasticsearch query string)
    쓸 수 있는 필드: page.domain, page.url, page.title, page.server, page.asn,
@@ -529,6 +548,31 @@ def strip_time_filter(query):
     return TIME_FILTER_INLINE_RE.sub("", out).strip()
 
 
+# MDE 스키마에 없는데 모델이 자주 쓰는 열 이름. 하나라도 있으면 실행이 안 된다.
+# 실측(2026-09-17, 저장된 쿼리 136개): RegistryValue·ProcessName·UserName이 나왔다.
+# 스키마 전체를 화이트리스트로 두지 않는 이유는 열이 수백 개고 extend로 새 이름을
+# 만들 수 있어서다 — 틀렸다고 확신할 수 있는 것만 막는다.
+UNKNOWN_COLUMNS = {
+    "RegistryValue": "RegistryValueName·RegistryValueData",
+    "ProcessName": "FileName",
+    "CommandLine": "ProcessCommandLine",
+    "FilePath": "FolderPath",
+    "UserName": "AccountName",
+    "User": "AccountName",
+    "EventTime": "Timestamp",
+    "Computer": "DeviceName",
+    "RemoteHost": "RemoteUrl·RemoteIP",
+}
+# 큰따옴표 문자열. 괄호 균형을 볼 때 값 안쪽은 빼야 한다.
+STRING_LITERAL_RE = re.compile(r'"[^"\n]*"')
+# 테이블 이름 앞에 올 수 있는 낱말. 이걸로 시작해도 정상 쿼리다.
+KQL_PREAMBLE = {"let", "union"}
+# "| or ..." / "| and ..." — KQL에 없는 형태다.
+PIPE_CONJUNCTION_RE = re.compile(r"^[ \t]*\|[ ]*(?:or|and)\b", re.M | re.I)
+# join 키에 Timestamp를 그대로 넣으면 두 이벤트의 시각이 같아야 해서 결과가 0건이다.
+TIMESTAMP_JOIN_RE = re.compile(r"\bon\b[^|\n]*\bTimestamp\b")
+
+
 def validate_kql(candidate):
     """실행해 볼 수 없으니 형식만 본다 — 붙여넣는 순간 오류가 날 쿼리는 안 내보낸다."""
     query = strip_time_filter(candidate.get("query") or "")
@@ -537,12 +581,41 @@ def validate_kql(candidate):
     if not query:
         return False, "쿼리 없음", {}
     first = re.split(r"[\s|]+", query, 1)[0].strip()
-    if first not in KQL_TABLES:
+    if first.lower() in KQL_PREAMBLE:
+        # let·union으로 시작하는 것도 정상 KQL이다. 테이블 이름은 뒤에 나온다.
+        # 실측(2026-09-17): 코드가 만드는 쿼리 75개가 let으로 시작하는데, 첫 낱말만
+        # 보던 규칙은 그것들을 전부 "알 수 없는 테이블"로 막았다.
+        if not any(re.search(r"(?<![A-Za-z])" + table + r"(?![A-Za-z])", query)
+                   for table in KQL_TABLES):
+            return False, "테이블 이름이 하나도 없음", {}
+    elif first not in KQL_TABLES:
         return False, "알 수 없는 테이블: {}".format(first[:40]), {}
     if "|" not in query:
         return False, "필터 절이 없음(테이블 전체 조회)", {}
-    if ";" in query or chr(0) in query:
+    if chr(0) in query:
         return False, "허용되지 않는 문자 포함", {}
+    # 세미콜론은 let 문을 끝낼 때 쓰는 정상 문법이다. 통째로 막으면 let으로 시작하는
+    # 쿼리가 전부 죽는다(실측: 코드가 만드는 쿼리 74개가 여기 걸렸다). 대신 세미콜론
+    # 앞이 let 문인지만 본다 — 그래야 문장을 여러 개 이어 붙이는 것을 막을 수 있다.
+    statements = query.split(";")
+    for statement in statements[:-1]:
+        if not statement.strip().lower().startswith("let "):
+            return False, "let 문이 아닌 곳에 세미콜론이 있습니다", {}
+    if PIPE_CONJUNCTION_RE.search(query):
+        return False, "파이프 다음에 or/and를 썼습니다(KQL에 없는 형태) — 한 where 안에서 묶어야 합니다", {}
+    for wrong, right in UNKNOWN_COLUMNS.items():
+        if re.search(r"(?<![A-Za-z])" + wrong + r"(?![A-Za-z])", query):
+            return False, "MDE에 없는 열 {}을 씁니다(→ {})".format(wrong, right), {}
+    if TIMESTAMP_JOIN_RE.search(query):
+        return False, "join을 Timestamp 정확일치로 걸어 결과가 항상 0건입니다", {}
+    if query.count('"') % 2:
+        return False, "따옴표가 맞지 않습니다", {}
+    # 괄호는 문자열 값 안의 것을 빼고 센다. 레지스트리 경로 같은 값에 괄호가 들어가는
+    # 일이 있어서, 그대로 세면 멀쩡한 쿼리가 불일치로 잡힌다(실측: DeadLock 건의
+    # "…\DefaultIcon(" 값 때문에 정상 union 쿼리가 폐기됐다).
+    outside = STRING_LITERAL_RE.sub('""', query)
+    if outside.count("(") != outside.count(")"):
+        return False, "괄호가 맞지 않습니다", {}
     return True, "", {}
 
 
