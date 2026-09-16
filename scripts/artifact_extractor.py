@@ -164,6 +164,32 @@ HANGUL_TAIL_RE = re.compile(r"[가-힣]+$")
 DECOR_CHARS = "`*'" + chr(34) + "()[]，,"
 
 
+# 기사가 값 대신 쓰는 자리표시자. 그대로 차단 목록이나 헌팅 쿼리에 넣으면 영원히
+# 안 맞는다 — 실측(2026-09-17): DeadLock 건에서 "C:\ProgramData\<UID>.bmp"가
+# 차단 대상 값으로 들어갔다.
+#
+# 꺾쇠는 그 자체로 판정 근거가 된다. 윈도우 파일명에 < > 는 쓸 수 없으므로, 경로에
+# 들어 있으면 실제 값일 수가 없다. 대괄호·중괄호는 파일명에 쓸 수 있어서 안쪽 낱말이
+# 자리표시자로 흔히 쓰는 말일 때만 본다.
+PLACEHOLDER_WORDS = {
+    "uid", "guid", "id", "random", "rand", "n", "x", "xx", "xxx", "xxxx",
+    "username", "user", "victim", "hostname", "computername", "hash", "sha256",
+    "md5", "timestamp", "date", "number", "숫자", "임의", "사용자명", "사용자",
+}
+BRACKETED_RE = re.compile(r"[" + BS + r"[{]([^" + BS + r"]}]{1,20})[" + BS + r"]}]")
+
+
+def has_placeholder(value):
+    """값이 아니라 자리표시자인가."""
+    text = str(value or "")
+    if "<" in text or ">" in text:
+        return True
+    for inner in BRACKETED_RE.findall(text):
+        if inner.strip().lower().strip("._-") in PLACEHOLDER_WORDS:
+            return True
+    return False
+
+
 def _clean(value):
     """앞뒤 장식과 뒤에 붙은 한글 조사를 떼어낸다("...df4e에" -> "...df4e").
 
@@ -188,7 +214,7 @@ def extract(text):
         bucket = (system_files if lowered in SYSTEM_BINARIES
                   else generic_files if lowered in GENERIC_FILENAMES
                   else attacker_files)
-        if name not in bucket:
+        if name not in bucket and not has_placeholder(name):
             bucket.append(name)
 
     extensions = []
@@ -197,8 +223,10 @@ def extract(text):
         if value not in extensions and len(match) >= 3:
             extensions.append(value)
 
-    paths = [p for p in {_clean(m) for m in PATH_RE.findall(text)} if p]
-    registry = [p for p in {_clean(m) for m in REGISTRY_RE.findall(text)} if p]
+    paths = [p for p in {_clean(m) for m in PATH_RE.findall(text)}
+             if p and not has_placeholder(p)]
+    registry = [p for p in {_clean(m) for m in REGISTRY_RE.findall(text)}
+                if p and not has_placeholder(p)]
     repos = [p for p in {_clean(m) for m in REPO_RE.findall(text)} if "/" in p or "." in p]
 
     behaviours = []
