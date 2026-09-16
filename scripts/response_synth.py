@@ -143,7 +143,8 @@ def _material(investigation, targets):
     return text[:MAX_MATERIAL_CHARS]
 
 
-def build_prompt(title, analysis, targets, investigation, primary="", extra=""):
+def build_prompt(title, analysis, targets, investigation, primary="", extra="",
+                 history=""):
     objective = (targets or {}).get("objective") or ""
     questions = (targets or {}).get("questions") or []
     return (
@@ -157,6 +158,8 @@ def build_prompt(title, analysis, targets, investigation, primary="", extra=""):
         + ("\n\n[기사가 인용한 1차 자료 원문]\n" + primary if primary else "")
         # 후속 조회로 새로 얻은 것. 1차 판단에서 못 답한 질문의 답이 여기 있다.
         + ("\n\n[후속 조회 결과]\n" + extra if extra else "")
+        # 전에 우리가 분석한 같은 계열. 같은 수법이 반복되는지는 기록에서만 보인다.
+        + ("\n\n" + history if history else "")
         + "\n\nJSON만 출력하라."
     )
 
@@ -261,7 +264,7 @@ def followups(data, corpus):
 
 
 def synthesize(title, analysis, targets, investigation, timeout=240,
-               primary="", extra=""):
+               primary="", extra="", history=""):
     """조회 결과를 읽고 판단한다. 쓸 만한 결과가 없으면 None.
 
     반환: {"verdict","headline","confirmed","unconfirmed","contradictions",
@@ -273,14 +276,14 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         return None      # 조회한 것이 없으면 판단할 재료도 없다
 
     raw = common_utils.llm_generate(
-        build_prompt(title, analysis, targets, investigation, primary, extra),
+        build_prompt(title, analysis, targets, investigation, primary, extra, history),
         timeout=timeout)
     data = parse(raw)
     if not data:
         # 한 번은 더 받아 본다 — JSON이 아닌 답이 오는 경우가 있다(실측: 패턴 합성에서
         # 같은 입력에 6개/0개가 갈렸다).
         raw = common_utils.llm_generate(
-            build_prompt(title, analysis, targets, investigation, primary, extra)
+            build_prompt(title, analysis, targets, investigation, primary, extra, history)
             + "\n\n반드시 JSON만 출력하라.",
             timeout=timeout)
         data = parse(raw)

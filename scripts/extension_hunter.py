@@ -45,8 +45,8 @@ import urllib.request
 USER_AGENT = "boannews-intel/1.0 (threat research)"
 REQUEST_TIMEOUT = 20
 PAUSE_SECONDS = 0.5
-# 한 기사에서 조회할 확장 수. 19개짜리 기사가 실제로 있어서 넉넉히 둔다.
-MAX_EXTENSIONS = 12
+# 한 기사에서 조회할 확장 수. 19개짜리 기사가 실제로 있어서 그보다 넉넉히 둔다.
+MAX_EXTENSIONS = 20
 MAX_PERMISSIONS = 10
 MAX_MATCHES = 6
 

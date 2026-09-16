@@ -19,6 +19,7 @@ import github_hunter
 import intel_hunter
 import lookup_plan
 import lure_hunter
+import past_analyses
 import pattern_synth
 import playbook
 import primary_sources
@@ -425,7 +426,8 @@ def _run_malware(ctx):
 def _run_extension(ctx):
     # 확장 ID는 모델에게 묻지 않고 본문에서 직접 뽑는다 — 32자 a-p 문자열이라
     # 오인할 수 없는 형태다. 1차 자료에도 ID가 실리는 경우가 많아 함께 본다.
-    ids = extension_hunter.ids_from_text(ctx["text"], ctx.get("body") or "")
+    ids = extension_hunter.ids_from_text(
+        ctx["text"], ctx.get("body") or "", ctx.get("primary_text") or "")
     return extension_hunter.analyze(ids, objective=(ctx["targets"] or {}).get("objective") or "")
 
 
@@ -642,9 +644,21 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
         except Exception as error:
             steps.append({"track": "조회 계획", "text": "실패: {}".format(error)})
 
+    # 1차 자료에서 읽은 글도 조회 재료다. 지표를 여기에만 싣는 연구 글이 많아서,
+    # 넘기지 않으면 애써 받아온 IOC 표를 조회에 못 쓴다(실측: 확장 ID 18개가 1차
+    # 자료에만 있었고 기사 본문에는 없었다).
+    primary_text = " ".join(src.get("text") or "" for src in primary.get("sources") or [])
+    # 1차 자료에서 확장 ID가 새로 나왔으면 그 트랙을 연다 — 기사 본문만 보고 트랙을
+    # 정한 뒤라, 여기서 열어주지 않으면 조회 대상이 있는데도 돌지 않는다.
+    if primary_text and "extension" not in (route.get("tracks") or []):
+        if extension_hunter.ids_from_text(primary_text):
+            route.setdefault("tracks", []).append("extension")
+            steps.append({"track": "조사 방향",
+                          "text": "1차 자료에서 확장 프로그램 ID를 찾아 확장 스토어 "
+                                  "조회를 추가했습니다 — 기사 본문에는 없던 지표입니다."})
     run_lookups({"iocs": iocs, "text": text, "title": title, "route": route,
                  "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets,
-                 "body": body, "block": block},
+                 "body": body, "primary_text": primary_text, "block": block},
                 block, steps)
 
     block.setdefault("patterns", [])
@@ -720,9 +734,21 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                     {"url": source.get("url") or "", "host": source.get("host") or "",
                      "chars": source.get("chars") or 0}
                     for source in primary["sources"]]}
+            # 같은 계열의 과거 분석을 붙인다. 44건이 쌓여 있는데 어느 단계도 보지
+            # 않고 있었다 — 같은 수법이 반복되는지는 기록에서만 보인다.
+            related = []
+            try:
+                related = past_analyses.find_related(targets, exclude_title=title)
+                if related:
+                    block["related"] = related
+                    steps.extend({"track": "과거 분석", "text": line}
+                                 for line in past_analyses.steps(related))
+            except Exception as error:
+                steps.append({"track": "과거 분석", "text": "조회 실패: {}".format(error)})
             evidence = primary_sources.as_evidence(primary.get("sources"))
-            verdict = response_synth.synthesize(title, text, targets, block,
-                                                primary=evidence)
+            verdict = response_synth.synthesize(
+                title, text, targets, block, primary=evidence,
+                history=past_analyses.as_evidence(related))
             # URLhaus가 URL에서 알려 준 페이로드 해시. 기사에 없던 값이라 판단이
             # 요청할 수 없지만, 샘플 확보로 바로 이어지는 것이라 우리가 넣는다.
             auto = []
@@ -743,7 +769,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 if extra_lines:
                     again = response_synth.synthesize(
                         title, text, targets, block, primary=evidence,
-                        extra="\n".join(extra_lines))
+                        extra="\n".join(extra_lines),
+                        history=past_analyses.as_evidence(related))
                     if again:
                         again["followup_evidence"] = extra_lines
                         # 2차 판단이 새로 낸 후속 조회 요청은 버린다. 한 바퀴만 돌기로

@@ -25,7 +25,15 @@ from bs4 import BeautifulSoup
 
 # 링크당 본문을 이만큼만 쓴다. 벤더 권고는 짧고 연구 블로그는 길어서, 길면 종합 판단
 # 프롬프트가 원문 하나로 가득 찬다.
-MAX_CHARS_PER_SOURCE = 6000
+#
+# 다만 앞에서부터 자르면 안 된다. 연구 글은 지표를 맨 뒤 IOC 표에 몰아 싣는데, 그게
+# 정확히 우리가 조회에 넣을 값이다. 실측(2026-09-17, 악성 확장 건): socket.dev 원문에
+# 확장 ID가 19개 있었고 앞 6,000자에는 0개였다 — 페이지를 받아 놓고 지표를 통째로
+# 버린 셈이라, 종합 판단이 "8개 확장의 스토어 상태 미확인(조회 미수행)"으로 끝났다.
+# 그래서 앞부분(맥락)과 지표가 몰린 구간을 따로 담는다.
+HEAD_CHARS = 4000
+IOC_CHARS = 3000
+MAX_CHARS_PER_SOURCE = HEAD_CHARS + IOC_CHARS
 MAX_SOURCES = 2
 FETCH_TIMEOUT_SECONDS = 20
 # 이보다 짧으면 본문을 못 읽은 것으로 본다(동의 배너·로그인 벽).
@@ -125,6 +133,66 @@ def pick(links, article_url="", limit=MAX_SOURCES):
     return chosen
 
 
+# 지표처럼 생긴 것들. 어느 구간에 지표가 몰려 있는지 세는 데만 쓴다 — 여기서 값을
+# 뽑아 쓰지는 않는다(그건 analysis_targets와 각 hunter가 한다).
+INDICATOR_RE = re.compile(
+    r"(?<![a-z0-9])(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64}|[a-p]{32})(?![a-z0-9])"
+    r"|CVE-\d{4}-\d{4,7}"
+    r"|(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])"
+    r"|(?<![\w@.])[a-z0-9][a-z0-9-]{1,40}(?:\[?\.\]?[a-z0-9-]{2,30})+\[?\.\]?"
+    r"(?:com|net|org|io|dev|xyz|top|sbs|cfd|monster|ru|cn|info|site|online|shop)(?![\w])",
+    re.I)
+# 지표 밀도를 이 크기의 창으로 훑는다.
+IOC_WINDOW_STEP = 500
+
+
+def _indicator_count(chunk):
+    return len(INDICATOR_RE.findall(chunk or ""))
+
+
+def _excerpt(text):
+    """앞부분(맥락) + 지표가 실린 조각들을 합쳐 돌려준다.
+
+    제목으로 IOC 절을 찾지 않는 이유: 글마다 "Indicators of Compromise"·"IoCs"·
+    "Appendix"·"침해지표"로 제각각이고, 표만 있고 제목이 없는 글도 있다. 지표가 실제로
+    있는 곳을 세는 편이 글의 형식과 무관하게 잘 맞는다.
+
+    문서 순서가 아니라 밀도 순으로 고른다. 순서대로 담으면 앞쪽에서 도메인 한두 개가
+    스친 조각들이 예산을 먼저 먹고, 정작 표가 있는 끝부분에서 잘린다 — 실측
+    (socket.dev): 확장 ID 19개가 전부 문서 끝 1,300자에 몰려 있었는데 순서대로 담으니
+    14개에서 끊겼다. 밀도가 높은 조각부터 집은 뒤 원래 순서로 되돌려 읽기 쉽게 한다.
+    """
+    text = text or ""
+    if len(text) <= MAX_CHARS_PER_SOURCE:
+        return text
+    head, tail = text[:HEAD_CHARS], text[HEAD_CHARS:]
+    chunks = []
+    for start in range(0, len(tail), IOC_WINDOW_STEP):
+        chunk = tail[start:start + IOC_WINDOW_STEP]
+        score = _indicator_count(chunk)
+        if score:
+            chunks.append((score, start, chunk))
+    if not chunks:
+        return head + tail[:IOC_CHARS]      # 지표가 없으면 그냥 이어 붙인다
+
+    chunks.sort(key=lambda item: (-item[0], item[1]))
+    picked, budget = [], IOC_CHARS
+    for score, start, chunk in chunks:
+        if budget <= 0:
+            break
+        picked.append((start, chunk[:budget]))
+        budget -= len(chunk)
+
+    picked.sort()                           # 원래 순서로 되돌린다
+    parts, last_end = [], None
+    for start, chunk in picked:
+        if last_end is not None and start > last_end:
+            parts.append(" … ")             # 건너뛴 구간이 있음을 표시한다
+        parts.append(chunk)
+        last_end = start + IOC_WINDOW_STEP
+    return head + " … " + "".join(parts)
+
+
 def fetch_text(url):
     """본문 텍스트만. 실패하거나 너무 짧으면 빈 문자열."""
     try:
@@ -141,7 +209,7 @@ def fetch_text(url):
     if len(text) < MIN_BODY_CHARS:
         log("    [-] 원문이 {}자뿐이라 쓰지 않습니다({}).".format(len(text), _host(url)))
         return ""
-    return text[:MAX_CHARS_PER_SOURCE]
+    return _excerpt(text)
 
 
 def collect(links, article_url="", limit=MAX_SOURCES):
