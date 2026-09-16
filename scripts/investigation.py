@@ -684,6 +684,15 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             block["coverage"] = cover
             steps.extend({"track": "산출물 점검", "text": line}
                          for line in playbook.coverage_steps(cover))
+        # 어휘로 표현할 수 없어 약속에 못 넣은 것. 검증 대상은 아니지만 숨기지 않는다 —
+        # "우리 도구로 여기까지"가 어디인지 카드에 남아야 다음에 무엇을 만들지 알 수 있다.
+        gaps = [g for g in (targets.get("gaps") or []) if str(g).strip()]
+        if gaps:
+            block["gaps"] = gaps
+            steps.append({"track": "산출물 점검",
+                          "text": "이 대응을 완결하려면 더 필요하다고 본 것 {}가지 — "
+                                  "지금 우리 도구로는 닿지 않습니다: {}.".format(
+                                      len(gaps), "; ".join(gaps[:3]))})
     except Exception as error:
         steps.append({"track": "산출물 점검", "text": "실패: {}".format(error)})
 

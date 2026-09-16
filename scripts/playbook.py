@@ -92,7 +92,7 @@ ARTIFACTS = {
         lambda b: any((f.get("behaviour") or {}).get("has_dynamic")
                       for f in ((b.get("malware") or {}).get("files") or []))),
     "sample_source": (
-        "샘플 확보 경로(공개 저장소·샌드박스)",
+        "샘플을 실제로 받을 수 있는 곳을 찾아낸다(공개 저장소·샌드박스)",
         _sample_source),
     "patch_priority": (
         "KEV·EPSS로 본 패치 긴급도",
