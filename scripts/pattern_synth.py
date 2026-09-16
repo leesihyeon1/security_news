@@ -146,6 +146,17 @@ KNOWN_BINARIES = {
     "powershell.exe", "pwsh.exe", "cmd.exe", "rundll32.exe", "regsvr32.exe",
     "mshta.exe", "wscript.exe", "cscript.exe", "schtasks.exe", "reg.exe",
     "attrib.exe", "certutil.exe", "bitsadmin.exe", "curl.exe", "wget.exe",
+    # 보안 제품 본체. 이것들을 막는 쿼리가 곧 "백신 무력화" 탐지인데, 이름이 어휘에
+    # 없어서 지어낸 값으로 폐기됐다(실측 2026-09-17: msmpeng.exe·
+    # securityhealthservice.exe 때문에 Defender 무력화 탐지 쿼리가 통째로 버려졌다).
+    "msmpeng.exe", "mpcmdrun.exe", "nissrv.exe", "securityhealthservice.exe",
+    "securityhealthsystray.exe", "smartscreen.exe", "sense.exe", "senseir.exe",
+    "windefend.exe", "tskill.exe", "taskmgr.exe",
+    # 개발·런타임 도구. 공급망·AI 코딩 도구 기사에서 탐지 대상이 되는 쪽이다.
+    "python3.exe", "pip.exe", "pip3.exe", "npm.exe", "npx.exe", "yarn.exe",
+    "pnpm.exe", "docker.exe", "kubectl.exe", "git.exe", "code.exe", "cursor.exe",
+    "java.exe", "javaw.exe", "dotnet.exe", "go.exe", "cargo.exe", "ruby.exe",
+    "gem.exe", "perl.exe", "php.exe", "conda.exe", "uv.exe",
     "python.exe", "pythonw.exe", "node.exe", "msiexec.exe", "wmic.exe",
     "net.exe", "net1.exe", "nltest.exe", "whoami.exe", "tasklist.exe",
     "rundll.exe", "explorer.exe", "svchost.exe", "dllhost.exe", "conhost.exe",
@@ -377,6 +388,32 @@ def _skippable(value):
     return False
 
 
+# 널리 쓰이는 서비스의 정식 도메인. 기사에 안 적혀 있어도 지어낸 C2가 아니다 —
+# 오히려 이런 곳을 악용하는 사건에서 탐지 대상이 되는 쪽이다(실측 2026-09-17:
+# api.openai.com·api.anthropic.com이 "지어낸 지표"로 폐기돼, AI 서비스 악용 기사의
+# 통신 탐지 쿼리가 사라졌다).
+#
+# 사용자가 하위 도메인을 자유롭게 만들 수 있는 호스팅은 일부러 뺐다. azurewebsites.net·
+# github.io·amazonaws.com 같은 곳은 공격자 인프라가 그 아래에 실제로 올라오므로,
+# 허용하면 지어낸 C2가 그 형태로 빠져나간다.
+KNOWN_SERVICE_DOMAINS = {
+    "openai.com", "anthropic.com", "googleapis.com", "google.com", "gstatic.com",
+    "microsoft.com", "windowsupdate.com", "msftconnecttest.com", "office.com",
+    "live.com", "github.com", "npmjs.org", "npmjs.com", "pypi.org", "rubygems.org",
+    "docker.com", "docker.io", "gitlab.com", "bitbucket.org", "slack.com",
+    "discord.com", "telegram.org", "t.me", "cloudflare.com", "virustotal.com",
+    "abuse.ch", "urlscan.io", "mozilla.org", "apple.com",
+}
+
+
+def _known_service(low):
+    """값이 널리 쓰이는 서비스의 도메인인가(하위 도메인 포함)."""
+    for domain in KNOWN_SERVICE_DOMAINS:
+        if low == domain or low.endswith("." + domain):
+            return True
+    return False
+
+
 def _risky(value):
     """기사에 없을 때 폐기해야 하는 종류인가 — 지어낸 도메인·IP·해시·고유 파일명.
 
@@ -397,7 +434,7 @@ def _risky(value):
     if suffix in FILE_EXTENSIONS:
         return bool(RISKY_FILENAME_RE.match(low))
     if RISKY_DOMAIN_RE.match(low):
-        return True
+        return not _known_service(low)
     return False
 
 
@@ -510,14 +547,24 @@ def _search_urlscan(query, api_key=None):
 
 
 def validate_urlscan(candidate, api_key=None):
-    """urlscan에서 실제로 몇 건 잡히는지 센다. 0건·과다는 폐기."""
+    """urlscan에서 실제로 몇 건 잡히는지 센다. 0건·과다는 폐기.
+
+    조회 자체가 실패한 것은 패턴이 틀렸다는 뜻이 아니다. 예전에는 실패도 폐기로
+    처리하면서 "쿼리 문법을 확인해야 합니다"라고 안내했는데, 실제 사유는 대부분
+    레이트리밋(HTTP 403)이었다. 그 결과 저장된 패턴 14건 중 urlscan 패턴이 0개가
+    됐다 — 미끼 페이지를 찾는 축이 통째로 사라진 것이다(실측 2026-09-17: 폐기 5건이
+    전부 403이었고, 같은 질의를 지금 돌리면 1만 건이 정상 반환된다).
+
+    그래서 검증하지 못한 것은 검증하지 못했다고 싣는다. 확인된 척하지 않도록
+    unverified를 함께 돌려주고, 화면에는 그 사유가 그대로 나간다.
+    """
     query = (candidate.get("query") or "").strip()
     if not query:
         return False, "쿼리 없음", {}
     results, total, error = _search_urlscan(query, api_key=api_key)
     if error:
-        return False, "urlscan 조회 실패({}) — 쿼리 문법을 확인해야 합니다".format(
-            error[:60]), {}
+        return True, "", {"unverified": "urlscan 조회에 실패해 실제 관측 수를 확인하지 "
+                                        "못했습니다({})".format(error[:60])}
     if total < URLSCAN_MIN_HITS:
         return False, "urlscan 0건 — 실재하지 않는 패턴", {"hits": 0}
     if total > URLSCAN_TOO_BROAD:
@@ -725,7 +772,9 @@ def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240,
 
         query = (candidate.get("query") or "").strip()
         observed = candidate.get("invariant") or ""
-        if facts.get("hits"):
+        if facts.get("unverified"):
+            observed = facts["unverified"] + " — 패턴 자체는 본문 근거를 통과했습니다. " + observed
+        elif facts.get("hits"):
             observed = ("urlscan에서 {:,}건 관측{}. ".format(
                 facts["hits"],
                 "(예: " + ", ".join(facts.get("hosts") or []) + ")"
