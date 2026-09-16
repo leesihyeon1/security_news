@@ -56,6 +56,10 @@ THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1/"
 URLHAUS_HOST_PAGE = "https://urlhaus.abuse.ch/browse.php?search={}"
 THREATFOX_SEARCH_PAGE = "https://threatfox.abuse.ch/browse.php?search=ioc%3A{}"
 
+# 조회는 됐고 해당 값이 없을 뿐인 응답들. 서비스마다 낱말이 다르다.
+EMPTY_STATUSES = {"ok", "no_result", "no_results", "hash_not_found",
+                  "url_not_found", "host_not_found", "illegal_hash"}
+
 AUTH_HINT = ("abuse.ch 인증키가 등록되지 않았습니다(auth.abuse.ch에서 키를 확인/재발급해야 "
              "합니다)")
 
@@ -123,7 +127,11 @@ def _post(url, payload, as_json=False, key=None):
     if status == "unknown_auth_key" or response.status_code in (401, 403):
         _auth_failed = True
         return None, AUTH_HINT
-    if status and status not in ("ok", "no_results"):
+    # "등재돼 있지 않다"는 실패가 아니라 답이다. 서비스마다 낱말이 달라서(URLhaus는
+    # no_results, ThreatFox는 no_result, MalwareBazaar는 hash_not_found) 하나만
+    # 적어 두면 나머지가 조회 실패로 찍힌다 — 실측(2026-09-17): ThreatFox에 없는
+    # 해시가 "조회 실패 — abuse.ch 응답 no_result"로 나왔다.
+    if status and status not in EMPTY_STATUSES:
         return None, "abuse.ch 응답 {}".format(status[:40])
     return data, ""
 
