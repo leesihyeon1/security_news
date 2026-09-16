@@ -45,9 +45,23 @@ def _blocklist_values(block):
 
 
 def _sample_source(block):
+    """샘플을 실제로 어디서 받을 수 있는가.
+
+    예전에는 file_info의 맨 위에서 external·sandboxes를 찾았는데 그 자리에는 아무것도
+    없다 — vt_hunter는 그것들을 file_info["enrichment"] 아래에 넣는다. 그래서 Triage와
+    Hybrid Analysis가 샘플을 찾아낸 건까지 "샘플 확보 경로 없음"으로 찍혔다
+    (실측 2026-09-17, DeadLock 건: tria.ge/260910-csptssef64를 확보해 놓고 미달).
+
+    "검색만" 링크는 확보가 아니다. 그 서비스에 실제로 샘플이 있다고 확인된 것만 센다.
+    """
     for file_info in ((block.get("malware") or {}).get("files") or []):
-        if file_info.get("external") or file_info.get("sandboxes"):
-            return True
+        enrichment = file_info.get("enrichment") or {}
+        for outside in enrichment.get("outside") or []:
+            if outside.get("found"):
+                return True
+        for service in enrichment.get("external") or []:
+            if service.get("confirmed"):
+                return True
     return False
 
 
@@ -69,7 +83,10 @@ ARTIFACTS = {
         _blocklist_values),
     "dynamic_analysis": (
         "동적 분석으로 확정한 행위",
-        lambda b: bool((b.get("malware") or {}).get("files"))),
+        # 파일이 조회됐다는 것과 샌드박스가 실제로 실행해 봤다는 것은 다르다.
+        # bool(files)만 보면 행위 데이터가 0건인 파일도 "냈다"가 된다.
+        lambda b: any((f.get("behaviour") or {}).get("has_dynamic")
+                      for f in ((b.get("malware") or {}).get("files") or []))),
     "sample_source": (
         "샘플 확보 경로(공개 저장소·샌드박스)",
         _sample_source),
