@@ -179,6 +179,11 @@ def parse(raw):
     return data if isinstance(data, dict) else {}
 
 
+# 무해화 표기 → 실제 값. analysis_targets와 같은 규칙이다.
+DEFANG_SUBS = (("[.]", "."), ("[:]", ":"), ("[/]", "/"), ("(.)", "."),
+               ("(dot)", "."), ("[dot]", "."), ("hxxps", "https"), ("hxxp", "http"))
+
+
 def _corpus(investigation, analysis, primary="", extra=""):
     """근거 대조용 텍스트 — 조회 재료·기사 분석·1차 자료·후속 조회를 합친 것.
 
@@ -188,10 +193,17 @@ def _corpus(investigation, analysis, primary="", extra=""):
     대응 계획 4건이 그렇게 잘려 나갔다 — 1차 자료를 읽는 기능이 읽을수록 손해를 내는
     상태였다. 모델에게 근거로 준 글은 검증에서도 근거로 쳐야 한다.
     """
-    return " ".join([
+    blob = " ".join([
         json.dumps(investigation, ensure_ascii=False),
         analysis or "", primary or "", extra or "",
     ]).lower()
+    # 1차 자료는 IOC를 무해화해 쓴다. 모델은 정상 형태로 복원해 답하므로, 코퍼스를
+    # 그대로 두면 그 값이 "지어낸 것"으로 판정된다 — 실측(2026-09-17): DomainTools
+    # 원문에 sprocketwhirl[.]top·manusai[.]sbs로 적혀 있었고, 판단이 쓴
+    # sprocketwhirl.top·manusai.sbs가 폐기돼 대응 계획 4건이 잘려 나갔다.
+    for fanged, plain in DEFANG_SUBS:
+        blob = blob.replace(fanged, plain)
+    return blob
 
 
 def _invented(text, corpus):

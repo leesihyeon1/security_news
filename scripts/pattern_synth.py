@@ -155,6 +155,10 @@ KNOWN_BINARIES = {
     # 개발·런타임 도구. 공급망·AI 코딩 도구 기사에서 탐지 대상이 되는 쪽이다.
     "python3.exe", "pip.exe", "pip3.exe", "npm.exe", "npx.exe", "yarn.exe",
     "pnpm.exe", "docker.exe", "kubectl.exe", "git.exe", "code.exe", "cursor.exe",
+    # 브라우저. 확장 프로그램 기사의 헌팅 쿼리는 브라우저 프로세스를 지목할 수밖에
+    # 없다(실측 2026-09-17: msedge.exe 때문에 확장 탐지 쿼리 4개가 한꺼번에 폐기됐다).
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "vivaldi.exe",
+    "opera.exe", "iexplore.exe", "safari.exe", "chromium.exe", "whale.exe",
     "java.exe", "javaw.exe", "dotnet.exe", "go.exe", "cargo.exe", "ruby.exe",
     "gem.exe", "perl.exe", "php.exe", "conda.exe", "uv.exe",
     "python.exe", "pythonw.exe", "node.exe", "msiexec.exe", "wmic.exe",
