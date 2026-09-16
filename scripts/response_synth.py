@@ -66,6 +66,12 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
 - "결과가 없었다"도 판단 재료다. 유포지가 안 잡히면 이미 내려갔다는 뜻일 수 있고,
   그것은 "안전하다"와 다르다. 없는 것을 없다고 쓰고, 그 뜻을 밝혀라.
 - 우리 조직에 해당하지 않으면 해당하지 않는다고 쓰라. 억지로 조치를 만들지 마라.
+- exposure는 "미확인"으로 끝내지 마라. 사내 로그에 접근할 수 없는 것은 사실이지만,
+  피해 규모·악용 대상·탈취 대상은 이미 재료에 있다. 그것으로 "우리 쪽에서 무엇이
+  위험한가"까지 밀고 가되, 측정이 아니라 추론임을 밝히고 무엇을 보면 확정되는지 적어라.
+  해당 사항이 정말 없으면 who에 "해당 없음"과 그 이유를 쓴다.
+- timeline은 재료에 실제로 적힌 날짜만 쓴다. 최초 등장·공개일·스토어 등재/삭제일·
+  관측 시작일처럼 근거가 있는 것만 넣고, 없으면 빈 배열로 두라. 날짜를 지어내지 마라.
 
 [출력 형식 — JSON 하나만. 설명 문장을 앞뒤에 붙이지 마라]
 {
@@ -78,6 +84,14 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
     {"action": "무엇을 한다", "why": "왜 지금 이 순서인가", "when": "즉시|오늘|이번 주|기한 날짜"}
   ],
   "open_questions": ["대응을 마치려면 추가로 확인해야 할 것"],
+  "exposure": {
+    "who": "우리 환경에서 무엇이 어떻게 위험한가. 사내 로그가 없어도 조회 결과와 기사의 사실로 추론하라 — 그 확장을 쓰는 사람이 있다면 무엇이 털리는지, 그 제품을 쓴다면 어디까지 열리는지",
+    "basis": "그렇게 본 근거. 조회 결과나 기사의 어느 사실인지 밝혀라",
+    "confirm": "이 추정을 사실로 바꾸려면 무엇을 보면 되는가(우리가 볼 수 있는 것으로)"
+  },
+  "timeline": [
+    {"when": "날짜 또는 기간", "what": "그때 무슨 일이 있었나", "source": "어디서 나온 날짜인가"}
+  ],
   "followups": [
     {"type": "domain|ip|hash|cve|package", "value": "조회할 값", "question": "무엇을 확인하려는가"}
   ]
@@ -263,6 +277,45 @@ def followups(data, corpus):
     return out
 
 
+# 날짜처럼 생긴 것. timeline 항목이 근거 있는 날짜를 담았는지 보는 데만 쓴다.
+DATE_RE = re.compile(r"\d{4}[-./년]\s*\d{1,2}|\d{1,2}[-./월]\s*\d{1,2}|\d{4}")
+MAX_TIMELINE = 6
+
+
+def _exposure(value, corpus, dropped):
+    """우리 쪽 영향 범위 추정. 근거가 재료 밖이면 버린다."""
+    if not isinstance(value, dict):
+        return {}
+    who = " ".join(str(value.get("who") or "").split())
+    if not who:
+        return {}
+    basis = " ".join(str(value.get("basis") or "").split())
+    bad = _invented(who + " " + basis, corpus)
+    if bad:
+        dropped.append("근거 없는 값({}) — 영향 범위 추정".format(", ".join(bad[:2])))
+        return {}
+    return {"who": who[:400], "basis": basis[:400],
+            "confirm": " ".join(str(value.get("confirm") or "").split())[:300]}
+
+
+def _timeline(values, corpus, dropped):
+    """시간축. 날짜가 없는 항목과 재료에 없는 값이 섞인 항목은 버린다."""
+    out = []
+    for item in (values or [])[:MAX_TIMELINE]:
+        if not isinstance(item, dict):
+            continue
+        when = " ".join(str(item.get("when") or "").split())
+        what = " ".join(str(item.get("what") or "").split())
+        if not (when and what) or not DATE_RE.search(when):
+            continue
+        if _invented(when + " " + what, corpus):
+            dropped.append("근거 없는 값 — 시간축 \"{}\"".format(what[:40]))
+            continue
+        out.append({"when": when[:40], "what": what[:200],
+                    "source": " ".join(str(item.get("source") or "").split())[:80]})
+    return out
+
+
 def synthesize(title, analysis, targets, investigation, timeout=240,
                primary="", extra="", history=""):
     """조회 결과를 읽고 판단한다. 쓸 만한 결과가 없으면 None.
@@ -321,6 +374,8 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         "contradictions": _clean_list(data.get("contradictions"), corpus, dropped),
         "plan": plan,
         "open_questions": _clean_list(data.get("open_questions"), corpus, dropped),
+        "exposure": _exposure(data.get("exposure"), corpus, dropped),
+        "timeline": _timeline(data.get("timeline"), corpus, dropped),
         "objective": (targets or {}).get("objective") or "",
         "followups": followups(data, corpus),
     }
