@@ -368,11 +368,52 @@ def _when_rank(when):
     return 10 if re.search(r"\d", text) else WHEN_FALLBACK
 
 
+# 조치 문장에서 "무엇을 어떻게"만 뽑는 어휘.
+ACTION_VERBS = {
+    "차단": ("차단", "블록", "블랙리스트"),
+    "패치": ("패치", "업데이트", "버전 올"),
+    "헌팅": ("헌팅", "쿼리", "역추적", "탐지 룰", "탐지룰", "시그니처"),
+    "격리": ("격리", "삭제", "제거", "언인스톨"),
+    "폐기": ("폐기", "회수", "재발급", "교체", "초기화"),
+}
+ACTION_OBJECTS = {
+    "도메인": ("도메인", "url", "주소", "인프라"),
+    "해시": ("해시", "파일", "샘플", "바이너리"),
+    "ip": ("ip", "아이피"),
+    "취약점": ("cve", "취약점"),
+    "패키지": ("패키지", "레지스트리", "의존성"),
+    "확장": ("확장",),
+    "계정": ("계정", "토큰", "자격증명", "세션", "비밀번호"),
+}
+
+
+# 이 동작만 겹치면 지운다. 차단·헌팅은 판단이 같은 말을 거의 항상 하고 재료 쪽이
+# 덧붙이는 것이 없다. 반면 패치·격리·폐기는 재료 문장이 판단에 없는 구체를 싣는다 —
+# 실측(저장분 50건): "KEV 등재 1건(CVE-2026-75650)은 실제 악용이 확인된 것이다",
+# "지속성(예약 작업·Run 키)까지 제거해야 재감염이 끊긴다"가 그렇게 지워질 뻔했다.
+DEDUP_VERBS = {"차단", "헌팅"}
+
+
+def _action_signature(text):
+    """조치 문장을 (동작, 대상) 쌍의 집합으로. 표현이 달라도 같은 일이면 겹친다."""
+    low = str(text or "").lower()
+    verbs = {name for name, words in ACTION_VERBS.items()
+             if any(word in low for word in words)}
+    objects = {name for name, words in ACTION_OBJECTS.items()
+               if any(word in low for word in words)}
+    return {(verb, obj) for verb in verbs for obj in objects}
+
+
 def merge_actions(verdict, response):
     """종합 판단의 계획과 재료에서 나온 조치를 시점 순 한 목록으로.
 
-    같은 일을 두 번 적지 않는다 — 판단이 이미 말한 조치는 재료 쪽에서 뺀다. 판정은
-    문장 앞부분이 겹치는지로 한다(재료 쪽 문장이 더 길고 뒤에 설명이 붙는다).
+    같은 일을 두 번 적지 않는다 — 판단이 이미 말한 조치는 재료 쪽에서 뺀다.
+
+    앞 18자 비교로는 못 걸렀다. 실측(2026-09-18, Anthropic 위협 보고서 기사): 판단이
+    "차단 후보 도메인 40개·IP 14개·파일 해시 3개를 … 즉시 반영"이라 적고 재료가
+    "도메인 40건을 차단하고 …"로 시작해, 같은 차단 작업이 목록에 두 번 실렸다. 앞머리가
+    겹칠 이유가 없는 문장들이라 앞자리 비교로는 영영 못 잡는다. 그래서 문장에서
+    (동작, 대상) 쌍만 뽑아 맞춘다.
     """
     merged = []
     for step in (verdict or {}).get("plan") or []:
@@ -383,9 +424,16 @@ def merge_actions(verdict, response):
                        "when": step.get("when") or "", "done": step.get("done") or "",
                        "source": "판단"})
     heads = {item["action"][:18] for item in merged}
+    covered = set()
+    for item in merged:
+        covered |= _action_signature(" ".join([item["action"], item["why"], item["done"]]))
     for raw in (response or {}).get("actions") or []:
         action = " ".join(str(raw).split())
         if not action or action[:18] in heads:
+            continue
+        signature = _action_signature(action)
+        if (signature and signature <= covered
+                and {verb for verb, _ in signature} <= DEDUP_VERBS):
             continue
         merged.append({"action": action, "why": "", "when": "", "done": "", "source": "재료"})
     merged.sort(key=lambda item: _when_rank(item["when"]))

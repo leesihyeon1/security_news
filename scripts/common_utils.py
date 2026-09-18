@@ -559,6 +559,40 @@ DEFANGED_DOMAIN_RE = re.compile(
 )
 HXXP_URL_RE = re.compile(r"\bhxxps?://[^\s\"'<>]+", re.IGNORECASE)
 
+# 16진수 덩어리가 해시가 아니라 도메인의 한 조각인 경우가 있다.
+#
+# 실측(2026-09-18, Anthropic 위협 보고서 기사): 1차 자료에 적힌
+# soraki-proxy[.]20245aad98d27b1b1a2f0f103e1d7ee0[.]workers[.]dev에서 가운데 조각이
+# MD5로 잡혔다. 그 값으로 VT를 조회해 "미등록 해시"라는 결론이 났고, 조치 항목의
+# 차단 대상 "파일 해시 3건"에도 그대로 올라갔다. 실재하지 않는 해시를 차단 목록에
+# 넣는 것은 목록을 못 믿게 만든다.
+#
+# 다만 해시 뒤에 확장자가 붙는 표기(be99….exe, ….tar.gz)는 해시가 맞다 — 파일명으로
+# 쓴 것뿐이다. 그래서 마지막 조각이 확장자면 그대로 둔다.
+HASH_TAIL_RE = re.compile(r"(?:\.[A-Za-z0-9-]+)+", re.ASCII)
+HASH_LEAD_RE = re.compile(r"[A-Za-z0-9-]\.$", re.ASCII)
+FILE_EXTENSIONS = {
+    "7z", "apk", "bat", "bin", "cab", "cmd", "dat", "dll", "dmg", "doc", "docx",
+    "exe", "gz", "hta", "img", "iso", "jar", "js", "lnk", "log", "msi", "pdf",
+    "ps1", "rar", "scr", "sys", "tar", "tmp", "txt", "vbs", "xls", "xlsx", "zip",
+}
+
+
+def _is_hostname_label(text, start, end):
+    """이 자리의 16진수가 도메인 이름의 한 조각인가.
+
+    앞에 다른 조각이 붙어 있고 뒤로도 이어지면(a.HEX.b) 호스트명이다. 앞이 비어 있어도
+    뒤로 두 조각 이상 이어지면(HEX.workers.dev) 마찬가지다. 뒤가 한 조각뿐이면
+    파일명으로 본다 — 확장자를 붙여 쓴 해시가 훨씬 흔하다.
+    """
+    tail = HASH_TAIL_RE.match(text, end)
+    labels = [piece for piece in (tail.group(0).split(".") if tail else []) if piece]
+    if labels and labels[-1].lower() in FILE_EXTENSIONS:
+        return False
+    if labels and HASH_LEAD_RE.search(text[max(0, start - 64):start]):
+        return True
+    return len(labels) >= 2
+
 _PRIVATE_IP_PREFIXES = ("0.", "10.", "127.", "169.254.", "192.168.", "224.", "255.")
 
 def _is_public_ip(ip):
@@ -603,8 +637,10 @@ def extract_iocs(*texts, limit=50):
 
         refanged = text.replace("[.]", ".")
         for pattern, ioc_type in ((SHA256_RE, "sha256"), (SHA1_RE, "sha1"), (MD5_RE, "md5")):
-            for match in pattern.findall(refanged):
-                add(ioc_type, match.lower())
+            for match in pattern.finditer(refanged):
+                if _is_hostname_label(refanged, match.start(), match.end()):
+                    continue
+                add(ioc_type, match.group(0).lower())
         for match in IPV4_RE.findall(refanged):
             if _is_public_ip(match):
                 add("ipv4", match)
