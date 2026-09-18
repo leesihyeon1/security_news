@@ -14,6 +14,7 @@
 import re
 
 import analysis_targets
+import common_utils
 import extension_hunter
 import github_hunter
 import intel_hunter
@@ -462,6 +463,11 @@ def _merge_named(key):
     return merge
 
 
+# 1차 자료에서 가져올 지표 수. extract_iocs는 도메인을 먼저 담아서, 기본 상한(50)으로는
+# 도메인만 50개 차고 해시가 잘려 나간다(실측: Anthropic 보고서에 도메인 36개가 먼저
+# 잡히고 SHA-256 2개가 밀렸다).
+PRIMARY_IOC_LIMIT = 200
+
 LOOKUPS = (
     {"key": "user_action", "label": "URL 분석",
      "consumes": "도메인·URL", "run": _run_url, "merge": _merge_url},
@@ -645,17 +651,35 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             steps.append({"track": "조회 계획", "text": "실패: {}".format(error)})
 
     # 1차 자료에서 읽은 글도 조회 재료다. 지표를 여기에만 싣는 연구 글이 많아서,
-    # 넘기지 않으면 애써 받아온 IOC 표를 조회에 못 쓴다(실측: 확장 ID 18개가 1차
-    # 자료에만 있었고 기사 본문에는 없었다).
+    # 넘기지 않으면 애써 받아온 IOC 표를 조회에 못 쓴다.
+    #
+    # 실측(2026-09-18, Anthropic 위협 보고서 기사): 기사 본문에는 지표가 한 개도 없어
+    # 모델이 "조사 불가"로 판정했는데, 기사가 인용한 Anthropic 원문을 받아 보니
+    # SHA-256 2개·MD5 1개·CVE 7개·도메인 36개가 들어 있었다. 받아 놓고 한 건도
+    # 조회하지 않았다 — 트랙이 기사 본문만 보고 정해진 뒤였기 때문이다.
     primary_text = " ".join(src.get("text") or "" for src in primary.get("sources") or [])
-    # 1차 자료에서 확장 ID가 새로 나왔으면 그 트랙을 연다 — 기사 본문만 보고 트랙을
-    # 정한 뒤라, 여기서 열어주지 않으면 조회 대상이 있는데도 돌지 않는다.
-    if primary_text and "extension" not in (route.get("tracks") or []):
-        if extension_hunter.ids_from_text(primary_text):
-            route.setdefault("tracks", []).append("extension")
+    if primary_text:
+        known = {str(item.get("value") or "").lower() for item in iocs or []}
+        fresh = [item for item in common_utils.extract_iocs(
+            primary_text, limit=PRIMARY_IOC_LIMIT)
+            if str(item.get("value") or "").lower() not in known]
+        if fresh:
+            iocs = list(iocs or []) + fresh
+            kinds = {}
+            for item in fresh:
+                kinds[item["type"]] = kinds.get(item["type"], 0) + 1
+            # 지표가 늘었으니 트랙을 다시 정한다. 주력 축은 모델 선언이 우선이라
+            # 여기서 바뀌지 않는다.
+            route = classify(iocs, text=text, title=title, category=category,
+                             targets=targets, raw_body=" ".join([body, primary_text]))
+            block["route"] = {key: route[key] for key in
+                              ("primary", "label", "explain", "tracks", "scores")}
             steps.append({"track": "조사 방향",
-                          "text": "1차 자료에서 확장 프로그램 ID를 찾아 확장 스토어 "
-                                  "조회를 추가했습니다 — 기사 본문에는 없던 지표입니다."})
+                          "text": "1차 자료에서 지표 {}건을 더 찾아 조회 대상에 넣었습니다"
+                                  "({}) — 기사 본문에는 없던 값입니다.".format(
+                                      len(fresh),
+                                      ", ".join("{} {}건".format(k, v)
+                                                for k, v in sorted(kinds.items())))})
     run_lookups({"iocs": iocs, "text": text, "title": title, "route": route,
                  "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets,
                  "body": body, "primary_text": primary_text, "block": block},
