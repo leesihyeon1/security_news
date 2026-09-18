@@ -631,11 +631,16 @@ def external_reports(hash_value, comments):
     return out
 
 
-def enrich_file(hash_value, api_key, pause=True):
+def enrich_file(hash_value, api_key, pause=True, with_vt=True):
     """샌드박스별 리포트·커뮤니티·외부 샌드박스 조회를 한 번에.
 
     외부 샌드박스(Triage·MalwareBazaar·Hybrid Analysis)는 각자 키가 있으면 실제로
     조회해 판정·추출 C2까지 가져오고, 키가 없으면 검색 링크만 만든다.
+
+    with_vt=False면 VT 호출 부분만 건너뛴다. 샘플을 어디서 받을 수 있는지는 VT와
+    무관한 조회인데, 예전에는 VT 분당 제한 때문에 걸어둔 파일 수 제한에 같이 묶여
+    있었다 — 그래서 해시가 둘이면 둘째 파일은 확보처를 아예 안 찾았다(실측: 두
+    번째 해시의 enrichment가 통째로 비어 있었다).
     """
     # 외부 조회는 VT 키와 무관하다 — VT 키가 없어도 이쪽은 돌린다.
     outside = sandbox_lookup.lookup_all(hash_value, pause=pause)
@@ -646,7 +651,7 @@ def enrich_file(hash_value, api_key, pause=True):
     if not any(item.get("found") for item in outside):
         searched = sandbox_lookup.search_sample(hash_value)
 
-    if not api_key:
+    if not api_key or not with_vt:
         return {"sandboxes": [], "comments": [],
                 "external": external_reports(hash_value, []),
                 "outside": outside, "searched": searched}
@@ -877,10 +882,13 @@ def analyze_hashes(hashes, api_key=None, max_files=None, iocs=None):
         # 조회에 성공한 파일 기준으로 센다 — 인덱스로 세면 첫 파일이 404였을 때
         # (실측: TerminalFix의 기사 해시가 VT에 없다) 보강이 아예 안 붙는다.
         enriched_so_far = sum(1 for f in files if (f.get("enrichment") or {}).get("sandboxes"))
-        if enriched_so_far < ENRICH_FILES and not error:
-            if api_key:
+        # VT 호출이 붙는 보강은 대표 파일 몇 건까지만. 확보처 조회는 VT와 무관하므로
+        # 모든 파일에 돌린다 — "이 샘플을 어디서 받나"는 파일마다 다른 답이다.
+        with_vt = bool(api_key) and enriched_so_far < ENRICH_FILES and not error
+        if not error:
+            if with_vt:
                 time.sleep(PAUSE_SECONDS)
-            enrichment = enrich_file(hash_value, api_key)
+            enrichment = enrich_file(hash_value, api_key, with_vt=with_vt)
             if enrichment.get("sandboxes") or enrichment.get("comments"):
                 steps.append("{}… — 샌드박스별 리포트 {}건과 커뮤니티 코멘트 {}건을 추가로 "
                              "조회했습니다.".format(short_hash(hash_value),

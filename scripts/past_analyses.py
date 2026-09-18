@@ -165,6 +165,43 @@ def find_related(targets, exclude_title="", client=None):
     return related[:MAX_RELATED]
 
 
+def stored_axis(title, client=None):
+    """같은 기사를 전에 분석했다면 그때 정한 주력 축. 없으면 "".
+
+    왜 고정하나
+        주력 축은 모델 선언이 규칙 판정보다 앞선다. 모델은 매번 새로 읽으므로 같은
+        기사를 다시 돌리면 축이 흔들린다 — 실측(Anthropic 위협 보고서 기사, 같은
+        본문 3회): 판정 보류 → 악성코드 → 공급망. 축이 바뀌면 조회 계획이 통째로
+        바뀌어서, 재분석이 "다시 본 것"이 아니라 "다른 것"이 된다.
+
+        그래서 한 번 정해진 축은 재분석에서 유지한다. 처음 분석에서 축을 못 정한
+        경우("판정 보류")는 빈 값이라 다음 분석이 새로 정할 수 있다 — 못 정한 것을
+        못 정한 채로 굳힐 이유는 없다.
+
+        환경변수 INVESTIGATION_RESET_AXIS를 주면 무시하고 새로 정한다. 처음 판단이
+        틀렸을 때 빠져나갈 문이 없으면 안 된다.
+    """
+    if not title or os.environ.get("INVESTIGATION_RESET_AXIS"):
+        return ""
+    client = client or _client()
+    if client is None:
+        return ""
+    try:
+        rows = client.lrange(INSIGHTS_LIST_KEY, 0, -1)
+    except Exception:
+        return ""
+    for raw in rows:
+        try:
+            record = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if (record.get("title") or "") != title:
+            continue
+        route = (record.get("investigation") or {}).get("route") or {}
+        return str(route.get("primary") or "")
+    return ""
+
+
 def steps(related):
     """조사 과정에 남길 줄."""
     if not related:

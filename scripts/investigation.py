@@ -135,7 +135,8 @@ def _score(head, body, strong_re, weak_re):
     return score, reasons
 
 
-def classify(iocs, text="", title="", category="", targets=None, raw_body=""):
+def classify(iocs, text="", title="", category="", targets=None, raw_body="",
+             pinned=""):
     """어떤 트랙이 필요한지, 그중 무엇이 주력인지 판단한다.
 
     트랙 존재 여부는 증거(IOC 종류)로 정하고, 무엇을 주력으로 볼지는 사건의 성격
@@ -273,6 +274,23 @@ def classify(iocs, text="", title="", category="", targets=None, raw_body=""):
             declared_note = (
                 "주력을 {}으로 보려 했지만 그 조사를 돌릴 입력이 없어 확보된 지표 "
                 "기준으로 되돌립니다.".format(TRACK_LABELS[declared].split(" — ")[0]))
+
+    # 전에 이 기사를 분석하며 정한 축이 있으면 그것을 지킨다. 선언보다도 앞선다 —
+    # 모델은 매번 새로 읽으므로 같은 본문에서도 답이 달라지고, 그때마다 조회 계획이
+    # 통째로 바뀌면 재분석이 "다시 본 것"이 아니라 "다른 것"이 된다.
+    if pinned and pinned in TRACK_LABELS and pinned != primary:
+        if pinned == "supply_chain" and "supply_chain" not in tracks:
+            tracks.append("supply_chain")
+            supply_chain = True
+        if pinned in tracks:
+            declared_note = (
+                "주력 축은 이전 분석에서 정한 {}을 그대로 씁니다 — 이번 판단은 {}이었지만, "
+                "같은 기사를 볼 때마다 축이 바뀌면 재분석 결과를 앞의 것과 견줄 수 "
+                "없습니다.".format(
+                    TRACK_LABELS[pinned].split(" — ")[0],
+                    TRACK_LABELS[primary].split(" — ")[0] if primary in TRACK_LABELS
+                    else "보류"))
+            primary = pinned
 
     if not primary and tracks:
         # 트랙은 있는데 주력을 못 정한 경우 — 무엇이 있는지만 알리고 판단은 넘긴다.
@@ -676,8 +694,14 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     추가한다 — 이미 저장된 분석 기록을 그리는 화면 코드가 깨지지 않게.
     """
     targets = targets or {}
+    # 이 기사를 전에 분석했다면 그때 정한 축을 가져온다. 한 번만 읽어 재분류까지 쓴다.
+    pinned = ""
+    try:
+        pinned = past_analyses.stored_axis(title)
+    except Exception:
+        pinned = ""
     route = classify(iocs, text=text, title=title, category=category, targets=targets,
-                     raw_body=body)
+                     raw_body=body, pinned=pinned)
     block = {"route": {key: route[key]
                        for key in ("primary", "label", "explain", "tracks", "scores")}}
 
@@ -759,7 +783,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             # 지표가 늘었으니 트랙을 다시 정한다. 주력 축은 모델 선언이 우선이라
             # 여기서 바뀌지 않는다.
             route = classify(iocs, text=text, title=title, category=category,
-                             targets=targets, raw_body=" ".join([body, primary_text]))
+                             targets=targets, raw_body=" ".join([body, primary_text]),
+                             pinned=pinned)
             block["route"] = {key: route[key] for key in
                               ("primary", "label", "explain", "tracks", "scores")}
             steps.append({"track": "조사 방향",
