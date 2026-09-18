@@ -10,3 +10,6 @@ venv/
 env/
 .idea/
 .vscode/
+
+# 로컬 미리보기 설정(브라우저로 대시보드를 띄울 때만 쓴다)
+.claude/
