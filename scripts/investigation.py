@@ -647,11 +647,24 @@ def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
             if kind in ("domain", "ip"):
                 field = "page.domain" if kind == "domain" else "ip"
                 results, total = lure_hunter.urlscan_search(
-                    '{}:"{}"'.format(field, value), size=3, api_key=urlscan_key)
-                hosts = [((r.get("page") or {}).get("domain") or "") for r in results]
-                lines.append("{} {} — urlscan {}건{}".format(
-                    kind, value, total,
-                    "(예: " + ", ".join(h for h in hosts if h) + ")" if any(hosts) else ""))
+                    '{}:"{}"'.format(field, value), size=5, api_key=urlscan_key)
+                # 물어본 것은 "지금도 살아 있나"다. 건수와 마지막 관측일이 그 답이고,
+                # 결과의 도메인 이름은 아니다 — 도메인으로 검색했으니 찾은 것도 같은
+                # 도메인이라, 예전에는 "(예: a.com, a.com, a.com)"이 찍혔다.
+                times = sorted(((r.get("task") or {}).get("time") or "")[:10]
+                               for r in results if (r.get("task") or {}).get("time"))
+                if not total:
+                    lines.append("{} {} — urlscan에 관측 기록이 없습니다.".format(kind, value))
+                else:
+                    seen_hosts = sorted({((r.get("page") or {}).get("domain") or "")
+                                         for r in results
+                                         if ((r.get("page") or {}).get("domain") or "")
+                                         and (r.get("page") or {}).get("domain") != value})
+                    lines.append("{} {} — urlscan 관측 {}건{}{}".format(
+                        kind, value, total,
+                        ", 마지막 {}".format(times[-1]) if times else "",
+                        ", 같은 자리에서 관측된 다른 호스트: "
+                        + ", ".join(seen_hosts[:3]) if seen_hosts else ""))
             elif kind == "hash":
                 track = vt_hunter.analyze_hashes([value], api_key=vt_key, iocs=[])
                 found = (track or {}).get("findings") or []
