@@ -73,8 +73,14 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
 - plan의 done은 비워 두지 마라. "차단했다"가 아니라 "무엇을 확인하면 끝난 것인가"를
   쓴다. 쿼리 결과가 0건이면 끝인지, 0건이어도 다른 것을 더 봐야 하는지가 갈린다 —
   그 구분이 없으면 실행하는 사람이 판단을 대신 해야 한다.
-- timeline은 재료에 실제로 적힌 날짜만 쓴다. 최초 등장·공개일·스토어 등재/삭제일·
-  관측 시작일처럼 근거가 있는 것만 넣고, 없으면 빈 배열로 두라. 날짜를 지어내지 마라.
+- timeline은 이 사건이 어떻게 흘러왔는지를 읽는 곳이다. "언제 시작해서, 언제
+  드러나서, 지금 어디까지 왔나"가 보여야 한다 — 공격 활동 기간, 침해·탈취가 일어난
+  시점, 1차 자료·연구 보고서가 공개된 날, 인프라가 등록되거나 마지막으로 관측된 날처럼
+  사건의 사건을 먼저 쓴다.
+  CVE 공개일이나 샌드박스 최초 등록일은 우리가 조회하다 알게 된 날짜지 이 사건의
+  사건이 아니다. 그것만 늘어놓으면 시간축이 조회 기록이 된다 — 사건 쪽 날짜를 다 쓰고
+  자리가 남을 때만 넣어라.
+  재료에 실제로 적힌 날짜만 쓴다. 없으면 빈 배열로 두고, 날짜를 지어내지 마라.
 
 [출력 형식 — JSON 하나만. 설명 문장을 앞뒤에 붙이지 마라]
 {
@@ -286,7 +292,26 @@ def followups(data, corpus):
 
 # 날짜처럼 생긴 것. timeline 항목이 근거 있는 날짜를 담았는지 보는 데만 쓴다.
 DATE_RE = re.compile(r"\d{4}[-./년]\s*\d{1,2}|\d{1,2}[-./월]\s*\d{1,2}|\d{4}")
-MAX_TIMELINE = 6
+MAX_TIMELINE = 8
+# 우리가 조회하다 알게 된 날짜 — NVD 공개일, 샌드박스 최초 등록일. 사건의 사건이
+# 아니라 조회의 부산물이라, 자리가 모자라면 이쪽부터 버린다.
+#
+# 실측(Anthropic 위협 보고서 기사): 시간축 6줄이 CVE 공개일 4개와 VT 최초 등록일
+# 2개로 다 찼다. 같은 조사에서 나온 Anthropic 보고서 관측 기간, Zscaler 공개일,
+# 피싱 도메인 등록일은 모델이 뒤에 적었다가 앞에서 자르는 바람에 통째로 빠졌다.
+REGISTRY_EVENT_RE = re.compile(
+    r"공개일|공개\s*\(|최초\s*등록|최초\s*등장|등재|first\s*seen|published|"
+    r"NVD|VirusTotal\s*최초|CVE-\d",
+    re.I)
+# 정렬용 날짜. 기간("2025-12 ~ 2026-08")이면 시작일을 쓴다.
+WHEN_KEY_RE = re.compile(r"(\d{4})(?:[-./년]\s*(\d{1,2}))?(?:[-./월]\s*(\d{1,2}))?")
+
+
+def _when_key(when):
+    match = WHEN_KEY_RE.search(when or "")
+    if not match:
+        return (9999, 99, 99)
+    return (int(match.group(1)), int(match.group(2) or 0), int(match.group(3) or 0))
 
 
 def _exposure(value, corpus, dropped):
@@ -306,9 +331,14 @@ def _exposure(value, corpus, dropped):
 
 
 def _timeline(values, corpus, dropped):
-    """시간축. 날짜가 없는 항목과 재료에 없는 값이 섞인 항목은 버린다."""
+    """시간축. 날짜가 없는 항목과 재료에 없는 값이 섞인 항목은 버린다.
+
+    자르기 전에 다 검사한다. 앞에서부터 자르면 모델이 뒤에 적은 사건 날짜가
+    검사도 받기 전에 사라진다. 자리가 모자라면 조회 부산물부터 버리고, 남은 것은
+    날짜순으로 되돌린다 — 순서가 없는 시간축은 시간축이 아니다.
+    """
     out = []
-    for item in (values or [])[:MAX_TIMELINE]:
+    for item in (values or []):
         if not isinstance(item, dict):
             continue
         when = " ".join(str(item.get("when") or "").split())
@@ -320,6 +350,11 @@ def _timeline(values, corpus, dropped):
             continue
         out.append({"when": when[:40], "what": what[:200],
                     "source": " ".join(str(item.get("source") or "").split())[:80]})
+    if len(out) > MAX_TIMELINE:
+        out.sort(key=lambda row: bool(REGISTRY_EVENT_RE.search(
+            row["what"] + " " + row["source"])))
+        out = out[:MAX_TIMELINE]
+    out.sort(key=lambda row: _when_key(row["when"]))
     return out
 
 
