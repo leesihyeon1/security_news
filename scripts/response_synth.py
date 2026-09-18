@@ -70,6 +70,9 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
   피해 규모·악용 대상·탈취 대상은 이미 재료에 있다. 그것으로 "우리 쪽에서 무엇이
   위험한가"까지 밀고 가되, 측정이 아니라 추론임을 밝히고 무엇을 보면 확정되는지 적어라.
   해당 사항이 정말 없으면 who에 "해당 없음"과 그 이유를 쓴다.
+- plan의 done은 비워 두지 마라. "차단했다"가 아니라 "무엇을 확인하면 끝난 것인가"를
+  쓴다. 쿼리 결과가 0건이면 끝인지, 0건이어도 다른 것을 더 봐야 하는지가 갈린다 —
+  그 구분이 없으면 실행하는 사람이 판단을 대신 해야 한다.
 - timeline은 재료에 실제로 적힌 날짜만 쓴다. 최초 등장·공개일·스토어 등재/삭제일·
   관측 시작일처럼 근거가 있는 것만 넣고, 없으면 빈 배열로 두라. 날짜를 지어내지 마라.
 
@@ -81,7 +84,8 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
   "unconfirmed": ["확인하지 못한 것과 그 이유"],
   "contradictions": ["기사 주장과 조회 결과가 어긋나는 점. 없으면 빈 배열"],
   "plan": [
-    {"action": "무엇을 한다", "why": "왜 지금 이 순서인가", "when": "즉시|오늘|이번 주|기한 날짜"}
+    {"action": "무엇을 한다", "why": "왜 지금 이 순서인가", "when": "즉시|오늘|이번 주|기한 날짜",
+     "done": "무엇을 보면 이 조치가 끝난 것인가. 조회 결과가 0건인 것이 끝인지 아닌지까지 밝혀라"}
   ],
   "open_questions": ["대응을 마치려면 추가로 확인해야 할 것"],
   "exposure": {
@@ -363,6 +367,7 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
             "action": action,
             "why": " ".join(str(item.get("why") or "").split()),
             "when": " ".join(str(item.get("when") or "").split()),
+            "done": " ".join(str(item.get("done") or "").split())[:200],
         })
 
     headline = " ".join(str(data.get("headline") or "").split())

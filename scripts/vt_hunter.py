@@ -786,6 +786,41 @@ def _external_queries(enrichment):
     return rows
 
 
+def local_commands(hashes):
+    """단말 한 대에서 이 해시의 파일이 있는지 직접 확인한다.
+
+    EDR 콘솔이 답해 줄 일이지만, 눈앞의 PC를 지금 보는 것은 별개의 작업이다. 흔한
+    드롭 경로만 훑어 해시를 맞춰 본다 — 전체 디스크를 해싱하면 몇 시간이 걸린다.
+    """
+    hashes = [h for h in (hashes or []) if len(h) == 64][:8]
+    if not hashes:
+        return []
+    lines = [
+        "$bad = @(" + ", ".join("'{}'".format(h.lower()) for h in hashes) + ")",
+        "$roots = @($env:TEMP, $env:APPDATA, $env:LOCALAPPDATA, $env:ProgramData,",
+        "           (Join-Path $env:USERPROFILE 'Downloads'))",
+        "foreach ($root in $roots) {",
+        "  if (-not (Test-Path $root)) { continue }",
+        "  Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue |",
+        "    Where-Object { $_.Length -lt 200MB } |",
+        "    ForEach-Object {",
+        "      $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()",
+        "      if ($bad -contains $h) { [pscustomobject]@{ Path = $_.FullName; "
+        "SHA256 = $h; Modified = $_.LastWriteTime } }",
+        "    }",
+        "}",
+    ]
+    return [{
+        "name": "이 단말에 해당 파일이 있는지 확인",
+        "shell": "PowerShell",
+        "note": "흔한 드롭 경로(TEMP·APPDATA·ProgramData·Downloads)만 훑는다 — 전체 "
+                "디스크를 해싱하면 시간이 너무 걸린다. 결과가 없다고 감염이 아니라고 "
+                "단정할 수는 없고, 그때는 실행 흔적(프로세스·예약 작업 로그)을 따로 봐야 "
+                "한다. 나오면 격리 후 지속성까지 확인한다.",
+        "command": chr(10).join(lines),
+    }]
+
+
 def analyze_hashes(hashes, api_key=None, max_files=None, iocs=None):
     """해시 목록으로 악성코드 트랙을 만든다. 키가 없으면 링크·검색만 담는다."""
     api_key = api_key if api_key is not None else _api_key()

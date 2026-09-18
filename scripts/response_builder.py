@@ -26,6 +26,7 @@ import extension_hunter
 import github_hunter
 import lure_hunter
 import supply_chain_hunter
+import vt_hunter
 import vuln_hunter
 
 # 샌드박스 관측 통신에 섞이는 공용 리졸버·정상 서비스. 차단 후보로 올리면 안 된다.
@@ -513,6 +514,15 @@ def build(block, iocs, primary="", text=""):
         actions = supply_material["actions"] + actions
         # 단말에서 직접 도는 명령이라 KQL과 섞지 않는다 — 붙여넣는 곳이 다르다.
         commands = supply_material.get("commands") or []
+
+    # 명령은 공급망 경로에만 있었다 — 대응 24건 중 1건(실측 2026-09-18). "이미 설치된
+    # 단말을 찾는다"고 안내해 놓고 찾는 방법을 안 주면 그 조치는 절반이다. 확장·해시
+    # 경로에도 눈앞의 PC 한 대를 지금 확인할 명령을 붙인다.
+    if extension_material and extension_material.get("commands"):
+        commands = extension_material["commands"] + commands
+    hash_values = values["hashes"]
+    if hash_values:
+        commands = commands + vt_hunter.local_commands(hash_values)
 
     # 취약점 재료는 맨 앞에 둔다 — 취약점 기사에서 가장 먼저 봐야 하는 것이 패치
     # 우선순위와 노출 자산이다.

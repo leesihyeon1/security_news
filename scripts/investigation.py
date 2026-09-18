@@ -380,13 +380,14 @@ def merge_actions(verdict, response):
         if not action:
             continue
         merged.append({"action": action, "why": step.get("why") or "",
-                       "when": step.get("when") or "", "source": "판단"})
+                       "when": step.get("when") or "", "done": step.get("done") or "",
+                       "source": "판단"})
     heads = {item["action"][:18] for item in merged}
     for raw in (response or {}).get("actions") or []:
         action = " ".join(str(raw).split())
         if not action or action[:18] in heads:
             continue
-        merged.append({"action": action, "why": "", "when": "", "source": "재료"})
+        merged.append({"action": action, "why": "", "when": "", "done": "", "source": "재료"})
     merged.sort(key=lambda item: _when_rank(item["when"]))
     return merged
 

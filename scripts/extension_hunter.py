@@ -42,6 +42,7 @@ import time
 import urllib.parse
 import urllib.request
 
+BS = chr(92)   # 윈도우 경로 구분자. 리터럴에 그대로 쓰면 이스케이프가 꼬인다.
 USER_AGENT = "boannews-intel/1.0 (threat research)"
 REQUEST_TIMEOUT = 20
 PAUSE_SECONDS = 0.5
@@ -247,6 +248,50 @@ def analyze(extension_ids, objective=""):
     }
 
 
+def _ps_array(values):
+    return "@(" + ", ".join("'{}'".format(str(v).replace("'", "''")) for v in values) + ")"
+
+
+def local_commands(extension_ids):
+    """단말에서 직접 칠 확인 명령.
+
+    "이미 설치된 단말을 찾는다"고 안내해 놓고 찾는 방법을 안 주면 그 조치는 절반이다.
+    MDE 쿼리는 관리 콘솔에서 돌리는 것이고, 눈앞의 PC 한 대를 지금 확인하는 것은 다른
+    일이다 — 확장은 ID와 같은 이름의 폴더로 풀리므로 그 폴더만 보면 된다.
+
+    경로에 역슬래시를 쓰지 않고 Join-Path로 만든다. PowerShell은 슬래시도 경로
+    구분자로 받고, 그래야 이 파일과 화면·복사 사이에서 이스케이프가 꼬이지 않는다.
+    """
+    if not extension_ids:
+        return []
+    lines = [
+        "$bad = " + _ps_array(extension_ids),
+        "$roots = @(",
+        "  (Join-Path $env:LOCALAPPDATA 'Google/Chrome/User Data'),",
+        "  (Join-Path $env:LOCALAPPDATA 'Microsoft/Edge/User Data')",
+        ")",
+        "foreach ($root in $roots) {",
+        "  if (-not (Test-Path $root)) { continue }",
+        "  Get-ChildItem $root -Recurse -Directory -Filter 'Extensions' -ErrorAction SilentlyContinue |",
+        "    ForEach-Object {",
+        "      Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue |",
+        "        Where-Object { $bad -contains $_.Name } |",
+        "        Select-Object @{n='ExtensionId';e={$_.Name}}, FullName, LastWriteTime",
+        "    }",
+        "}",
+    ]
+    return [{
+        "name": "이 단말에 악성 확장이 깔려 있는지 확인",
+        "shell": "PowerShell",
+        "note": "사용자 권한으로 돌아간다. 결과가 나오면 그 확장을 제거하고, 광범위 권한을 "
+                "가진 확장이었다면 해당 계정의 세션도 무효화해야 한다 — 제거만으로는 이미 "
+                "빠져나간 토큰이 끊기지 않는다. 결과가 없으면 이 단말에는 없다는 뜻이고, "
+                "나머지 단말은 위 MDE 쿼리로 한 번에 본다.",
+        "command": chr(10).join(lines),
+    }]
+
+
+
 def response_material(block):
     """대응 재료. 다른 hunter와 같은 형식(actions는 문장, blocklists·kql은 목록)이다."""
     block = block or {}
@@ -280,4 +325,5 @@ def response_material(block):
             "what": "확장 ID와 같은 이름의 폴더가 만들어졌는지 — 설치 흔적이다. "
                     "어느 단말에 어느 확장이 깔렸는지 ExtensionId 열로 갈린다.",
         })
-    return {"actions": actions, "blocklists": blocklists, "kql": queries}
+    return {"actions": actions, "blocklists": blocklists, "kql": queries,
+            "commands": local_commands(live + [e for e in removed if e not in live])}

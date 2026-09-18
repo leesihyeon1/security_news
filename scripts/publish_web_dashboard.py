@@ -333,7 +333,24 @@ def _sync_to_remote_head(repo, branch):
         _run_git(["stash", "push", "-m", label, "--"] + dirty, cwd=repo)
         stashed = True
 
-    _run_git(["reset", "--hard", "origin/{}".format(branch)], cwd=repo)
+    # 아직 밀지 못한 로컬 커밋이 있으면 reset --hard는 그것을 통째로 버린다. stash
+    # 보호는 미커밋 변경만 지키므로 커밋한 작업은 그대로 사라졌다 — 실측(2026-09-18):
+    # 대시보드 코드 커밋 3개가 발행이 돌 때마다 하나씩 날아가, 세 번째에야 화면에서
+    # 기능이 사라진 것으로 발견됐다. 커밋이 남아 있으면 리셋 대신 그 위로 rebase한다.
+    unpushed = _run_git(
+        ["rev-list", "--count", "origin/{}..HEAD".format(branch)], cwd=repo).strip()
+    if unpushed and unpushed != "0":
+        print("[*] 아직 푸시하지 않은 커밋 {}개가 있어 리셋 대신 rebase합니다.".format(unpushed))
+        result = _run_git_raw(["rebase", "origin/{}".format(branch)], cwd=repo)
+        if result.returncode != 0:
+            _run_git_raw(["rebase", "--abort"], cwd=repo)
+            if stashed:
+                _run_git_raw(["stash", "pop"], cwd=repo)
+            raise RuntimeError(
+                "로컬 커밋 {}개를 origin 위로 옮기지 못했습니다(충돌). 발행을 중단합니다 — "
+                "직접 정리한 뒤 다시 실행하세요.".format(unpushed))
+    else:
+        _run_git(["reset", "--hard", "origin/{}".format(branch)], cwd=repo)
 
     if stashed:
         result = _run_git_raw(["stash", "pop"], cwd=repo)
