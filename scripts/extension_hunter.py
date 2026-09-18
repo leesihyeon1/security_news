@@ -61,9 +61,17 @@ EDGE_DETAIL_API = "https://microsoftedge.microsoft.com/addons/getproductdetailsb
 EDGE_DETAIL_URL = "https://microsoftedge.microsoft.com/addons/detail/{}"
 
 # 확장은 ID와 같은 이름의 폴더로 풀려 저장된다 — 설치 흔적이 경로에 그대로 남는다.
-KQL_TEMPLATE = """DeviceFileEvents
-| where FolderPath has "{}"
-| summarize FileCount=count(), arg_max(Timestamp, FolderPath) by DeviceName, InitiatingProcessAccountName"""
+#
+# ID마다 쿼리를 따로 내지 않는다. 확장 11개짜리 사건에서 ID 하나씩 쿼리 3개를 냈더니
+# 11개 중 3개만 덮였고, 받는 사람이 어차피 하나로 합쳐 써야 했다(실측 2026-09-18).
+# has_any에 전부 넣으면 한 번 돌려 어느 단말에 무엇이 깔렸는지가 같이 나온다.
+KQL_TEMPLATE = """let watched = dynamic([{}]);
+DeviceFileEvents
+| where FolderPath has_any (watched)
+| extend ExtensionId = extract(@"([a-p]{{32}})", 1, FolderPath)
+| summarize Files = count(), arg_max(Timestamp, FolderPath)
+          by DeviceName, InitiatingProcessAccountName, ExtensionId
+| order by Timestamp desc"""
 
 # 확장 권한 중 이것이 있으면 "모든 사이트의 내용을 읽고 바꿀 수 있다"는 뜻이다.
 BROAD_PERMISSIONS = {
@@ -262,12 +270,14 @@ def response_material(block):
         "지워지지 않는다 — 광범위 권한을 가진 확장이었다면 제거 후 해당 계정의 세션을 "
         "무효화해야 탈취된 토큰이 끊긴다.")
 
-    # 확장은 ID와 같은 이름의 폴더로 풀려 저장된다 — 경로에 ID가 그대로 남는다.
-    for extension_id in (live + removed)[:3]:
+    watched = live + [e for e in removed if e not in live]
+    if watched:
         queries.append({
-            "name": "설치된 확장 {} 탐지".format(extension_id[:12] + "…"),
+            "name": "사내 단말에 설치된 악성 확장 {}건 일괄 탐지".format(len(watched)),
             "platform": "mde_kql",
-            "query": KQL_TEMPLATE.format(extension_id),
-            "what": "확장 ID와 같은 이름의 폴더가 만들어졌는지 — 설치 흔적이다.",
+            "query": KQL_TEMPLATE.format(
+                ", ".join('"{}"'.format(value) for value in watched)),
+            "what": "확장 ID와 같은 이름의 폴더가 만들어졌는지 — 설치 흔적이다. "
+                    "어느 단말에 어느 확장이 깔렸는지 ExtensionId 열로 갈린다.",
         })
     return {"actions": actions, "blocklists": blocklists, "kql": queries}

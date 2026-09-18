@@ -352,6 +352,45 @@ def classify(iocs, text="", title="", category="", targets=None, raw_body=""):
     }
 
 
+# 조치를 언제 하느냐로 줄 세운다. 종합 판단은 시점을 주고(즉시·오늘·이번 주),
+# 재료에서 나온 조치는 시점이 없다 — 지금은 그 둘이 화면의 다른 자리에 따로 있어
+# 읽는 사람이 머리로 합쳐야 한다(실측 2026-09-18: 대응 24건 전부 그랬다).
+WHEN_ORDER = ("즉시", "오늘", "이번 주", "이번주")
+WHEN_FALLBACK = 90
+
+
+def _when_rank(when):
+    text = (when or "").strip()
+    for index, label in enumerate(WHEN_ORDER):
+        if label in text:
+            return index
+    # 날짜가 적힌 것(기한)은 이름표보다 뒤, 시점 없는 것보다는 앞에 둔다.
+    return 10 if re.search(r"\d", text) else WHEN_FALLBACK
+
+
+def merge_actions(verdict, response):
+    """종합 판단의 계획과 재료에서 나온 조치를 시점 순 한 목록으로.
+
+    같은 일을 두 번 적지 않는다 — 판단이 이미 말한 조치는 재료 쪽에서 뺀다. 판정은
+    문장 앞부분이 겹치는지로 한다(재료 쪽 문장이 더 길고 뒤에 설명이 붙는다).
+    """
+    merged = []
+    for step in (verdict or {}).get("plan") or []:
+        action = " ".join(str(step.get("action") or "").split())
+        if not action:
+            continue
+        merged.append({"action": action, "why": step.get("why") or "",
+                       "when": step.get("when") or "", "source": "판단"})
+    heads = {item["action"][:18] for item in merged}
+    for raw in (response or {}).get("actions") or []:
+        action = " ".join(str(raw).split())
+        if not action or action[:18] in heads:
+            continue
+        merged.append({"action": action, "why": "", "when": "", "source": "재료"})
+    merged.sort(key=lambda item: _when_rank(item["when"]))
+    return merged
+
+
 def summarize(block):
     """조사 과정을 한두 문장으로. 상세 단계는 접어두고 이걸 먼저 읽게 한다.
 
@@ -805,6 +844,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                         verdict = again
             if verdict:
                 block["synthesis"] = verdict
+                block["action_plan"] = merge_actions(verdict, block.get("response"))
                 steps.extend({"track": "종합 판단", "text": line}
                              for line in verdict.get("steps") or [])
                 block["steps"] = steps
