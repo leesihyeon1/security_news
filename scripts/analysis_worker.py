@@ -214,9 +214,48 @@ def fetch_article_text(url):
     return text, links
 
 
+# 알려진 위협 행위자 이름. 분류가 위협 범주가 아닌 기사에서 "그래도 위협 사건인가"를
+# 가리는 데 쓴다. 짧은 별칭은 일반 낱말과 겹쳐서 뺀다("apt", "ta", "cobalt" 같은 것들이
+# 본문 아무 데나 걸린다).
+_ACTOR_RE = None
+ACTOR_MIN_CHARS = 7
+
+
+def _actor_re():
+    global _ACTOR_RE
+    if _ACTOR_RE is None:
+        aliases = (common_utils._load_intel("threat_actor_aliases") or {}).get("aliases") or {}
+        names = sorted((name for name in aliases
+                        if isinstance(name, str) and len(name) >= ACTOR_MIN_CHARS),
+                       key=len, reverse=True)
+        _ACTOR_RE = (re.compile(r"(?<![A-Za-z0-9])(?:"
+                                + "|".join(re.escape(name) for name in names)
+                                + r")(?![A-Za-z0-9])", re.I)
+                     if names else re.compile(r"(?!)"))
+    return _ACTOR_RE
+
+
+def has_threat_substance(title, body):
+    """분류가 위협 범주가 아니어도 실제 위협 사건을 다루는 기사인가.
+
+    실측(Anthropic 위협 보고서 기사): 분류가 "기술동향"이라 비위협 분기를 타서
+    [기술적 세부사항]·[MITRE ATT&CK]·[영향 범위 및 위험도]·[권장 대응] 네 섹션이
+    통째로 빠졌다. 같은 기사에서 조사는 악성코드 2종·행위자 4곳·지표 72건을 찾아냈다.
+    분석만 동향 기사처럼 얕게 쓰인 것이다.
+    """
+    text = " ".join([title or "", body or ""])
+    if common_utils.extract_cves(text):
+        return True
+    if any((item.get("type") or "") in ("md5", "sha1", "sha256")
+           for item in common_utils.extract_iocs(text)):
+        return True
+    return bool(_actor_re().search(text))
+
+
 def build_prompt(title, body, category_hint):
     """analyze.js의 buildPrompt와 같은 구조 — 출력 형식이 달라지면 대시보드 파싱이 어긋난다."""
-    threat = (category_hint or "").strip() in THREAT_CATEGORIES
+    threat = ((category_hint or "").strip() in THREAT_CATEGORIES
+              or has_threat_substance(title, body))
 
     persona = ("당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다."
                if threat else "당신은 보안 전문 매체의 분석 기자다.")
