@@ -147,6 +147,16 @@ def load_recent_events(lookback_days=LOOKBACK_DAYS):
     return events
 
 
+def _same_items(path, items):
+    """이미 발행된 순위와 같은가. 파일이 없거나 못 읽으면 다르다고 본다."""
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            previous = json.load(file)
+    except (OSError, ValueError):
+        return False
+    return (previous.get("items") or []) == items
+
+
 def _load_previous_ranks(trending_path):
     """이전에 발행된 trending.json에서 "문구 → 순위(1부터)"를 읽어온다 — 순위 변동
     표시(▲▼/-/NEW)를 계산하는 기준. 파일이 없거나 형식이 안 맞으면 빈 딕셔너리
@@ -215,6 +225,17 @@ def main():
                             for idx, (term, count) in enumerate(ranked)
                         ],
                     }
+
+                    # 순위가 그대로면 파일을 건드리지 않는다.
+                    #
+                    # 아래 "변경사항 없음" 검사는 원래 이걸 막으려고 둔 것인데,
+                    # generated_at이 매 회차 바뀌니 git에는 늘 변경으로 보여서 한 번도
+                    # 걸리지 않았다. 실측(5일, 240회): 순위가 실제로 바뀐 것은 107회고
+                    # 나머지 133회는 시각만 바뀐 커밋이었다. 그 커밋 하나하나가 Vercel
+                    # 배포를 두 개씩(dashboard·click-tracker) 띄운다.
+                    if _same_items(trending_path, payload["items"]):
+                        print("[*] 트렌딩 순위 그대로 — 발행 생략")
+                        return
 
                     trending_path.parent.mkdir(parents=True, exist_ok=True)
                     with trending_path.open("w", encoding="utf-8") as file:
