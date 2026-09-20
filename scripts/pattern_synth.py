@@ -25,6 +25,7 @@
 
 import json
 import re
+import time
 import urllib.parse
 
 import common_utils
@@ -36,10 +37,23 @@ SEARCH_UI_URL = "https://urlscan.io/search/#{}"
 VT_SEARCH_UI_URL = "https://www.virustotal.com/gui/search/{}"
 
 # urlscan 검색 인덱스는 넓어서, 히트가 이 이상이면 캠페인 지문이 아니라 웹 전체의
-# 흔한 문자열이다(실측: filename:".js"는 수백만 건). 이 위는 정제가 필요하다고 본다.
-URLSCAN_TOO_BROAD = 30000
+# 흔한 문자열이다(실측: filename:".js"는 수백만 건).
+#
+# 30,000으로 잡아 뒀던 동안 이 검사는 한 번도 걸리지 않았다 — urlscan이 total을
+# 10,000에서 자르기 때문에 그 위의 값이 올 수가 없다. 그 사이 page.title에 "MFA" OR
+# "Passkey"를 늘어놓은 질의가 1만 건을 달고 그대로 실렸다. 그건 이 캠페인의 지문이
+# 아니라 세상 모든 로그인 페이지다.
+#
+# 쓸 만한 지문은 수십~수백 건에서 걸린다. 저장분 실측: 499건짜리는 사칭 피싱
+# 페이지로 볼 만했고, 2,290건짜리는 이미 훑을 수 없는 양이었다.
+URLSCAN_TOO_BROAD = 1000
+# urlscan이 총계를 자르는 값. 이 숫자가 그대로 오면 "1만 건 이상"이라는 뜻이다.
+URLSCAN_TOTAL_CAP = 10000
 # 반대로 이만큼도 안 되면 오타이거나 존재하지 않는 문자열이다.
 URLSCAN_MIN_HITS = 1
+# 레이트리밋으로 검증을 건너뛰지 않도록 몇 번 더 물어본다.
+URLSCAN_RETRIES = 3
+URLSCAN_RETRY_PAUSE = 4
 
 # KQL은 실행 검증을 할 수 없다. 최소한 아는 테이블만 쓰게 한다 — 없는 테이블을 쓴
 # 쿼리는 붙여넣는 순간 오류가 나므로 내보내지 않는 것이 낫다.
@@ -286,12 +300,30 @@ PLATFORM_SPEC = """
    쓸 수 있는 필드: behaviour_files, behaviour_processes, behaviour_registry,
    behaviour_network, content, imphash, vhash, entity:file
 
-4) google_dork — 검색 연산자로 가짜 배포 페이지를 찾는다
+4) google_dork — 검색엔진이 이미 색인해 둔 흔적을 찾는다
    쓸 수 있는 연산자: intitle:, inurl:, intext:, filetype:, site:, -site:, "따옴표"
-   가짜 설치 파일·트로이목마화된 도구가 어디에 더 뿌려져 있는지 발굴하는 용도다.
-   정상 배포처는 -site:로 빼야 결과가 쓸모 있다.
-   예) intitle:"Download" intext:"설치 파일 이름" -site:정상배포처.com
-   예) inurl:download "제품명" filetype:exe -site:벤더도메인.com
+
+   무엇을 찾을 수 있는가가 먼저다. 검색엔진은 **공개돼 있고 색인된 것**만 안다.
+   공격자의 유포 페이지는 대개 며칠 살고, 색인을 막고, 방문자를 가려 보여 준다 —
+   그런 페이지를 제목으로 찾으려는 dork는 항상 0건이다(실측: 저장된 dork를 검색해
+   보면 결과가 없다). 다음처럼 **원래 공개돼 있을 것**을 노려라.
+   - 열린 디렉터리: intitle:"index of" "<파일명>"
+   - 붙여넣기·덤프 사이트에 올라온 값: site:pastebin.com "<문자열>"
+   - 공개 저장소·패키지 페이지에 남은 흔적: site:github.com "<문자열>"
+   - 감염된 정상 사이트가 밖으로 드러내는 경로: inurl:"<경로>" "<주입된 문자열>"
+
+   지켜야 할 것:
+   - 제약은 두 덩어리까지. intitle과 intext와 filetype과 -site를 한꺼번에 AND로
+     묶으면 각 조건이 곱해져 0건이 된다.
+   - OR를 쓰면 반드시 괄호로 묶어라. (A OR B) intext:"C" 처럼 쓴다. 괄호가 없으면
+     검색엔진이 의도와 다르게 끊어 읽는다.
+   - filetype:html은 쓰지 마라. 웹 문서는 기본이 html이라 걸러 주는 것이 없다.
+   - 지어낸 제목으로 찾지 마라. "MFA 설정" 같은 제목은 실재하지 않는다.
+   - 이 조건으로 검색했을 때 무엇이 나올지 그려지지 않으면 dork를 만들지 마라.
+     빈손인 쿼리는 없는 것만 못하다.
+
+   예) intitle:"index of" "webmediaoptimizer.php"
+   예) site:pastebin.com "sendibt1.com"
 """
 
 TASK_SPEC = """
@@ -583,11 +615,21 @@ def _search_urlscan(query, api_key=None):
     """
     url = "{}?{}".format(lure_hunter.SEARCH_URL,
                          urllib.parse.urlencode({"q": query, "size": 5}))
-    try:
-        data = lure_hunter._request(url, api_key=api_key)
-    except Exception as error:
-        return None, 0, str(error)
-    return (data.get("results") or []), (data.get("total") or 0), ""
+    # 403·429는 질의가 틀렸다는 뜻이 아니라 잠깐 빨리 물었다는 뜻이다. 한 번 실패로
+    # 포기하면 검증을 건너뛴 패턴이 그대로 실린다 — 실측(저장분): urlscan 패턴 9개
+    # 중 5개가 403 때문에 미검증으로 나갔고, 지금 다시 돌려 보니 5개 전부 0건이다.
+    error = ""
+    for attempt in range(1, URLSCAN_RETRIES + 1):
+        try:
+            data = lure_hunter._request(url, api_key=api_key)
+            return (data.get("results") or []), (data.get("total") or 0), ""
+        except Exception as problem:
+            error = str(problem)
+            if attempt < URLSCAN_RETRIES and ("403" in error or "429" in error):
+                time.sleep(URLSCAN_RETRY_PAUSE * attempt)
+                continue
+            break
+    return None, 0, error
 
 
 def validate_urlscan(candidate, api_key=None):
@@ -611,8 +653,12 @@ def validate_urlscan(candidate, api_key=None):
                                         "못했습니다({})".format(error[:60])}
     if total < URLSCAN_MIN_HITS:
         return False, "urlscan 0건 — 실재하지 않는 패턴", {"hits": 0}
+    if total >= URLSCAN_TOTAL_CAP:
+        return False, "urlscan {:,}건 이상 — 캠페인 지문이 아니라 웹 전체".format(
+            URLSCAN_TOTAL_CAP), {"hits": total}
     if total > URLSCAN_TOO_BROAD:
-        return False, "urlscan {:,}건 — 캠페인 지문이 아니라 웹 전체".format(total), {"hits": total}
+        return False, "urlscan {:,}건 — 훑을 수 있는 양이 아니라 지문 구실을 못 한다".format(
+            total), {"hits": total}
     hosts = []
     for item in results:
         host = ((item.get("page") or {}).get("domain") or "").strip()
