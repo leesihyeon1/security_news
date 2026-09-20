@@ -28,6 +28,7 @@
 
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -217,6 +218,22 @@ def search(query, num=MAX_RESULTS):
     return items, ""
 
 
+# 이름만 던지면 엉뚱한 것이 걸린다. 실측: "ChocoShell"로 검색하니 5건 중 4건이
+# GitHub 사용자·포트나이트 위키·아이스크림 토핑·인스타 계정이었다. 악성코드 이름은
+# 일상 낱말과 겹치기 쉬운데, 그렇게 찾은 링크가 1차 자료 수집으로 넘어가면 조사가
+# 아이스크림 레시피를 읽는다. 보안 문맥을 붙여 좁힌다.
+SECURITY_CONTEXT = "(malware OR campaign OR threat OR APT OR IOC OR ransomware)"
+CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.I)
+
+
+def security_query(term):
+    """검색어에 보안 문맥을 붙인다. CVE 번호는 그 자체로 유일하므로 그대로 쓴다."""
+    term = (term or "").strip()
+    if not term or CVE_RE.match(term):
+        return term
+    return '"{}" {}'.format(term, SECURITY_CONTEXT)
+
+
 def terms_from(targets, exclude=()):
     """검색할 이름 — 캠페인·악성코드 이름과 CVE. 이미 답이 나온 것은 뺀다."""
     out = []
@@ -248,7 +265,7 @@ def analyze(targets=None, answered=()):
     findings, steps, references = [], [], []
     failures = []
     for term in terms:
-        items, reason = search(term)
+        items, reason = search(security_query(term))
         time.sleep(PAUSE_SECONDS)
         if items is None:
             steps.append("\"{}\" 웹 검색을 건너뛰었습니다 — {}.".format(term, reason))
