@@ -105,7 +105,7 @@ def rebuild(record):
 
     block["synthesis"] = verdict
     try:
-        spared = output_critic.review(verdict, block.get("response"))
+        spared = output_critic.review(verdict, block.get("response"), block)
         if spared and output_critic.apply(block.get("response"), spared):
             block["steps"] = (block.get("steps") or []) + [
                 {"track": "산출물 검토", "text": line}

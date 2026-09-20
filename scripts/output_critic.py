@@ -77,12 +77,51 @@ def _verdict_text(synthesis):
     return "\n".join(line for line in parts if line.strip())
 
 
+def observed_malicious(investigation):
+    """샌드박스가 실제로 통신한 곳과, 위협 피드가 악성으로 등재한 값.
+
+    판단이 틀리면 검토도 같이 틀린다. 실측(DPRK ted backdoor 건): 판단이 C2 도메인 셋을
+    두고 "9년 된 정상 Microsoft Store 페이지"라고 적었는데, 근거는 urlscan 스캔 1~2건과
+    그 페이지 제목이 "Microsoft Store"라는 것뿐이었다. 스캐너에게 미끼 페이지를 보여
+    주는 것은 C2가 늘 하는 일이지 정상이라는 증거가 아니다. 같은 기록의 동적 분석에는
+    "C2: img.monderhouse.space … 이 캠페인의 통신으로 봅니다, 포트 443"이 적혀 있었다.
+
+    그래서 검토가 판단만 보고 지우지 못하게 한다. 샌드박스가 실제로 그 호스트와
+    통신했거나 피드가 악성으로 등재한 값은 무슨 근거를 대도 차단 후보에 남긴다 —
+    관측은 추론보다 세다.
+    """
+    protected = set()
+    malware = (investigation or {}).get("malware") or {}
+    for entry in malware.get("files") or []:
+        behaviour = entry.get("behaviour") or {}
+        for key in ("dns", "ip_traffic", "http", "memory_domains"):
+            for item in behaviour.get(key) or []:
+                protected.add(json.dumps(item, ensure_ascii=False).lower()
+                              if isinstance(item, (dict, list)) else str(item).lower())
+    findings = list(malware.get("findings") or [])
+    findings += ((investigation or {}).get("intel") or {}).get("findings") or []
+    return protected, [str(line) for line in findings]
+
+
+def _is_protected(value, protected, findings):
+    low = value.lower()
+    if any(low in blob for blob in protected):
+        return True
+    # 확인내용에 "C2: <값>"이나 "<값> … 악성으로 등재" 형태로 적힌 것.
+    for line in findings:
+        if low not in line.lower():
+            continue
+        if any(word in line for word in ("C2", "등재", "악성", "유포")):
+            return True
+    return False
+
+
 def _block_groups(response):
     return [group for group in (response or {}).get("blocklists") or []
             if str(group.get("label") or "").startswith(BLOCK_LABEL)]
 
 
-def review(synthesis, response, timeout=180):
+def review(synthesis, response, investigation=None, timeout=180):
     """차단 후보 중 막으면 안 되는 값을 가려낸다. [{value, why}] 형식, 없으면 []."""
     verdict = _verdict_text(synthesis)
     groups = _block_groups(response)
@@ -115,6 +154,7 @@ def review(synthesis, response, timeout=180):
         return []
 
     # 목록에 없는 값은 버린다. 검토 단계가 재료를 늘리면 그건 검토가 아니다.
+    protected, findings = observed_malicious(investigation)
     lowered = {value.lower(): value for value in candidates}
     spared, seen = [], set()
     for item in (data.get("spare") or [])[:MAX_VALUES]:
@@ -125,6 +165,10 @@ def review(synthesis, response, timeout=180):
         if key not in lowered or key in seen:
             continue
         seen.add(key)
+        if _is_protected(value, protected, findings):
+            log("    [*] 차단 후보에 그대로 둡니다 — 조사에서 실제 악성 통신·등재가 "
+                "관측된 값입니다: {}".format(value[:60]))
+            continue
         spared.append({"value": lowered[key],
                        "why": " ".join(str(item.get("why") or "").split())[:200]})
     return spared

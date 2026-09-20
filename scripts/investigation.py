@@ -937,7 +937,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 # 판단이 "정상 CDN이 악용된 것"이라고 적은 도메인이 차단 후보에
                 # 그대로 남아 있었다).
                 try:
-                    spared = output_critic.review(verdict, block.get("response"))
+                    spared = output_critic.review(verdict, block.get("response"), block)
                     if spared and output_critic.apply(block.get("response"), spared):
                         steps.extend({"track": "산출물 검토", "text": line}
                                      for line in output_critic.steps(spared))
