@@ -376,7 +376,7 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
 
     raw = common_utils.llm_generate(
         build_prompt(title, analysis, targets, investigation, primary, extra, history),
-        timeout=timeout)
+        timeout=timeout, json_format=True)
     data = parse(raw)
     if not data:
         # 한 번은 더 받아 본다 — JSON이 아닌 답이 오는 경우가 있다(실측: 패턴 합성에서
@@ -384,7 +384,7 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         raw = common_utils.llm_generate(
             build_prompt(title, analysis, targets, investigation, primary, extra, history)
             + "\n\n반드시 JSON만 출력하라.",
-            timeout=timeout)
+            timeout=timeout, json_format=True)
         data = parse(raw)
     if not data:
         return None

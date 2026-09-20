@@ -713,7 +713,7 @@ def has_broken_chars(text):
     """LLM 응답이 깨진 문자를 포함하는지. 정상 텍스트에 U+FFFD가 들어갈 일은 없다."""
     return REPLACEMENT_CHAR in (text or "")
 
-def _generate_nvidia(prompt, timeout, max_attempts=2):
+def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False):
     """예전엔 429(rate limit)만 한 번 재시도하고 그 외(타임아웃·일시적 5xx·연결
     오류)는 즉시 실패 처리했다 — ai_narrative()처럼 큰 digest를 8192 토큰까지
     생성하는 호출은 이런 일시적 문제가 드물지 않은데, 한 번 실패하면 바로
@@ -732,6 +732,12 @@ def _generate_nvidia(prompt, timeout, max_attempts=2):
         "max_tokens": 8192,
         "stream": False,
     }
+    # JSON을 받기로 한 호출에는 형식을 API 차원에서 못박는다. 지금까지는 프롬프트에
+    # "JSON만 출력하라"고 적고 중괄호를 잘라내는 것이 전부였다 — json_format 인자는
+    # 있었지만 Ollama 경로에만 전달돼서, NVIDIA를 쓰는 지금은 한 번도 켜진 적이 없다.
+    # 모델이 지원하지 않으면 400이 오므로, 그때는 이 항목만 빼고 한 번 더 부른다.
+    if json_format:
+        payload["response_format"] = {"type": "json_object"}
     headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
 
     last_error = None
@@ -754,6 +760,13 @@ def _generate_nvidia(prompt, timeout, max_attempts=2):
                 delay = _nvidia_retry_delay(NVIDIA_RATE_LIMIT_DELAY_SECONDS, attempt)
                 print("[-] NVIDIA 호출 제한(429), 재시도 {}/{} ({}초 후)".format(attempt, max_attempts, delay))
                 time.sleep(delay)
+            continue
+
+        if (response.status_code == 400 and "response_format" in payload
+                and "response_format" in (response.text or "")):
+            # 이 모델은 JSON 모드를 안 받는다. 끄고 다시 — 프롬프트의 지시만으로 돌아간다.
+            print("[-] 이 모델은 JSON 모드를 지원하지 않아 끄고 다시 부릅니다.")
+            payload.pop("response_format", None)
             continue
 
         if response.status_code != 200:
@@ -810,7 +823,9 @@ def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
                 if provider == "nvidia":
                     if not NVIDIA_API_KEY:
                         raise RuntimeError("NVIDIA_API_KEY 미설정")
-                    text = _generate_nvidia(prompt, timeout, max_attempts=nvidia_max_attempts)
+                    text = _generate_nvidia(prompt, timeout,
+                                           max_attempts=nvidia_max_attempts,
+                                           json_format=json_format)
                 else:
                     text = _generate_ollama(prompt, timeout, json_format)
                 text = THINK_TAG_RE.sub("", text).strip()

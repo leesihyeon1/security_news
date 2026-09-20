@@ -20,6 +20,7 @@ import github_hunter
 import intel_hunter
 import lookup_plan
 import lure_hunter
+import output_critic
 import past_analyses
 import pattern_synth
 import playbook
@@ -931,6 +932,18 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                         verdict = again
             if verdict:
                 block["synthesis"] = verdict
+                # 내놓기 전에 한 번 더 본다. 차단 목록은 지표에서 기계적으로 나오고
+                # 판단은 그 뒤에 따로 쓰여서, 둘이 어긋나도 아무도 몰랐다(실측:
+                # 판단이 "정상 CDN이 악용된 것"이라고 적은 도메인이 차단 후보에
+                # 그대로 남아 있었다).
+                try:
+                    spared = output_critic.review(verdict, block.get("response"))
+                    if spared and output_critic.apply(block.get("response"), spared):
+                        steps.extend({"track": "산출물 검토", "text": line}
+                                     for line in output_critic.steps(spared))
+                except Exception as error:
+                    steps.append({"track": "산출물 검토",
+                                  "text": "실패: {}".format(str(error)[:90])})
                 block["action_plan"] = merge_actions(verdict, block.get("response"))
                 steps.extend({"track": "종합 판단", "text": line}
                              for line in verdict.get("steps") or [])

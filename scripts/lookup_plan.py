@@ -123,7 +123,8 @@ def plan(objective, questions, catalog, route, targets=None, timeout=120):
     runnable = {item["key"] for item in catalog if availability.get(item["key"]) != "없음"}
 
     raw = common_utils.llm_generate(
-        build_prompt(objective, questions, catalog, availability), timeout=timeout)
+        build_prompt(objective, questions, catalog, availability),
+        timeout=timeout, json_format=True)
     data = parse(raw)
     if not data:
         return {"tracks": fallback, "reasons": {}, "skipped": [],
