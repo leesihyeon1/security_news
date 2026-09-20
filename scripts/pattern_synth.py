@@ -664,6 +664,75 @@ PIPE_CONJUNCTION_RE = re.compile(r"^[ \t]*\|[ ]*(?:or|and)\b", re.M | re.I)
 TIMESTAMP_JOIN_RE = re.compile(r"\bon\b[^|\n]*\bTimestamp\b")
 
 
+# KQL은 연산자마다 줄을 바꿔 읽는 언어다. 한 줄로 오면 화면에서 가로로 흘러 아무도
+# 못 읽는다(실측: join과 정규식이 섞인 쿼리 하나가 한 줄에 900자였다). 모델이 줄을
+# 바꿔 주는 경우가 84%라 나머지를 여기서 맞춘다 — 형식은 부탁하는 것보다 기계가 잡는
+# 편이 확실하다.
+#
+# 파이프를 무턱대고 자르면 안 된다. 정규식 안의 (js|ts|json)과 문자열 안의 파이프는
+# 연산자가 아니다. 그래서 따옴표 안·괄호 안을 세면서 바깥의 파이프만 자른다.
+KQL_WRAP_CHARS = 110
+
+
+def _kql_split(query):
+    """따옴표·괄호 바깥에 있는 파이프의 위치. KQL 연산자 경계다."""
+    cuts = []
+    depth = 0
+    quote = ""
+    index = 0
+    while index < len(query):
+        char = query[index]
+        if quote:
+            if char == quote:
+                quote = ""
+            elif char == chr(92):
+                index += 1          # 이스케이프된 문자는 건너뛴다
+        elif char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "|" and depth == 0:
+            cuts.append(index)
+        index += 1
+    return cuts
+
+
+def format_kql(query):
+    """한 줄로 온 KQL을 연산자마다 줄을 나눠 돌려준다. 이미 나뉘어 있으면 그대로."""
+    newline = chr(10)
+    query = (query or "").strip()
+    if not query or newline in query:
+        return query
+    cuts = _kql_split(query)
+    if not cuts:
+        return query
+    parts, previous = [], 0
+    for cut in cuts:
+        parts.append(query[previous:cut].strip())
+        previous = cut + 1
+    parts.append(query[previous:].strip())
+    parts = [part for part in parts if part]
+    if len(parts) < 2:
+        return query
+
+    lines = [parts[0]]
+    for part in parts[1:]:
+        # join·union의 괄호 안이 길면 그 안도 풀어 준다 — 서브쿼리가 한 줄에 통째로
+        # 들어가면 줄을 나눈 보람이 없다.
+        opened = part.find("(")
+        closed = part.rfind(")")
+        inner = part[opened + 1:closed].strip() if 0 <= opened < closed else ""
+        if inner and closed - opened > KQL_WRAP_CHARS and _kql_split(inner):
+            lines.append("| " + part[:opened + 1].strip())
+            lines.extend("    " + line for line in format_kql(inner).split(newline))
+            lines.append(")" + part[closed + 1:].rstrip())
+        else:
+            lines.append("| " + part)
+    return newline.join(lines)
+
+
 def validate_kql(candidate):
     """실행해 볼 수 없으니 형식만 본다 — 붙여넣는 순간 오류가 날 쿼리는 안 내보낸다."""
     query = strip_time_filter(candidate.get("query") or "")
@@ -838,7 +907,7 @@ def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240,
         out.append({
             "label": "{} — {}".format(candidate.get("label") or "패턴",
                                       PLATFORM_LABEL.get(platform, platform)),
-            "query": query,
+            "query": format_kql(query) if platform == "mde_kql" else query,
             "url": _query_url(platform, query),
             "linkLabel": LINK_LABEL.get(platform, ""),
             "what": candidate.get("what") or "",

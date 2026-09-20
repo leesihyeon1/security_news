@@ -22,6 +22,7 @@ import re
 
 import artifact_extractor
 import common_utils
+import pattern_synth
 import extension_hunter
 import github_hunter
 import lure_hunter
@@ -531,5 +532,9 @@ def build(block, iocs, primary="", text=""):
         queries = (vuln_material["kql"] + queries)[:MAX_KQL_QUERIES]
         actions = vuln_material["actions"] + actions
 
+    # 손으로 쓴 쿼리는 이미 줄이 나뉘어 있지만, 트랙별 재료에서 온 것 중에 한 줄짜리가
+    # 섞인다. 화면에 나가기 전 한 곳에서 형식을 맞춘다.
+    for query in queries:
+        query["query"] = pattern_synth.format_kql(query.get("query") or "")
     return {"blocklists": blocklists, "kql": queries, "actions": actions,
             "commands": commands, "generated_at": common_utils.utc_now_iso()}
