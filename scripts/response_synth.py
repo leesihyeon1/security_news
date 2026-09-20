@@ -297,6 +297,12 @@ def followups(data, corpus):
 # 날짜처럼 생긴 것. timeline 항목이 근거 있는 날짜를 담았는지 보는 데만 쓴다.
 DATE_RE = re.compile(r"\d{4}[-./년]\s*\d{1,2}|\d{1,2}[-./월]\s*\d{1,2}|\d{4}")
 MAX_TIMELINE = 8
+# 판단 호출은 실패해도 대신할 것이 없다. 조사를 다 끝내 놓고 이 한 번이 타임아웃 나면
+# 조사 결과는 남는데 판단·할 일·시간축·영향이 통째로 빈다 — 실측(09-18): 6건 중 2건이
+# 그렇게 됐고, 둘 다 조사는 53단계·42단계까지 정상으로 돌았다. llm_generate의 기본
+# 재시도(2회)는 기사마다 수백 번 도는 호출을 위한 값이라, 회차당 한 번뿐인 이 호출에는
+# 더 버티게 한다.
+SYNTH_ATTEMPTS = 4
 # 우리가 조회하다 알게 된 날짜 — NVD 공개일, 샌드박스 최초 등록일. 사건의 사건이
 # 아니라 조회의 부산물이라, 자리가 모자라면 이쪽부터 버린다.
 #
@@ -376,7 +382,8 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
 
     raw = common_utils.llm_generate(
         build_prompt(title, analysis, targets, investigation, primary, extra, history),
-        timeout=timeout, json_format=True)
+        timeout=timeout, json_format=True,
+        nvidia_max_attempts=SYNTH_ATTEMPTS)
     data = parse(raw)
     if not data:
         # 한 번은 더 받아 본다 — JSON이 아닌 답이 오는 경우가 있다(실측: 패턴 합성에서
@@ -384,7 +391,8 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         raw = common_utils.llm_generate(
             build_prompt(title, analysis, targets, investigation, primary, extra, history)
             + "\n\n반드시 JSON만 출력하라.",
-            timeout=timeout, json_format=True)
+            timeout=timeout, json_format=True,
+        nvidia_max_attempts=SYNTH_ATTEMPTS)
         data = parse(raw)
     if not data:
         return None
