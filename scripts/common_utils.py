@@ -237,6 +237,27 @@ def inventory_canonical_map(inventory_file=None):
     return mapping
 
 
+def inventory_product_terms(inventory_file=None):
+    """인벤토리의 제품명·별칭을 원래 표기 그대로(소문자화 없이) 펼쳐서 돌려준다.
+
+    dashboard_text.redact_asset_mentions()가 "이 문장에 우리가 실제로 보유한 제품
+    이름이 나오는가"를 정규식으로 가릴 때 쓴다 — inventory_canonical_map()은 판정용
+    정규화(소문자)라서 그대로 쓰면 "IOS XR"·"BIG-IP" 같은 대소문자·기호 표기가
+    깨진다.
+    """
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    terms = []
+    try:
+        for item in _load_inventory_items(path):
+            for term in [item.get("name")] + list(item.get("aliases") or []):
+                term = str(term or "").strip()
+                if term and term not in terms:
+                    terms.append(term)
+    except Exception:
+        terms = []
+    return terms
+
+
 def environment_brief(inventory_file=None, max_products=40):
     """모델에게 줄 "우리 환경" 요약 — 보유 제품군과 정보 요구.
 
