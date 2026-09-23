@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import common_utils
+from dashboard_text import event_summary, public_text
 
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
@@ -223,9 +224,9 @@ def _rebuild_search_index_from_events(repo):
             "title": event.get("title") or "",
             "url": common_utils.tracking_url(event.get("id"), url) or url,
             "source_label": common_utils.source_label(source),
-            "category": event.get("category") or "",
+            "category": (event.get("category") or "").strip() or "미분류",
             "level": (event.get("triage") or {}).get("level") or "",
-            "summary": (event.get("ai_summary") or event.get("summary") or "")[:200],
+            "summary": public_text(event_summary(event, 200)) or "요약 미제공 · 원문 확인",
         }
 
     entries = sorted(by_key.values(), key=lambda e: e.get("date") or "", reverse=True)
@@ -233,7 +234,7 @@ def _rebuild_search_index_from_events(repo):
     index_path = repo / "dashboard" / "data" / SEARCH_INDEX_FILE
     index_path.parent.mkdir(parents=True, exist_ok=True)
     with index_path.open("w", encoding="utf-8") as file:
-        json.dump(entries, file, ensure_ascii=False, indent=2)
+        json.dump(entries, file, ensure_ascii=False, separators=(",", ":"))
 
 
 PUBLISH_RETRIES = 3

@@ -31,6 +31,7 @@ import supply_chain_hunter
 import vt_hunter
 import vuln_hunter
 import web_search
+import source_evidence
 
 # 키워드가 있느냐 없느냐로 방향을 정하면 틀린다. 실측(REVSTEALER 기사): 제목에
 # STEALER·Miner, 분류가 "악성코드", 해시 5건인데도 본문에 "클립보드 하이재킹"(악성코드의
@@ -708,6 +709,10 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     추가한다 — 이미 저장된 분석 기록을 그리는 화면 코드가 깨지지 않게.
     """
     targets = targets or {}
+    article_url = source_evidence.article_url(article_url)
+    source_urls = [article_url] if article_url else []
+    iocs, _ = source_evidence.filter_iocs(iocs, source_urls)
+    targets = source_evidence.filter_targets(targets, source_urls)
     # 이 기사를 전에 분석했다면 그때 정한 축을 가져온다. 한 번만 읽어 재분류까지 쓴다.
     pinned = ""
     try:
@@ -718,6 +723,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                      raw_body=body, pinned=pinned)
     block = {"route": {key: route[key]
                        for key in ("primary", "label", "explain", "tracks", "scores")}}
+    block["source_urls"] = source_urls
 
     # 지표가 없어도 본문에서 대응 재료가 나오면 블록을 만든다 — 예전에는 트랙이 없으면
     # 통째로 건너뛰어서, IOC를 싣지 않은 기사(실측 31건 중 25건)에는 조사&대응이 아예
@@ -783,12 +789,16 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     # 모델이 "조사 불가"로 판정했는데, 기사가 인용한 Anthropic 원문을 받아 보니
     # SHA-256 2개·MD5 1개·CVE 7개·도메인 36개가 들어 있었다. 받아 놓고 한 건도
     # 조회하지 않았다 — 트랙이 기사 본문만 보고 정해진 뒤였기 때문이다.
+    source_urls.extend(src["url"] for src in primary.get("sources") or [] if src.get("url"))
+    iocs, _ = source_evidence.filter_iocs(iocs, source_urls)
+    targets = source_evidence.filter_targets(targets, source_urls)
     primary_text = " ".join(src.get("text") or "" for src in primary.get("sources") or [])
     if primary_text:
         known = {str(item.get("value") or "").lower() for item in iocs or []}
         fresh = [item for item in common_utils.extract_iocs(
             primary_text, limit=PRIMARY_IOC_LIMIT)
             if str(item.get("value") or "").lower() not in known]
+        fresh, _ = source_evidence.filter_iocs(fresh, source_urls)
         if fresh:
             iocs = list(iocs or []) + fresh
             kinds = {}
@@ -939,6 +949,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 try:
                     spared = output_critic.review(verdict, block.get("response"), block)
                     if spared and output_critic.apply(block.get("response"), spared):
+                        output_critic.reconcile_plan(verdict, spared)
                         steps.extend({"track": "산출물 검토", "text": line}
                                      for line in output_critic.steps(spared))
                 except Exception as error:

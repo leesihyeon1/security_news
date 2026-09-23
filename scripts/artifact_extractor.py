@@ -106,7 +106,7 @@ BEHAVIOUR_RULES = [
       "| project Timestamp, DeviceName, InitiatingProcessFileName, FileName, ProcessCommandLine",
       "| order by Timestamp desc"],
      "이 바이너리들이 무언가를 실행하는 것은 대부분 UAC 우회다. 차단이 아니라 감시 대상."),
-    ("브라우저 자격증명 탈취",
+    ("브라우저 자격증명 파일 변경 후보",
      r"app-?bound|login\s*data|local\s*state|"
      r"브라우저.{0,20}(?:자격\s*증명|비밀번호|쿠키).{0,12}(?:탈취|수집|훔치|유출|접근)|"
      r"(?:자격\s*증명|비밀번호|쿠키).{0,12}(?:탈취|수집|훔치|유출)|"
@@ -119,8 +119,9 @@ BEHAVIOUR_RULES = [
       '                                           "whale.exe", "brave.exe", "opera.exe"))',
       "| project Timestamp, DeviceName, InitiatingProcessFileName, FileName, FolderPath",
       "| order by Timestamp desc"],
-     "브라우저가 아닌 프로세스가 자격증명 저장소를 여는 것만 남긴다 — 스틸러의 공통 동작이다."),
-    ("암호화폐 지갑 탈취",
+     "브라우저 외 프로세스의 파일 이벤트 후보입니다. DeviceFileEvents만으로 파일 읽기나 "
+     "자격증명 탈취를 입증할 수 없으며, 정상 백업·보안 도구를 제외하고 실행·통신 로그를 대조합니다."),
+    ("암호화폐 지갑 파일 변경 후보",
      r"(?:지갑|wallet).{0,14}(?:탈취|수집|접근|훔치|유출|steal|theft|drain|exfiltrat)|"
      r"(?:탈취|수집|훔치).{0,10}(?:지갑|wallet)|니모닉|mnemonic|seed\s*phrase|"
      r"crypto\s*wallet|wallet\.dat",
@@ -131,7 +132,8 @@ BEHAVIOUR_RULES = [
       '| where ActionType in ("FileCreated", "FileModified", "FileRenamed")',
       "| project Timestamp, DeviceName, InitiatingProcessFileName, FileName, FolderPath",
       "| order by Timestamp desc"],
-     "지갑 폴더에 접근하는 프로세스를 본다. 정상 지갑 앱은 자기 폴더만 만지므로 구분된다."),
+     "지갑 경로의 생성·수정·이름 변경 이벤트입니다. 읽기·접근 전체나 지갑 탈취를 탐지하는 "
+     "쿼리가 아니며, 정상 지갑·백업 작업과 실행·통신 로그를 함께 확인합니다."),
     ("자기 삭제",
      r"자기\s*삭제|self-?delete|흔적을\s*지우|스스로\s*삭제",
      ["DeviceProcessEvents",

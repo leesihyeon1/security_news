@@ -29,6 +29,7 @@ import lure_hunter
 import supply_chain_hunter
 import vt_hunter
 import vuln_hunter
+import source_evidence
 
 # 샌드박스 관측 통신에 섞이는 공용 리졸버·정상 서비스. 차단 후보로 올리면 안 된다.
 NOISE_IPS = {
@@ -91,7 +92,11 @@ def _is_noise_ip(value):
 
 def _collect(block, iocs, text=""):
     """대응에 쓸 값을 모은다. 출처를 구분해 담는다 — 신뢰도가 다르기 때문."""
-    seeds = block.get("seeds") or []
+    references = block.get("source_urls") or []
+    reference_hosts = source_evidence.reference_hosts(references)
+    iocs, _ = source_evidence.filter_iocs(iocs, references)
+    seeds = [seed for seed in block.get("seeds") or []
+             if (seed.get("domain") or seed.get("host") or "").lower() not in reference_hosts]
     malware = block.get("malware") or {}
 
     # 도메인은 역할별로 나눠 받는다 — 공용 서비스·Tor·유출 사이트를 차단 후보에 섞으면
@@ -140,7 +145,7 @@ def _collect(block, iocs, text=""):
                 from urllib.parse import urlparse
                 host = urlparse(host).netloc
             host = host.split("@")[-1].split(":")[0].strip("/.").lower()
-            if host and not NOISE_DOMAIN_RE.search(host) and not common_utils.is_benign_ioc("domain", host):
+            if host and host not in reference_hosts and not NOISE_DOMAIN_RE.search(host) and not common_utils.is_benign_ioc("domain", host):
                 if host in host_roles["lure"] and host not in ioc_domains:
                     ioc_domains.append(host)
         elif kind in ("ip", "ipv4", "ip-dst", "ip-src"):
@@ -168,7 +173,7 @@ def _collect(block, iocs, text=""):
                 ioc_ips.append(seed["ip"])
         for host in seed.get("cloaked_hosts") or []:
             host = host.lower()
-            if host not in ioc_domains and not NOISE_DOMAIN_RE.search(host):
+            if host not in reference_hosts and host not in ioc_domains and not NOISE_DOMAIN_RE.search(host):
                 ioc_domains.append(host)
 
     # 샌드박스 관측값 — 정상 서비스가 섞이므로 따로 담는다.
@@ -231,8 +236,8 @@ def _kql_queries(values, primary):
         queries.append({
             "name": "캠페인 인프라와의 통신",
             "durable": False,
-            "note": "IOC 기반이라 공격자가 도메인·IP를 바꾸면 죽는다. 히트가 나오면 그 단말은 "
-                    "실행까지 갔다고 보고 즉시 격리·조사한다.",
+            "note": "IOC 기반 통신 후보입니다. 접속만으로 악성코드 실행·감염을 확정하지 "
+                    "말고 프로세스 실행·다운로드·인증 로그를 대조한 뒤 격리 여부를 판단합니다.",
             "query": "\n".join(header + [
                 "DeviceNetworkEvents",
                 "| where Timestamp > ago({})".format(LOOKBACK),
@@ -363,7 +368,7 @@ def build(block, iocs, primary="", text=""):
         blocklists.append({
             "label": "차단 후보 — 도메인",
             "note": "기사가 IOC로 제시한 것과 조사에서 응답을 감춘 것으로 확인된 호스트다. "
-                    "프록시·DNS 필터·방화벽(PAN-OS EDL, FortiGate Threat Feed)에 그대로 넣는다.",
+                    "출처와 악성 근거·공유 서비스 영향을 확인한 뒤 차단 여부를 결정한다.",
             "values": values["domains"],
         })
     if values["ips"]:
@@ -465,8 +470,8 @@ def build(block, iocs, primary="", text=""):
 
     actions = []
     if values["domains"]:
-        actions.append("도메인 {}건을 차단하고, 차단 로그에서 이미 접속한 단말을 뽑아 조사 "
-                       "대상으로 올린다.".format(len(values["domains"])))
+        actions.append("도메인 {}건의 악성 근거와 업무 영향을 확인한 뒤 차단 여부를 결정하고, "
+                       "접속 단말의 실행 로그를 대조한다.".format(len(values["domains"])))
     if values["hashes"]:
         actions.append("해시 {}건을 EDR·게이트웨이 차단 목록에 넣고, 아래 파일 헌팅 쿼리로 "
                        "이미 내려온 단말이 있는지 확인한다.".format(len(values["hashes"])))

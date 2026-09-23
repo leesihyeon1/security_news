@@ -26,11 +26,12 @@
 """
 
 import json
+import re
 
 import common_utils
 
-# 검토 대상이 이보다 적으면 부르지 않는다. 한두 개짜리 목록은 사람이 그냥 본다.
-MIN_VALUES = 2
+# 한 개의 잘못된 차단 후보도 실제 운영에 영향을 준다.
+MIN_VALUES = 1
 # 한 번에 물어볼 값의 수. 길어지면 모델이 목록을 되풀이하기 시작한다.
 MAX_VALUES = 60
 BLOCK_LABEL = "차단 후보"
@@ -190,6 +191,14 @@ def apply(response, spared):
         group["values"] = remaining
     if not moved:
         return []
+    # 자유 형식 쿼리에서 값을 문자열 치환하면 조건이 바뀔 수 있어 재검토로 보낸다.
+    affected = [{"value": value} for value in moved]
+    response["kql"] = [query for query in response.get("kql") or []
+                       if not _mentions_spared(json.dumps(query, ensure_ascii=False), affected)]
+    response["actions"] = [action for action in response.get("actions") or []
+                           if not _stale_action(action, affected)]
+    response["commands"] = [command for command in response.get("commands") or []
+                            if not _mentions_spared(json.dumps(command, ensure_ascii=False), affected)]
     # 값이 하나도 안 남은 칸은 지운다 — 제목만 남은 빈 목록이 화면에 보인다.
     response["blocklists"] = [group for group in response.get("blocklists") or []
                               if group.get("values")]
@@ -201,6 +210,24 @@ def apply(response, spared):
         "reasons": [{"value": value, "why": why.get(value.lower(), "")} for value in moved],
     })
     return moved
+
+
+def _mentions_spared(text, spared):
+    return any(str(item["value"]).lower() in str(text).lower() for item in spared)
+
+
+def _stale_action(text, spared):
+    if _mentions_spared(text, spared):
+        return True
+    # Count-based instructions no longer describe the reviewed list.
+    return bool(re.search(r"(?:도메인|IP|해시)\s*\d+\s*(?:건|개)", str(text))
+                and "차단" in str(text))
+
+
+def reconcile_plan(verdict, spared):
+    if verdict and spared:
+        verdict["plan"] = [step for step in verdict.get("plan") or []
+                           if not _stale_action(json.dumps(step, ensure_ascii=False), spared)]
 
 
 def steps(spared):

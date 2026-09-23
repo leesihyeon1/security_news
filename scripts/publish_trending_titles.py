@@ -25,6 +25,7 @@ from pathlib import Path
 
 import common_utils
 import publish_web_dashboard as pub
+from entity_names import canonical_name, entity_names
 
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
@@ -89,7 +90,9 @@ def _event_candidates(event):
     for field in ("threat_actor", "malware_family"):
         value = (event.get(field) or "").strip()
         if value:
-            candidates.append(value)
+            names = entity_names(value)
+            candidates.extend(common_utils.normalize_threat_actor(name) if field == "threat_actor" else name
+                              for name in names)
     for product in event.get("affected_products") or []:
         product = (product or "").strip()
         if product:
@@ -109,22 +112,25 @@ def build_trending(events):
     물량이 많아서 반복된 것일 뿐 실제로 "여러 곳에서 화제"인지 알 수 없다.
     """
     counter = Counter()
+    labels = {}
     sources = defaultdict(set)
     for event in events:
         seen = set()
         source = (event.get("source") or "").strip()
         for phrase in _event_candidates(event):
-            key = phrase.lower()
+            phrase = canonical_name(phrase)
+            key = phrase.casefold()
             if key in seen:
                 continue
             seen.add(key)
-            counter[phrase] += 1
+            labels.setdefault(key, phrase)
+            counter[key] += 1
             if source:
                 sources[key].add(source)
 
     ranked = [
-        (term, count) for term, count in counter.most_common()
-        if count >= MIN_COUNT and len(sources[term.lower()]) >= MIN_SOURCE_COUNT
+        (labels[key], count) for key, count in counter.most_common()
+        if count >= MIN_COUNT and len(sources[key]) >= MIN_SOURCE_COUNT
     ]
     return ranked[:MAX_ITEMS]
 
