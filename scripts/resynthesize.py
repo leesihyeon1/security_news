@@ -32,6 +32,7 @@ import os
 import sys
 
 import common_utils
+import dashboard_text
 import investigation
 import output_critic
 import past_analyses
@@ -107,6 +108,7 @@ def rebuild(record):
     try:
         spared = output_critic.review(verdict, block.get("response"), block)
         if spared and output_critic.apply(block.get("response"), spared):
+            output_critic.reconcile_plan(verdict, spared)
             block["steps"] = (block.get("steps") or []) + [
                 {"track": "산출물 검토", "text": line}
                 for line in output_critic.steps(spared)]
@@ -115,7 +117,10 @@ def rebuild(record):
     block["action_plan"] = investigation.merge_actions(verdict, block.get("response"))
     block["steps"] = (block.get("steps") or []) + [
         {"track": "종합 판단", "text": line} for line in verdict.get("steps") or []]
-    record["investigation"] = block
+    # store_result와 같은 경계 — 이 경로도 인증 없는 공개 API로 나가는 레코드를
+    # 직접 client.lset으로 다시 쓰므로, 판단을 새로 받을 때마다 같은 필터를 거친다.
+    record["investigation"] = dashboard_text.redact_private_environment(
+        block, common_utils.inventory_product_terms())
     record["resynthesized_at"] = common_utils.utc_now_iso() \
         if hasattr(common_utils, "utc_now_iso") else ""
     return True

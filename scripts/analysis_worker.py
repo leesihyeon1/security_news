@@ -34,7 +34,10 @@ from bs4 import BeautifulSoup
 
 import analysis_targets
 import common_utils
+import dashboard_text
 import investigation
+import network_safety
+import source_evidence
 
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
@@ -137,7 +140,7 @@ JUNK_LINK_RE = re.compile(
 # (실측: Microsoft 블로그에서 살아남은 6건이 전부 /tag/·/topic/·/product/ 링크였다).
 NAV_LINK_RE = re.compile(r"/(?:tag|tags|category|categories|topic|topics|product|"
                          r"content-type|author|page)/", re.I)
-MAX_LINKS = 6
+MAX_LINKS = 20
 
 
 def _normalize_link(anchor, article_url):
@@ -153,6 +156,9 @@ def _normalize_link(anchor, article_url):
         return None
     if NAV_LINK_RE.search(href):
         return None
+    from urllib.parse import urlsplit
+    if re.fullmatch(r"/(?:\d{4}(?:/\d{1,2}){0,2})?/?", urlsplit(href).path):
+        return None
     text = common_utils.clean_text(anchor.get_text(" ", strip=True))[:110]
     if not text:
         return None      # 문구 없는 <a>는 아이콘·배너 같은 껍데기다
@@ -161,8 +167,17 @@ def _normalize_link(anchor, article_url):
 
 def fetch_article_text(url):
     """기사 원문에서 본문 텍스트와 참고 링크를 뽑는다. 실패 시 ("", [])."""
+    url = source_evidence.article_url(url)
+    # 이 url은 인증 없는 공개 API(/api/analyze)가 그대로 넣은 값이다(실측 2026-09-22:
+    # 문법 검증만 있었다). 우리 PC가 그 값을 그대로 요청하므로, 사설·루프백·예약
+    # 대역을 가리키면 여기서 막는다 — network_safety.py 참고.
     try:
-        response = requests.get(url, headers=REQUEST_HEADERS, timeout=FETCH_TIMEOUT_SECONDS)
+        network_safety.check_public_url(url)
+    except network_safety.UnsafeUrlError as error:
+        log("[-] 본문 수집 거부({}): {}".format(url[:70], error))
+        return "", []
+    try:
+        response = network_safety.safe_get(url, headers=REQUEST_HEADERS, timeout=FETCH_TIMEOUT_SECONDS)
         response.raise_for_status()
     except Exception as error:
         log("[-] 본문 수집 실패({}): {}".format(url[:70], error))
@@ -189,8 +204,14 @@ def fetch_article_text(url):
     best_text = ""
     best_node = None
     for selector in ("#article-view-content-div", "#articleBody", ".article-body",
-                     ".articlebody", ".post-body", "#news_content", "article", "main"):
+                     ".articlebody", ".post-body", ".entry-content", "#single-post .text",
+                     "#news_content"):
         for node in soup.select(selector):
+            text = common_utils.clean_text(node.get_text(" ", strip=True))
+            if len(text) > len(best_text):
+                best_text, best_node = text, node
+    if len(best_text) < 500:
+        for node in soup.select("article, main"):
             text = common_utils.clean_text(node.get_text(" ", strip=True))
             if len(text) > len(best_text):
                 best_text, best_node = text, node
@@ -261,7 +282,21 @@ def build_prompt(title, body, category_hint):
                if threat else "당신은 보안 전문 매체의 분석 기자다.")
 
     if threat:
-        sections = '[CVSS/심각도] 본문에 CVSS 점수·벡터가 명시돼 있으면 그대로 인용하라. 점수는 없고 심각도 등급(Critical/High/Medium/Low)만 언급됐으면 그 등급만 쓰라. 점수도 등급도 본문에 전혀 없으면 공격 벡터·필요 권한·영향 범위를 근거로 하나를 판단하되 반드시 "(본문에 명시 안 됨 — 추정)"이라고 표시하고 근거를 한 문장 덧붙여라 — 공식 수치인 것처럼 지어내지 마라.\n[기술적 세부사항] 공격 체인을 침투 → 실행 → 지속화 → 확산 → 목적 달성 순서로 서술하라. 반드시 단계마다 줄을 바꾸고 번호를 붙여라 — "1. 침투: ..." 형식으로 한 줄에 한 단계씩 쓰고, 여러 단계를 한 문단에 이어 쓰지 마라(화면에서 구분되지 않아 읽을 수 없다). 본문에 나온 구체값(CVE 번호, 영향받는 제품·버전, 파일명·경로, 실행 명령어, 도메인·IP·해시, 포트, 계정·패키지 이름, 수치)은 빠뜨리지 말고 그대로 인용하라. "악성코드를 삽입했습니다" 같은 뭉뚱그린 서술은 쓰지 마라. 단계별 1~3문장.' + '[MITRE ATT&CK] 본문에서 확인되는 공격 기법을 한 줄에 하나씩 쓰라. 형식은 "T1574.001 (DLL 사이드로딩) — LockScreenContentServer.exe가 같은 폴더의 악성 dui70.dll을 로드"처럼 [기법 ID] ([기법 이름]) — [기사에서 관측된 구체적 행위]다. 행위 부분에는 기사에 나온 파일명·경로·명령·서비스·계정 이름을 그대로 넣고, 기법 이름만 되풀이하지 마라. 근거가 없는 기법은 지어내지 말고, 없으면 "해당 없음"이라고 써라.\n[영향 범위 및 위험도] 영향받는 대상(제품·버전·조직 유형·지역)과 규모를 본문의 수치로 명시하고, 공격이 성공하면 실제로 무엇을 잃는지 쓰라. 3문장 이상.\n[권장 대응] 실무자가 바로 실행할 수 있는 조치 3~5개. 각 항목에 대상(무엇을)과 방법(어떻게)을 함께 쓰고, 본문에 패치 버전·설정값·탐지 지표가 있으면 그대로 넣어라. "최신 패치를 적용하십시오"처럼 어느 기사에나 통하는 일반론은 쓰지 마라.\n'
+        sections = (
+            '[CVSS/심각도] 원문에 명시된 CVSS 점수·벡터 또는 심각도만 인용하라. '
+            '없으면 "원문 미기재"로 적고, 종합 기사에는 단일 점수를 부여하지 마라.\n'
+            '[기술적 세부사항] 단일 사건이면 원문에서 확인되는 침투·실행·지속화·확산·목적을 '
+            '단계별 번호 목록으로 서술하라. 없는 단계는 지어내지 마라. 종합 기사라면 '
+            '단계 대신 사건별 번호 목록으로 나누고 각 사건의 행위·수치·미확인 내용을 적어라. '
+            'CVE, 제품·버전, 파일·경로, 명령, 지표 등 구체값은 원문대로 쓰라.\n'
+            '[MITRE ATT&CK] 한 줄에 "기법 ID (기법 이름) - 사건명과 원문에서 확인되는 행위" '
+            '형식으로 쓰라. ID·공식 정의·행위가 일치하는 경우만 포함하고, 세부 기법을 '
+            '추정하지 마라. 근거가 없으면 "해당 없음"으로 적어라.\n'
+            '[영향 범위 및 위험도] 제품·버전·대상과 규모를 원문 근거로 사건별로 쓰라. '
+            '원문 보도, 분석자의 조건부 추론, 사내 영향 미확인을 구분하라.\n'
+            '[권장 대응] 원문 근거가 있는 구체적인 조치 3~5개를 대상과 확인 방법으로 쓰라. '
+            '원문에 없는 패치 버전·설정·기한을 만들지 말고 벤더 확인이 필요한 것으로 남겨라.\n'
+        )
     else:
         sections = '[주요 내용] 본문의 핵심 사실·수치·일정·고유명사를 빠뜨리지 말고 구체적으로 서술하라(위협·공격을 전제로 지어내지 말 것). 5문장 이상.\n[의미와 영향] 보안 업계·기업·이용자에게 어떤 의미·영향이 있는지, 무엇이 달라지는지를 본문 근거로 쓰라. 3문장 이상.\n[참고 사항] 실무자가 확인·검토해볼 점 3개. 각 항목에 무엇을 어떻게 확인할지 함께 쓰고, 어느 기사에나 통하는 일반론은 쓰지 마라.\n'
 
@@ -270,6 +305,7 @@ def build_prompt(title, body, category_hint):
             + '. 그 다음 줄부터 아래 형식을 따라라.\n\n출력 형식:\n[핵심 요약] 2~3문장\n'
             + sections
             + '[선수 정보]\n- 용어명1: 이 용어를 모르면 위 분석을 이해할 수 없는 실무자를 위한 1문장 해설\n- 용어명2: 용어명1과 동일한 형태의 해설\n\n섹션 누락 금지: 위 출력 형식의 섹션을 맨 끝의 [조사 대상]까지 하나도 빠짐없이 순서대로 써라 — [권장 대응]이나 [선수 정보]에서 끝내지 마라. [조사 대상]은 도구가 읽는 마지막 섹션이라 빠지면 자동 조사가 통째로 돌지 않는다.\n\n번호 목록 작성 규칙: 번호(예: "1.")만 쓰고 뒤에 설명 문장을 비워두지 마라 — 쓰기로 한 항목은 반드시 같은 줄에 실질적인 문장으로 채우고, 번호는 1부터 순서대로 매겨라.\n\n강조 규칙: 각 섹션에서 가장 핵심적인 용어·수치·행위만 **이렇게** 볼드로 표시하라. 섹션당 2~4개로 제한하고, 문장 전체를 통째로 볼드 처리하지 마라.\n\n선수 정보 작성 규칙: 독자는 보안 실무자다. "이 단어를 모르면 위 분석을 못 읽는가"만 기준으로 삼아라.\n- 고를 것: 특정 기술·기법·표준·시스템의 이름(예: Active Directory, RMM, 횡적 이동, DLL 사이드로딩, KCMVP)\n- 고르지 말 것: 실무자가 이미 아는 보안 상식어(악성코드, 피싱, 랜섬웨어, 자격 증명, 데이터 유출, 취약점, 보안 패치, 공급망 공격 등), 널리 알려진 서비스·회사명(GitHub, npm, AWS, Windows), 이 기사에만 등장하는 제품·브랜드명\n- 최대 3개까지만 쓰고, 개수를 채우려고 상식어를 넣지 마라. 기준에 맞는 용어가 하나도 없으면 항목 대신 "- 해당 없음" 한 줄만 써라.\n- 해설에 용어를 그대로 되풀이하지 마라. 그 용어가 무엇을 하는지, 이 기사에서 왜 중요한지를 써라.\n- 용어명은 본문에 나온 표기 그대로 쓰고 볼드(**)나 번호를 붙이지 마라.\n\n주의: 본문에 없는 사실을 지어내지 마라. 본문이 부실하면 그 사실을 그대로 밝혀라. 모든 출력은 한국어로만 쓰고 한자·중국어를 섞지 마라.'
+            + '\n\n근거 규칙: 여러 독립 사건을 다룬 종합 기사라면 기존 섹션 안에서 사건별로 나누어 쓰고, 하나의 침투·실행·지속화·확산 체인으로 합치지 마라. 원문에 없는 단계는 "원문 미기재"로 남기고 다른 사건의 C2·파일·기법을 옮겨 붙이지 마라. 기사 출처·참고 문서 URL은 IOC나 조사 대상 URL로 넣지 마라. ATT&CK ID와 이름 및 실제 행위가 모두 맞는 경우만 쓰고, 추정 매핑은 생략하라. OAuth 정상 인증 흐름 악용을 비밀번호 탈취나 MFA 직접 우회로 바꾸어 쓰지 마라. 패치 버전·설정·기한을 임의로 보충하지 마라.'
             + analysis_targets.spec()
             + "\n\n본문:\n" + (body or "(본문을 가져오지 못해 제목만으로 분석합니다.)"))
 
@@ -494,7 +530,7 @@ def build_attack_groups(analysis, ids=None):
 
 def analyze_one(job):
     """요청 하나를 분석해 저장용 레코드를 만든다. 실패 시 None."""
-    url = (job.get("url") or "").strip()
+    url = source_evidence.article_url(job.get("url"))
     title = (job.get("title") or "").strip()
     if not url or not title:
         log("[-] url/title이 없는 요청 — 건너뜁니다")
@@ -564,6 +600,8 @@ def analyze_one(job):
     # 정규식 추출과 LLM이 준 목록을 합친다. 정규식은 원문에 문자 그대로 있는 것만
     # 잡고, LLM은 우리말로 풀어 쓴 것까지 잡는다 — 둘의 사각지대가 다르다.
     iocs = analysis_targets.merge_iocs(common_utils.extract_iocs(body), targets)
+    iocs, _ = source_evidence.filter_iocs(iocs, [url])
+    targets = source_evidence.filter_targets(targets, [url])
 
     # 조사&대응 — 사건 성격에 따라 조사 방향이 갈린다. 사용자 행위 기반(ClickFix 등)은
     # 유포지를 urlscan으로 추적하고, 악성코드 기반은 VT 동적 분석으로 실제 행위를 본다.
@@ -609,6 +647,27 @@ def analyze_one(job):
 
 def store_result(client, record):
     """analyze.js와 같은 키·형식으로 저장 — 대시보드 표시 코드를 그대로 쓴다."""
+    # 인증 없는 공개 API(insights.js)가 이 레코드를 그대로 반환한다. analysis·
+    # investigation·targets는 모델이 자유 서술로 쓰는 필드라 environment_brief()로
+    # 넣어 준 보유 제품군·PIR을 "출력에 쓰지 마라"는 프롬프트 지시 하나에만 기대고
+    # 있었다. 실측(2026-09-22): "당사 관리 자산 목록(Arista, Juniper, Citrix,
+    # Fortigate 등)", "우리 환경: Windows 단말 보유"가 investigation에, "사내 자산
+    # 목록(inventory.yml)과 대조하여"가 [권장 대응] 섹션(analysis)에 그대로 나갔다 —
+    # 같은 environment_brief() 출력을 analysis_targets.spec()과 investigation 양쪽이
+    # 나눠 쓰므로 두 필드 다 같은 위험을 안는다. 프롬프트 지시는 그대로 두고, 저장
+    # 직전에 한 번 더 기계적으로 막는다 — 모델이 지시를 어겨도 새는 문장이 밖으로
+    # 안 나가게.
+    product_names = common_utils.inventory_product_terms()
+    if record.get("analysis"):
+        record["analysis"] = dashboard_text.redact_private_environment(
+            record["analysis"], product_names)
+    if record.get("investigation") is not None:
+        record["investigation"] = dashboard_text.redact_private_environment(
+            record["investigation"], product_names)
+    if record.get("targets") is not None:
+        record["targets"] = dashboard_text.redact_private_environment(
+            record["targets"], product_names)
+
     # 없는 키는 비워 둔다. 수집 실패 기록처럼 일부 필드가 아예 없는 경우가 있어,
     # 인덱싱으로 꺼내면 저장이 통째로 실패한다(실측: 'targets' KeyError로 기록이
     # 저장되지 않았다).

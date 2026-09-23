@@ -23,6 +23,8 @@ import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 
+import network_safety
+
 # 링크당 본문을 이만큼만 쓴다. 벤더 권고는 짧고 연구 블로그는 길어서, 길면 종합 판단
 # 프롬프트가 원문 하나로 가득 찬다.
 #
@@ -107,7 +109,7 @@ def _unwrap(url):
 
 def pick(links, article_url="", limit=MAX_SOURCES):
     """1차 자료로 볼 만한 링크를 고른다(뉴스 매체·소셜·목록 페이지 제외)."""
-    own = _apex(_host(article_url))
+    own = _apex(_host(_unwrap(article_url)))
     chosen, seen_apex = [], set()
     for link in links or []:
         url = _unwrap(_link_url(link))
@@ -122,6 +124,8 @@ def pick(links, article_url="", limit=MAX_SOURCES):
         if apex in NEWS_HOSTS or host in NEWS_HOSTS:
             continue
         if SKIP_EXT_RE.search(url) or SKIP_PATH_RE.search(urllib.parse.urlparse(url).path or ""):
+            continue
+        if re.fullmatch(r"/(?:\d{4}(?:/\d{1,2}){0,2})?/?", urllib.parse.urlparse(url).path):
             continue
         # 같은 곳에서 여러 개를 읽어도 새로 아는 것이 적다 — 도메인당 하나만.
         if apex in seen_apex:
@@ -195,8 +199,15 @@ def _excerpt(text):
 
 def fetch_text(url):
     """본문 텍스트만. 실패하거나 너무 짧으면 빈 문자열."""
+    # 이 url은 기사 본문에 실린 링크·웹 검색 결과다 — 우리가 고른 것이 아니다.
+    # analysis_worker.fetch_article_text와 같은 이유로 사설망 요청은 막는다.
     try:
-        response = requests.get(url, headers=HEADERS, timeout=FETCH_TIMEOUT_SECONDS)
+        network_safety.check_public_url(url)
+    except network_safety.UnsafeUrlError as error:
+        log("    [-] 원문 조회 거부({}): {}".format(_host(url), error))
+        return ""
+    try:
+        response = network_safety.safe_get(url, headers=HEADERS, timeout=FETCH_TIMEOUT_SECONDS)
         response.raise_for_status()
     except Exception as error:
         log("    [-] 원문 조회 실패({}): {}".format(_host(url), str(error)[:60]))

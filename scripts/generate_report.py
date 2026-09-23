@@ -23,6 +23,8 @@ from datetime import datetime, timedelta
 import campaign_radar
 import common_utils
 import publish_web_dashboard
+from dashboard_text import event_summary, summary_excerpt, public_text, public_evidence, data_status, public_narrative, is_korean_text
+from entity_names import count_entities
 
 # Windows 콘솔(cp949)에서 특수문자 출력이 깨지지 않도록 UTF-8로 강제
 for stream in (sys.stdout, sys.stderr):
@@ -287,7 +289,15 @@ def load_events_between(since, until):
             recent.append(event)
 
         for event in reversed(recent):  # 시간순으로 되돌려 기존 dedup(첫 등장 우선) 순서 유지
-            key = "{}|{}".format(event.get("source"), event.get("url") or event.get("id"))
+            # id를 기준으로 한다 — url이 아니다. KEV·MSRC 같은 구조화 피드는 서로 다른
+            # CVE·서로 다른 발행월의 항목이 같은 카탈로그/요약 페이지 url을 공유해서,
+            # url로 중복 제거하면 그 구간에 하나만 남는다(실측: cisa_kev 이벤트 82건이
+            # url 하나뿐이라 모든 리포트에서 KEV가 최대 1건으로 줄었다. events.jsonl
+            # 전체를 보면 msrc도 같은 CVE 페이지 url에 달마다 다른 공지가 830쌍 걸린다).
+            # id는 수집 단계에서 "{source}:{고유값}"으로 만들어지므로 그 자체로 이미
+            # source 경계를 포함한다 — url보다 세밀하고, RSS 재수집 시 같은 글이면
+            # 같은 id를 받으므로 중복 제거 성질은 그대로 유지된다.
+            key = event.get("id") or "{}|{}".format(event.get("source"), event.get("url"))
             events.setdefault(key, event)
 
     if dropped:
@@ -301,15 +311,11 @@ def _entity_counters(events):
 
     build_stats()와 compute_weekly_trends()(주간 리포트의 전주 대비 비교)가 같은
     집계 로직을 공유하기 위해 분리했다."""
-    actor_counter = Counter()
-    malware_counter = Counter()
+    actor_counter = count_entities(events, "threat_actor")
+    malware_counter = count_entities(events, "malware_family")
     technique_counter = Counter()
     asset_counter = Counter()
     for event in events:
-        if event.get("threat_actor"):
-            actor_counter[event["threat_actor"]] += 1
-        if event.get("malware_family"):
-            malware_counter[event["malware_family"]] += 1
         for technique in event.get("attack_techniques") or []:
             technique_counter[technique] += 1
         # 별칭을 그대로 세면 제품 하나가 별칭 수만큼 부풀려진다 — 대표명으로 접어서 센다.
@@ -369,6 +375,7 @@ def build_stats(events):
 
     return {
         "total": len(events),
+        "latest_collected_at": max((event.get("fetched_at") or "" for event in events), default=""),
         "by_source": by_source,
         "by_category": by_category,
         "by_pir": by_pir,
@@ -956,8 +963,9 @@ def build_cve_card(cve_label, cve_ids, group, sources):
     summary = ""
     for event in sorted(group, key=_summary_rank):
         summary = (event.get("ai_summary") or event.get("summary") or "").strip()
-        if summary:
+        if summary and is_korean_text(summary):
             break
+        summary = ""
 
     return {
         "cve": cve_label,
@@ -976,7 +984,7 @@ def build_cve_card(cve_label, cve_ids, group, sources):
         "fix_available": any(event.get("fix_available") for event in group) or None,
         "due_date": next((event["due_date"] for event in group if event.get("due_date")), ""),
         "remediation": remediation,
-        "summary": summary[:CARD_SUMMARY_CHARS],
+        "summary": summary_excerpt(summary, CARD_SUMMARY_CHARS),
         "products": _union(group, "affected_products"),
         "assets": common_utils.canonical_assets(_union(group, "matched_assets")),
         "actors": [event["threat_actor"] for event in group if event.get("threat_actor")],
@@ -985,6 +993,7 @@ def build_cve_card(cve_label, cve_ids, group, sources):
             for event in group
         ],
         "event_ids": {event.get("id") for event in group},
+        "evidence": [public_evidence(event, source_label(event.get("source"))) for event in group],
     }
 
 
@@ -1876,7 +1885,7 @@ def fallback_keywords(stats, cards, max_items=MAX_KEYWORDS):
 NARRATIVE_ATTEMPTS = {"daily": 3, "weekly": 6}
 
 
-def ai_narrative(period_label, digest, period="daily"):
+def ai_narrative(period_label, digest, period="daily", public_only=False):
     prompt = """당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다.
 아래는 {period} 동안 수집된 보안 이벤트 요약이다. 이를 바탕으로 보안담당자용 리포트 본문을 한국어로 작성하라.
 
@@ -1933,6 +1942,9 @@ def ai_narrative(period_label, digest, period="daily"):
     # 실패 시 "(AI 해석을 생성하지 못해 통계 요약만 제공합니다.)"로 대체할 수단이
     # 없는 단발성 호출이라(하루/주 1번), 재시도를 넉넉히 줘서 일시적 실패로
     # 통째로 못 만드는 상황을 줄인다.
+    prompt += "\n본문 설명과 권고는 반드시 한국어로 작성하세요. 영문 원문을 문장 그대로 복사하지 마세요. 제품명, CVE 식별자, 고유명사만 원어 표기를 허용합니다.\n"
+    if public_only:
+        prompt += "\n이 보고서는 공개용입니다. [자사 자산 관련] 섹션을 작성하지 마세요. 조직의 보유 자산, 내부 시스템, 자산 매칭, PIR을 어떤 섹션에서도 언급하지 마세요.\n"
     narrative = common_utils.llm_generate(
         prompt, timeout=300, nvidia_max_attempts=NARRATIVE_ATTEMPTS.get(period, 3)
     ) or ""
@@ -2448,6 +2460,31 @@ def dashboard_trend_bits(event):
     return bits
 
 
+def ai_public_narrative(period_label, stats, cards):
+    facts = {"period": period_label, "total": stats["total"], "issues": [
+        {"issue": card["cve"], "summary": public_text(card.get("summary") or ""),
+         "remediation": public_text(card.get("remediation") or ""),
+         "products": card.get("products") or []}
+        for card in cards[:3]]}
+    prompt = """공개 보안 대시보드의 AI 요약을 한국어 존댓말로 작성하세요.
+아래 자료에 있는 사실만 사용하고 조직의 보유 자산이나 내부 시스템을 추측하지 마세요.
+제품명·CVE·공격자 이름 외에는 영문 문장을 쓰지 마세요. 다음 형식을 정확히 지키세요.
+[총평]
+전체 상황을 한국어 두 문장 이내로 설명합니다.
+[핵심 위협 TOP 3]
+자료의 issues를 순서대로 최대 3개 설명합니다. 각 항목은 '1. 한국어 설명' 형식입니다.
+[권고 조치]
+같은 순서로 각 위협의 조치를 번호 목록으로 작성합니다. 구체적 조치가 자료에 없으면 공식 권고 확인을 권합니다.
+어떤 섹션도 비우지 마세요. 섹션 제목이나 지시문을 항목 내용으로 복사하지 마세요.
+자료:
+""" + json.dumps(facts, ensure_ascii=False)
+    result = common_utils.llm_generate(prompt, timeout=180, nvidia_max_attempts=1) or ""
+    cleaned = public_narrative(result)
+    if "한국어 요약을 준비하지 못했습니다" in cleaned:
+        raise RuntimeError("Public Korean AI narrative has missing sections")
+    return cleaned
+
+
 def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads,
                              keywords=None, weekly_trends=None, campaigns=None):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
@@ -2485,7 +2522,8 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "level": event_level(event),
             "category": event.get("category") or "",
             "published_at": event.get("published_at") or "",
-            "summary": (event.get("ai_summary") or event.get("summary") or "")[:300],
+            "summary": public_text(event_summary(event, 300)),
+            "evidence": [public_evidence(event, source_label(event.get("source")))],
         }
         if include_reason:
             # 추천기사(trend_reads) 전용 — 심층분석을 누르기 전에도 "왜 추천됐는지"와
@@ -2509,9 +2547,10 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "sources": [source_label(s) for s in card["sources"]],
             "severity_bits": card_severity_bits(card, include_assets=False),
             "products": card["products"][:CARD_PRODUCTS_MAX],
-            "remediation": card["remediation"][:CARD_REMEDIATION_CHARS] if card["remediation"] else "",
+            "remediation": public_text(card["remediation"])[:CARD_REMEDIATION_CHARS] if card["remediation"] else "",
             "due_date": card.get("due_date") or "",
-            "summary": card["summary"],
+            "summary": public_text(card["summary"]),
+            "evidence": card.get("evidence") or [],
             "items": [
                 {
                     "source_label": source_label(source),
@@ -2521,7 +2560,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
                 for source, item_title, item_url, item_id in card["items"]
             ],
             # 미리 만들어 둔 이슈 분석 — 대시보드는 클릭 없이 바로 펼쳐 보여준다.
-            "issue_analysis": card.get("issue_analysis") or "",
+            "issue_analysis": public_text(card.get("issue_analysis") or ""),
         }
 
     def serialize_campaign(row):
@@ -2537,7 +2576,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "techniques": row.get("techniques") or [],
             "ioc_count": row.get("ioc_count") or 0,
             "novelty_new": row.get("novelty_new") or 0,
-            "summary": row.get("summary") or "",
+            "summary": public_text(row.get("summary") or ""),
             # 우리 수집 로그가 언제 시작됐는지. 이게 없으면 "최초 확인 2026-09-09"가
             # 세계 최초로 읽힌다 — 실제로는 우리가 처음 본 날이고, 코퍼스가 두 달
             # 남짓이라 그 전부터 알려진 그룹도 신규로 올라온다(실측: Rhysida·APT37).
@@ -2567,8 +2606,10 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         "title": title,
         "period": period,
         "period_label": period_label,
+        "data_status": data_status(period_label, period, stats.get("latest_collected_at") or ""),
         "generated_at": common_utils.utc_now_iso(),
-        "narrative": _strip_narrative_section(narrative, "자사 자산 관련") if narrative else "",
+        "narrative": public_narrative(narrative),
+        "narrative_basis": "AI 분석 · 출처와 수집 시각은 각 카드 참조",
         "stats": {
             "total": stats["total"],
             "p1": len(stats["p1"]),
@@ -2580,6 +2621,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             # 대시보드 상단 타일은 이 값을 우선 쓴다(없는 옛 파일은 info_by_category로 폴백).
             # P1/P2 타일과 중복 계산되지 않도록 info_by_category와 같은 모수를 쓴다.
             "actionable": len(stats.get("actionable") or []),
+            "actionable_by_category": dict(stats.get("actionable_by_category") or {}),
             "actionable_info_by_category": dict(
                 (c, n) for c, n in (stats.get("actionable_info_by_category") or Counter()).most_common()
                 if c != "미분류"
@@ -2623,7 +2665,7 @@ def main():
     since, now = report_window(days)
     period_label = "{} ~ {} (UTC)".format(since.strftime("%Y-%m-%d %H:%M"), now.strftime("%Y-%m-%d %H:%M"))
 
-    events = load_events(since)
+    events = load_events_between(since, now)
     if not events:
         print("기간 내 수집된 이벤트가 없어 리포트를 생성하지 않습니다.")
         return
@@ -2732,8 +2774,9 @@ def main():
         print("[-] 신규 공격 캠페인 탐지 실패(리포트에는 영향 없음): {}".format(error))
         campaigns = []
 
+    dashboard_narrative = ai_public_narrative(period_label, stats, cards)
     dashboard_payload = build_dashboard_payload(
-        title, args.period, period_label, stats, narrative, all_highlights, cards, all_trend_reads, keywords,
+        title, args.period, period_label, stats, dashboard_narrative, all_highlights, cards, all_trend_reads, keywords,
         weekly_trends=weekly_trends, campaigns=campaigns,
     )
     publish_web_dashboard.publish(dashboard_payload)

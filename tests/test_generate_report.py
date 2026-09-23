@@ -50,8 +50,12 @@ def test_load_events_dedup_keeps_first_chronological_occurrence(tmp_path, monkey
     legacy_file = tmp_path / "legacy.jsonl"
     legacy_file.write_text("", encoding="utf-8")
 
-    # 파일 순서(오래된 것부터)로 같은 url이 두 번 등장 — 먼저 나온 것(id2)이 남아야 함
-    events = [_make_event(2, 50, url="http://dup"), _make_event(3, 40, url="http://dup"), _make_event(4, 5)]
+    # 같은 id(같은 글의 재수집)가 파일 순서(오래된 것부터)로 두 번 등장 —
+    # 먼저 나온 것이 남아야 함. id를 그대로 재사용해 "같은 글을 다시 봤다"를 흉내 낸다.
+    dup = _make_event(2, 50, url="http://dup")
+    dup_seen_again = _make_event(2, 40, url="http://dup")
+    dup_seen_again["title"] = "t2 (재수집)"
+    events = [dup, dup_seen_again, _make_event(4, 5)]
     with events_file.open("w", encoding="utf-8") as f:
         for e in events:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
@@ -63,7 +67,36 @@ def test_load_events_dedup_keeps_first_chronological_occurrence(tmp_path, monkey
     result = gr.load_events(since)
     assert len(result) == 2
     dup_kept = next(e for e in result if e["url"] == "http://dup")
-    assert dup_kept["id"] == "asec:2"
+    assert dup_kept["title"] == "t2"
+
+
+def test_load_events_keeps_distinct_ids_that_share_a_url(tmp_path, monkeypatch):
+    """실측(2026-09-22): cisa_kev 이벤트 82건이 전부 같은 카탈로그 페이지 url을 쓴다.
+
+    id는 서로 다른데(각 CVE 하나씩) 예전 dedup 키가 (source, url)이어서 구간마다
+    KEV가 1건으로 줄었다 — 82건 중 81건이 조용히 사라졌다. id를 우선하는 지금
+    규칙에서는 같은 url이어도 id가 다르면 둘 다 남아야 한다."""
+    events_file = tmp_path / "events.jsonl"
+    legacy_file = tmp_path / "legacy.jsonl"
+    legacy_file.write_text("", encoding="utf-8")
+
+    kev_url = "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
+    events = [
+        {"id": "cisa_kev:CVE-2026-0001", "source": "cisa_kev", "title": "CVE-2026-0001",
+         "url": kev_url, "fetched_at": (datetime.utcnow() - timedelta(hours=10)).isoformat() + "Z"},
+        {"id": "cisa_kev:CVE-2026-0002", "source": "cisa_kev", "title": "CVE-2026-0002",
+         "url": kev_url, "fetched_at": (datetime.utcnow() - timedelta(hours=9)).isoformat() + "Z"},
+    ]
+    with events_file.open("w", encoding="utf-8") as f:
+        for e in events:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
+    monkeypatch.setattr(common_utils, "EVENTS_FILE", events_file)
+    monkeypatch.setattr(gr, "LEGACY_BOANNEWS_EVENTS_FILE", legacy_file)
+
+    since = datetime.utcnow() - timedelta(hours=72)
+    result = gr.load_events(since)
+    assert {e["id"] for e in result} == {"cisa_kev:CVE-2026-0001", "cisa_kev:CVE-2026-0002"}
 
 
 # ===== report_window =====
