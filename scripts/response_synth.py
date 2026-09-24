@@ -30,6 +30,7 @@ import json
 import re
 
 import common_utils
+import analyst_workflow
 
 # 조회 재료를 프롬프트에 넣을 때의 상한. 전부 넣으면 프롬프트가 수만 자가 되고,
 # 정작 판단에 쓰이는 것은 앞쪽 요약이다.
@@ -61,6 +62,22 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
 (3) 그 목표를 확인하려고 외부에서 실제로 조회한 결과다. 조회 결과를 읽고 판단하라.
 
 지켜야 할 것:
+- 설명·판단·조치·완료 기준은 한국어로 쓴다. 제품명·필드명·명령·지표의 원래 표기는 유지한다.
+- 기사 원문, 외부 조회 사실, 분석자의 추론, 사내 확인이 필요한 가설을 구분하라.
+- 조회 상태가 실패·불가·부분이면 '미탐지'나 '안전'으로 바꾸지 마라. 검색 결과·과거 AI
+  분석은 독립 검증이 아니며, 같은 레지스트리의 다른 악성 패키지를 이번 캠페인으로 묶지 마라.
+- plan은 사건에 맞는 3~5개 실행안이다. 각 조치에 담당 역할, 발동 조건, 구체적인 로그·필드와
+  조사 기간, 보존할 증거, 도구·패치·다운타임 제약 시 대안, 완료 기준을 채워라.
+  '추가 조사' 같은 대안 대신 어떤 원본 로그·수동 점검·임시 통제를 쓸지 적어라.
+- 확인→범위 파악·증거 보존→조건부 통제→복구 검증의 순서로 계획하라. 감염 미확인 상태에서
+  무조건 격리·삭제·전면 키 교체를 지시하지 마라. 침해가 확인되면 해당 증거를 보존하고 범위를
+  제한해 통제하며, 복구 후 재발 여부와 정상 업무 복원을 검증하라.
+- 검색 0건만으로 종료하지 마라. 로그 수집 범위·보존 기간·센서 상태, 양성 테스트와 대체 로그를
+  확인해야 한다. 0건이라는 사실과 감염이 없다는 결론을 구분하라.
+- API 키·토큰·개인키 원문은 IOC 피드나 공개 보고서에 넣지 마라. 필요한 경우 접근 제한된
+  증거 저장소에 보존하고 공개 결과에는 마스킹된 식별자·해시만 사용하라.
+- 블록체인 주소·트랜잭션 해시는 IP/도메인 차단값이 아니다. 지원되는 텔레메트리에서만
+  해당 값을 대조하고, 공용 RPC·LLM·CDN 도메인 전체 차단으로 바꾸지 마라.
 - 종합 기사는 사건별로 판단하고, 서로 다른 사건의 행위·C2·지표를 연결하지 마라.
 - 출처 URL·참고 자료 호스트는 차단 지표가 아니다. 같은 호스트의 다른 URL을 스캔한
   결과는 이 기사나 이 사건의 악성 행위 유무를 입증하지 못한다.
@@ -72,6 +89,15 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
 - 아래 기준일보다 지난 기한은 '경과'로 표시하라. 앞으로 다가올 기한으로 쓰지 마라.
 - 조회 재료에 없는 도메인·IP·해시·CVE·패키지를 쓰지 마라. 쓰면 그 항목은 버려진다.
 - 기사 요약을 되풀이하지 마라. 조회로 무엇이 달라졌는지만 쓴다.
+- [확인해야 할 질문]이 있으면 그 순서대로 question_status에 하나씩 판정을 남겨라.
+  question은 그 질문 문장을 그대로 옮겨 적어라 — 새로 쓰거나 요약하면 다른 질문으로
+  취급돼 버려진다.
+- [전에 우리가 분석한 같은 계열]이 있으면 그 각 항목이 지금 사건과 어떤 관계인지
+  campaign_relations에 밝혀라. title은 그 항목의 제목을 그대로 옮겨 적어라. 이름·
+  해시가 겹친다는 사실만으로 "동일 캠페인"이라 쓰지 마라 — 노린 대상·활동 시기·
+  목적이 같은지, 기사·1차 자료가 서로를 직접 인용하는지, 샘플·설정·인프라가 실제로
+  이어지는지를 본다. 그중 아무 근거도 없이 이름·해시만 같으면 "같은 도구만 사용"
+  이나 "무관"으로 써라. 판단할 근거가 부족하면 "판단 보류"로 남겨라.
 - "결과가 없었다"도 판단 재료다. 유포지가 안 잡히면 이미 내려갔다는 뜻일 수 있고,
   그것은 "안전하다"와 다르다. 없는 것을 없다고 쓰고, 그 뜻을 밝혀라.
 - 우리 조직에 해당하지 않으면 해당하지 않는다고 쓰라. 억지로 조치를 만들지 마라.
@@ -103,8 +129,12 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
   "unconfirmed": ["확인하지 못한 것과 그 이유"],
   "contradictions": ["기사 주장과 조회 결과가 어긋나는 점. 없으면 빈 배열"],
   "plan": [
-    {"action": "무엇을 한다", "why": "왜 지금 이 순서인가", "when": "즉시|오늘|이번 주|기한 날짜",
-     "done": "무엇을 보면 이 조치가 끝난 것인가. 조회 결과가 0건인 것이 끝인지 아닌지까지 밝혀라"}
+    {"action": "무엇을 한다", "why": "출처와 근거, 왜 이 순서인가", "when": "즉시|오늘|이번 주|기한 날짜",
+     "owner": "개인 이름이 아닌 담당 역할", "trigger": "어떤 근거·영향 자산이 확인되면 실행하는가",
+     "check": "어느 로그·필드·기간으로 어떤 정상/악성 가설을 구분하는가",
+     "preserve": "변경 전에 보존할 원본 증거와 시각·출처",
+     "alternative": "도구가 없거나 즉시 조치할 수 없을 때 실행할 대안과 남는 위험",
+     "done": "양성·0건 결과별 확인, 복구와 종료 조건. 불충분하면 미확인으로 유지"}
   ],
   "open_questions": ["대응을 마치려면 추가로 확인해야 할 것"],
   "exposure": {
@@ -116,7 +146,17 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
     {"when": "날짜 또는 기간", "what": "그때 무슨 일이 있었나", "source": "어디서 나온 날짜인가"}
   ],
   "followups": [
-    {"type": "domain|ip|hash|cve|package", "value": "조회할 값", "question": "무엇을 확인하려는가"}
+    {"type": "domain|ip|hash|cve|package", "value": "조회할 값", "question": "무엇을 확인하려는가",
+     "ecosystem": "package인 경우 원문에서 확인한 npm|pip, 불명확하면 빈 문자열"}
+  ],
+  "question_status": [
+    {"question": "[확인해야 할 질문]의 질문을 그대로", "status": "answered|partial|open",
+     "answer": "조회 재료로 답한 내용. 못 답했으면 왜 못 했는지"}
+  ],
+  "campaign_relations": [
+    {"title": "[전에 우리가 분석한 같은 계열]의 제목을 그대로",
+     "relation": "동일 캠페인|관련 가능성|같은 도구만 사용|무관|판단 보류",
+     "why": "그렇게 본 근거"}
   ]
 }
 
@@ -137,6 +177,14 @@ def log(message):
 def _material(investigation, targets):
     """LLM에 넘길 조회 재료. 원자료 그대로가 아니라 판단에 쓰이는 부분만 추린다."""
     lines = []
+    for entry in investigation.get("lookup_status") or []:
+        lines.append("[조회 상태] {}: {} — {}".format(
+            entry.get("key"), entry.get("status"), entry.get("detail") or ""))
+        if entry.get("url"):
+            lines.append("대상: " + str(entry["url"]))
+    for source in (investigation.get("primary") or {}).get("sources") or []:
+        lines.append("[실제로 읽은 출처] {} | 수집 {}".format(
+            source.get("url"), source.get("retrieved_at") or "미기록"))
     route = investigation.get("route") or {}
     if route.get("label"):
         lines.append("[조사 방향] {} — {}".format(route["label"], route.get("explain") or ""))
@@ -145,19 +193,23 @@ def _material(investigation, targets):
         if not values:
             return
         lines.append("[{}]".format(label))
-        lines.extend("- " + str(v) for v in values[:MAX_FINDINGS])
+        lines.append("\n".join("- " + str(v) for v in values[:MAX_FINDINGS])[:900])
 
     add_findings("URL 분석 결과", investigation.get("findings"))
     add_findings("VirusTotal 동적분석", (investigation.get("malware") or {}).get("findings"))
     add_findings("취약점 조회(KEV·EPSS·NVD)", (investigation.get("vulnerability") or {}).get("findings"))
     add_findings("패키지 레지스트리 조회", (investigation.get("supply_chain") or {}).get("findings"))
+    for key, label in (("intel", "교차 인텔 조회"), ("github", "저장소 조회"),
+                       ("extension", "확장 프로그램 조회"), ("web", "연구 자료 검색 후보")):
+        add_findings(label, (investigation.get(key) or {}).get("findings"))
 
     vuln = investigation.get("vulnerability") or {}
     if vuln.get("cves"):
         lines.append("[조회된 CVE]")
         for entry in vuln["cves"][:MAX_FINDINGS]:
             lines.append("- {} | KEV {} | EPSS {} | 기한 {}".format(
-                entry.get("cve"), "등재" if (entry.get("kev") or {}).get("added") else "미등재",
+                entry.get("cve"), "등재" if (entry.get("kev") or {}).get("added") else
+                "미등재" if entry.get("kev_checked") is True else "조회 상태 미확인",
                 entry.get("epss"), (entry.get("kev") or {}).get("due") or "-"))
 
     response = investigation.get("response") or {}
@@ -166,8 +218,10 @@ def _material(investigation, targets):
         lines.append("[{} — {}건]".format(block.get("label") or "차단 후보", len(values)))
         lines.extend("- " + str(v) for v in values[:MAX_VALUES_PER_LIST])
     if response.get("kql"):
-        lines.append("[준비된 헌팅 쿼리] " + ", ".join(
+        lines.append("[헌팅 후보 — 사내 실행 미검증] " + ", ".join(
             q.get("name") or "" for q in response["kql"]))
+        for query in response["kql"][:5]:
+            lines.append("- {}: {}".format(query.get("name"), query.get("note") or ""))
     if response.get("commands"):
         lines.append("[준비된 단말 명령] " + ", ".join(
             c.get("name") or "" for c in response["commands"]))
@@ -181,7 +235,7 @@ def _material(investigation, targets):
 
 
 def build_prompt(title, analysis, targets, investigation, primary="", extra="",
-                 history=""):
+                 history="", article=""):
     objective = (targets or {}).get("objective") or ""
     questions = (targets or {}).get("questions") or []
     return (
@@ -191,7 +245,9 @@ def build_prompt(title, analysis, targets, investigation, primary="", extra="",
         + ("\n" + common_utils.environment_brief() + "\n"
            if common_utils.environment_brief() else "")
         + "\n[기사 제목]\n" + (title or "")
-        + "\n\n[기사 분석]\n" + (analysis or "")[:4000]
+        + ("\n\n[기사 원문 — 보도이며 사내 관측은 아님]\n" + article[:12000] if article else
+           "\n\n[제약] 기사 원문 미제공: 기존 AI 분석을 독립 검증 근거로 간주하지 마라.")
+        + "\n\n[기존 AI 분석 — 원문과 대조할 가설]\n" + (analysis or "")[:4000]
         + "\n\n[이 건의 대응 목표]\n" + (objective or "(설정되지 않음 — 조회 결과로 직접 판단하라)")
         + ("\n\n[확인해야 할 질문]\n" + "\n".join("- " + q for q in questions) if questions else "")
         + "\n\n[외부 조회 결과]\n" + _material(investigation, targets or {})
@@ -278,6 +334,55 @@ def _clean_list(values, corpus, dropped):
     return out
 
 
+ALLOWED_QUESTION_STATUS = {"answered", "partial", "open"}
+ALLOWED_RELATIONS = {"동일 캠페인", "관련 가능성", "같은 도구만 사용", "무관", "판단 보류"}
+
+
+def question_status(data, questions, corpus):
+    """확인질문 판정. 실제로 물어본 질문(공백 정리 후 일치)만 받고, 답은 근거
+    검사를 거친다 — 그라운딩이 통과 못 해도 질문·상태는 남긴다(무엇이 안 풀렸는지는
+    그 자체로 진행 상황이다), 근거 없는 answer 텍스트만 비운다."""
+    valid = {" ".join(str(q).split()) for q in questions or []}
+    out, seen = [], set()
+    for item in (data or {}).get("question_status") or []:
+        if not isinstance(item, dict):
+            continue
+        question = " ".join(str(item.get("question") or "").split())
+        if question not in valid or question in seen:
+            continue
+        seen.add(question)
+        status = str(item.get("status") or "").strip().lower()
+        if status not in ALLOWED_QUESTION_STATUS:
+            status = "open"
+        answer = " ".join(str(item.get("answer") or "").split())[:300]
+        if answer and _invented(answer, corpus):
+            answer = ""
+        out.append({"question": question, "status": status, "answer": answer})
+    return out
+
+
+def campaign_relations(data, related, corpus):
+    """과거 분석과의 관계 판정. 실제로 제시한 후보 제목만, 관계는 정해진 값만 받는다
+    — 지어낸 제목이나 "동일 캠페인" 같은 강한 판정이 근거 없이 통과하지 않게 한다."""
+    valid = {" ".join(str(item.get("title") or "").split()) for item in related or []}
+    out, seen = [], set()
+    for item in (data or {}).get("campaign_relations") or []:
+        if not isinstance(item, dict):
+            continue
+        title = " ".join(str(item.get("title") or "").split())
+        if title not in valid or title in seen:
+            continue
+        relation = str(item.get("relation") or "").strip()
+        if relation not in ALLOWED_RELATIONS:
+            continue
+        seen.add(title)
+        why = " ".join(str(item.get("why") or "").split())[:200]
+        if why and _invented(why, corpus):
+            why = ""
+        out.append({"title": title, "relation": relation, "why": why})
+    return out
+
+
 def followups(data, corpus):
     """LLM이 요청한 후속 조회 중 실행할 만한 것만. 지어낸 값은 버린다.
 
@@ -297,8 +402,14 @@ def followups(data, corpus):
         if value.lower() not in corpus:
             continue
         seen.add(key)
-        out.append({"type": kind, "value": value,
-                    "question": " ".join(str(item.get("question") or "").split())[:120]})
+        request = {"type": kind, "value": value,
+                   "question": " ".join(str(item.get("question") or "").split())[:120]}
+        if kind == "package":
+            ecosystem = str(item.get("ecosystem") or "").lower()
+            if ecosystem not in ("npm", "pip"):
+                continue
+            request["ecosystem"] = ecosystem
+        out.append(request)
         if len(out) >= MAX_FOLLOWUPS:
             break
     return out
@@ -312,7 +423,7 @@ MAX_TIMELINE = 8
 # 그렇게 됐고, 둘 다 조사는 53단계·42단계까지 정상으로 돌았다. llm_generate의 기본
 # 재시도(2회)는 기사마다 수백 번 도는 호출을 위한 값이라, 회차당 한 번뿐인 이 호출에는
 # 더 버티게 한다.
-SYNTH_ATTEMPTS = 4
+SYNTH_ATTEMPTS = 2
 # 우리가 조회하다 알게 된 날짜 — NVD 공개일, 샌드박스 최초 등록일. 사건의 사건이
 # 아니라 조회의 부산물이라, 자리가 모자라면 이쪽부터 버린다.
 #
@@ -379,11 +490,17 @@ def _timeline(values, corpus, dropped):
 
 
 def synthesize(title, analysis, targets, investigation, timeout=240,
-               primary="", extra="", history=""):
+               primary="", extra="", history="", article="", related=None):
     """조회 결과를 읽고 판단한다. 쓸 만한 결과가 없으면 None.
 
+    related는 past_analyses.find_related()가 돌려준 후보 목록(원문 그대로) —
+    campaign_relations의 title을 그 후보 제목과만 대조하는 데 쓴다. history는 그
+    후보를 프롬프트에 넣을 문장으로 바꾼 것(past_analyses.as_evidence(related))이라
+    보통 같이 넘긴다.
+
     반환: {"verdict","headline","confirmed","unconfirmed","contradictions",
-           "plan":[{action,why,when}],"open_questions","steps"}
+           "plan":[{action,why,when}],"open_questions","question_status",
+           "campaign_relations","steps"}
     """
     investigation = investigation or {}
     material = _material(investigation, targets or {})
@@ -391,7 +508,7 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         return None      # 조회한 것이 없으면 판단할 재료도 없다
 
     raw = common_utils.llm_generate(
-        build_prompt(title, analysis, targets, investigation, primary, extra, history),
+        build_prompt(title, analysis, targets, investigation, primary, extra, history, article),
         timeout=timeout, json_format=True,
         nvidia_max_attempts=SYNTH_ATTEMPTS)
     data = parse(raw)
@@ -399,7 +516,7 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         # 한 번은 더 받아 본다 — JSON이 아닌 답이 오는 경우가 있다(실측: 패턴 합성에서
         # 같은 입력에 6개/0개가 갈렸다).
         raw = common_utils.llm_generate(
-            build_prompt(title, analysis, targets, investigation, primary, extra, history)
+            build_prompt(title, analysis, targets, investigation, primary, extra, history, article)
             + "\n\n반드시 JSON만 출력하라.",
             timeout=timeout, json_format=True,
         nvidia_max_attempts=SYNTH_ATTEMPTS)
@@ -407,7 +524,7 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
     if not data:
         return None
 
-    corpus = _corpus(investigation, analysis, primary=primary, extra=extra)
+    corpus = _corpus(investigation, article or analysis, primary=primary, extra=extra)
     dropped = []
     plan = []
     for item in (data.get("plan") or [])[:MAX_PLAN_STEPS]:
@@ -416,16 +533,17 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         action = " ".join(str(item.get("action") or "").split())
         if not action:
             continue
-        bad = _invented(action + " " + str(item.get("why") or ""), corpus)
+        fields = {key: " ".join(str(item.get(key) or "").split())[:600]
+                  for key in ("action", "why", "when", *analyst_workflow.PLAN_FIELDS)}
+        bad = _invented(" ".join(fields.values()), corpus)
         if bad:
             dropped.append("근거 없는 값({}) — {}".format(", ".join(bad[:2]), action[:50]))
             continue
-        plan.append({
-            "action": action,
-            "why": " ".join(str(item.get("why") or "").split()),
-            "when": " ".join(str(item.get("when") or "").split()),
-            "done": " ".join(str(item.get("done") or "").split())[:200],
-        })
+        fields["review_gaps"] = analyst_workflow.plan_gaps(fields)
+        if "0건 결과의 수집 범위·보존 기간 검증" in fields["review_gaps"]:
+            fields["done"] = ("종료 보류: 0건만으로 피해 부재를 확정하지 않습니다. 수집 범위·보존 기간·"
+                              "센서 상태와 양성 테스트·대체 로그를 확인하고, 불충분하면 미확인으로 유지합니다.")
+        plan.append(fields)
 
     headline = " ".join(str(data.get("headline") or "").split())
     if _invented(headline, corpus):
@@ -442,7 +560,10 @@ def synthesize(title, analysis, targets, investigation, timeout=240,
         "exposure": _exposure(data.get("exposure"), corpus, dropped),
         "timeline": _timeline(data.get("timeline"), corpus, dropped),
         "objective": (targets or {}).get("objective") or "",
+        "workflow_version": analyst_workflow.VERSION,
         "followups": followups(data, corpus),
+        "question_status": question_status(data, (targets or {}).get("questions"), corpus),
+        "campaign_relations": campaign_relations(data, related, corpus),
     }
     if not (result["plan"] or result["confirmed"] or result["headline"]):
         return None

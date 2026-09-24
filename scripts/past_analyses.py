@@ -36,6 +36,9 @@ MAX_RELATED = 3
 MIN_NAME_CHARS = 4
 # 값이 이보다 짧으면 잇지 않는다(짧은 도메인·파일명이 우연히 겹친다).
 MIN_VALUE_CHARS = 7
+# 관련 기록 하나에서 딸려 보낼 IOC 수 상한. 동일 캠페인으로 확정된 뒤에만 실제로
+# 재조회에 쓰이므로, 많이 실어도 손해는 아니지만 프롬프트/조회 비용을 생각해 묶는다.
+MAX_RELATED_IOCS = 20
 # 이름 취급하지 않을 일반명사. campaign_radar의 STOPNAMES와 같은 이유다.
 STOPNAMES = {
     "unknown", "n/a", "none", "various", "unattributed", "ransomware",
@@ -159,6 +162,12 @@ def find_related(targets, exclude_title="", client=None):
             "when": (record.get("analyzed_at") or "")[:10],
             "why": " / ".join(why),
             "objective": (past.get("objective") or "")[:160],
+            # 동일 캠페인으로 판정되면(response_synth.campaign_relations) 이 값들을
+            # 다음 조사 라운드의 iocs에 합쳐 재조회한다 — "관련 보고서의 IOC를 이어
+            # 조사"하는 동작의 입력. 판단 근거로 쓰지 않는다는 모듈 원칙은 그대로다;
+            # 여기 실린 값은 IOC일 뿐, 과거 판단문은 여전히 넘기지 않는다.
+            "iocs": [item for item in (record.get("iocs") or [])
+                    if isinstance(item, dict) and item.get("value")][:MAX_RELATED_IOCS],
         })
     # 최신 분석이 앞에 오게 한다 — 같은 계열이면 최근 것이 더 쓸모 있다.
     related.sort(key=lambda item: item["when"], reverse=True)

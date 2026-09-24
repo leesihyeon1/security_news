@@ -611,7 +611,7 @@ def analyze_one(job):
     try:
         # 원문 발췌도 함께 넘긴다 — 패턴 합성의 근거 확인은 우리말 분석문만으로는
         # 부족하다(URL·경로·명령줄은 원문에만 원형으로 남는 경우가 있다).
-        investigation_block = investigation.build(
+        investigation_block = investigation.build_for_article(
             iocs, text=analysis, title=title, category=category or "",
             body=body[:BODY_MAX_CHARS], targets=targets, links=links, article_url=url)
         if investigation_block:

@@ -11,10 +11,12 @@
     밝힌다. 증거가 있는 트랙만 만든다 — 해시가 없으면 VT 트랙은 아예 안 나온다.
 """
 
+import os
 import re
 
 import analysis_targets
 import common_utils
+import incident_scope
 import extension_hunter
 import github_hunter
 import intel_hunter
@@ -32,6 +34,7 @@ import vt_hunter
 import vuln_hunter
 import web_search
 import source_evidence
+import analyst_workflow
 
 # 키워드가 있느냐 없느냐로 방향을 정하면 틀린다. 실측(REVSTEALER 기사): 제목에
 # STEALER·Miner, 분류가 "악성코드", 해시 5건인데도 본문에 "클립보드 하이재킹"(악성코드의
@@ -425,37 +428,27 @@ def _action_signature(text):
 
 
 def merge_actions(verdict, response):
-    """종합 판단의 계획과 재료에서 나온 조치를 시점 순 한 목록으로.
-
-    같은 일을 두 번 적지 않는다 — 판단이 이미 말한 조치는 재료 쪽에서 뺀다.
-
-    앞 18자 비교로는 못 걸렀다. 실측(2026-09-18, Anthropic 위협 보고서 기사): 판단이
-    "차단 후보 도메인 40개·IP 14개·파일 해시 3개를 … 즉시 반영"이라 적고 재료가
-    "도메인 40건을 차단하고 …"로 시작해, 같은 차단 작업이 목록에 두 번 실렸다. 앞머리가
-    겹칠 이유가 없는 문장들이라 앞자리 비교로는 영영 못 잡는다. 그래서 문장에서
-    (동작, 대상) 쌍만 뽑아 맞춘다.
-    """
+    """종합 계획을 시점 순으로 표시하고, 없으면 재료를 검토 후보로 표시한다."""
     merged = []
     for step in (verdict or {}).get("plan") or []:
         action = " ".join(str(step.get("action") or "").split())
         if not action:
             continue
-        merged.append({"action": action, "why": step.get("why") or "",
-                       "when": step.get("when") or "", "done": step.get("done") or "",
-                       "source": "판단"})
-    heads = {item["action"][:18] for item in merged}
-    covered = set()
-    for item in merged:
-        covered |= _action_signature(" ".join([item["action"], item["why"], item["done"]]))
+        merged.append(analyst_workflow.display_plan(step))
+    # Material snippets remain in response.actions; they are not executable plans.
+    if merged:
+        merged.sort(key=lambda item: _when_rank(item.get("when") or ""))
+        return merged
+    seen = set()
     for raw in (response or {}).get("actions") or []:
         action = " ".join(str(raw).split())
-        if not action or action[:18] in heads:
+        if not action or action in seen:
             continue
-        signature = _action_signature(action)
-        if (signature and signature <= covered
-                and {verb for verb, _ in signature} <= DEDUP_VERBS):
-            continue
-        merged.append({"action": action, "why": "", "when": "", "done": "", "source": "재료"})
+        seen.add(action)
+        merged.append({"action": action,
+                       "why": "판단 미완료: 재료에서 얻은 조사 후보입니다. 담당자·영향 범위·증거 보존·대안을 먼저 정합니다.",
+                       "when": "검토 후", "done": "사내 로그로 실행 조건과 완료 기준을 확인하기 전에는 종결하지 않습니다.",
+                       "source": "재료", "readiness": "review_required"})
     merged.sort(key=lambda item: _when_rank(item["when"]))
     return merged
 
@@ -576,6 +569,11 @@ def _merge_named(key):
 # 잡히고 SHA-256 2개가 밀렸다).
 PRIMARY_IOC_LIMIT = 200
 
+# 종합 판단을 몇 라운드까지 반복할지 — 1차 판단 포함 총 라운드 수다. 기본값 2는
+# 기존 동작(1차 판단 + 후속 조회 1회)과 같은 상한이라 비용이 늘지 않는다. 질문이
+# 다 풀리거나 새로 얻은 것이 없으면 상한 전에 먼저 멈춘다.
+MAX_INVESTIGATION_ROUNDS = int(os.environ.get("INVESTIGATION_MAX_ROUNDS", "2"))
+
 LOOKUPS = (
     {"key": "user_action", "label": "URL 분석",
      "consumes": "도메인·URL", "run": _run_url, "merge": _merge_url},
@@ -609,20 +607,34 @@ def run_lookups(ctx, block, steps):
     조사&대응 전체를 버렸다 — VT 한 번 실패에 urlscan 결과까지 사라지는 구조였다.
     실패도 조사 과정에 남긴다. 조용히 빠지면 "원래 결과가 없었다"와 구별되지 않는다.
     """
-    for lookup in LOOKUPS:
-        if lookup["key"] not in ctx["route"]["tracks"]:
+    catalog = {lookup["key"]: lookup for lookup in LOOKUPS}
+    statuses = block.setdefault("lookup_status", [])
+    for key in dict.fromkeys(ctx["route"]["tracks"]):
+        lookup = catalog.get(key)
+        if lookup is None:
             continue
+        status = {"key": key, "started_at": common_utils.utc_now_iso()}
+        statuses.append(status)
         try:
             track = lookup["run"](ctx)
         except Exception as error:
+            status.update(status="failed", detail="조회 예외: " + type(error).__name__,
+                          completed_at=common_utils.utc_now_iso())
             steps.append({"track": lookup["label"],
                           "text": "조회 실패({}) — 이 트랙 결과는 비어 있습니다.".format(
                               str(error)[:70])})
             continue
         if not track:
+            status.update(status="unavailable", detail="사용 가능한 응답 없음; 미탐지와 구분",
+                          completed_at=common_utils.utc_now_iso())
             steps.append({"track": lookup["label"],
                           "text": "{}로 조회했지만 결과가 없었습니다.".format(lookup["consumes"])})
             continue
+        partial = any(re.search(r"실패|못했|못해|받지 못|키.*(?:없|미설정)|응답 없음|403|429|timeout", str(line), re.I)
+                      for line in track.get("steps") or [])
+        status.update(status="partial" if partial else "returned",
+                      detail="일부 조회 실패 포함" if partial else "응답 수집됨; 각 관측의 범위는 별도 판단",
+                      completed_at=common_utils.utc_now_iso())
         lookup["merge"](block, track)
         if track.get("generated_at"):
             block.setdefault("generated_at", track["generated_at"])
@@ -687,8 +699,18 @@ def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
                 found = (track or {}).get("findings") or []
                 lines.append("{} — {}".format(
                     value, found[0][:160] if found else "조회 결과 없음"))
+                if block is not None and track:
+                    existing = block.setdefault("vulnerability", {"cves": [], "findings": []})
+                    by_id = {entry["cve"]: entry for entry in existing.get("cves") or []}
+                    by_id.update({entry["cve"]: entry for entry in track.get("cves") or []})
+                    existing["cves"] = list(by_id.values())
+                    existing["findings"] = [line for entry in existing["cves"]
+                                            for line in vuln_hunter._findings_for_cve(entry)]
             elif kind == "package":
-                ecosystem = "npm" if value.startswith("@") else "pip"
+                ecosystem = item.get("ecosystem")
+                if ecosystem not in ("npm", "pip"):
+                    steps.append("패키지 {} — 생태계 미확인으로 후속 조회를 보류했습니다.".format(value))
+                    continue
                 info = supply_chain_hunter.lookup_package(ecosystem, value)
                 lines.append("패키지 {} — 레지스트리 존재 {} · OSV {}건".format(
                     value, info.get("exists"), info.get("osv_count")))
@@ -702,11 +724,20 @@ def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
 
 
 def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
-          body="", synthesize=True, targets=None, links=None, article_url=""):
+          body="", synthesize=True, targets=None, links=None, article_url="",
+          shared_primary=None, incident_label=""):
     """조사&대응 블록. 트랙별 결과를 한 dict로 합친다.
 
     반환 형태는 기존(seeds/patterns/findings)을 그대로 유지하고 route·malware만
     추가한다 — 이미 저장된 분석 기록을 그리는 화면 코드가 깨지지 않게.
+
+    shared_primary·incident_label은 build_for_article()이 종합 기사를 사건별로
+    나눠 이 함수를 여러 번 부를 때만 쓴다 — 둘 다 기본값(None/"")이면 이 함수는
+    지금까지와 완전히 같게 동작한다. shared_primary를 주면 (이미 기사 레벨에서 한
+    번 수집한) 1차 자료를 재사용해, 사건마다 같은 링크를 다시 수집하지 않는다.
+    incident_label을 주면 반환 직전에 steps의 track과 response 차단목록의 label
+    앞에 "[라벨]"을 붙여, 여러 사건의 결과를 하나로 합쳤을 때 어느 사건 것인지
+    구분할 수 있게 한다.
     """
     targets = targets or {}
     article_url = source_evidence.article_url(article_url)
@@ -724,6 +755,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     block = {"route": {key: route[key]
                        for key in ("primary", "label", "explain", "tracks", "scores")}}
     block["source_urls"] = source_urls
+    block["targets"] = targets
 
     # 지표가 없어도 본문에서 대응 재료가 나오면 블록을 만든다 — 예전에는 트랙이 없으면
     # 통째로 건너뛰어서, IOC를 싣지 않은 기사(실측 31건 중 25건)에는 조사&대응이 아예
@@ -759,28 +791,17 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
 
     # 기사가 인용한 1차 자료를 먼저 읽는다 — 2차 보도가 생략한 내용이 판단을 바꾼다
     # (실측: Sansec 원문 첫 줄에 기사가 "미할당"이라던 CVE 번호가 적혀 있었다).
-    primary = {"sources": [], "steps": []}
-    if links:
+    primary = shared_primary if shared_primary is not None else {"sources": [], "steps": []}
+    if links and shared_primary is None:
         try:
             primary = primary_sources.collect(links, article_url=article_url)
+            block.setdefault("lookup_status", []).extend(primary.get("attempts") or [])
             steps.extend({"track": "원문 확인", "text": line}
                          for line in primary.get("steps") or [])
         except Exception as error:
+            block.setdefault("lookup_status", []).append({"key": "primary", "status": "failed",
+                                                           "detail": "원문 수집 예외: " + type(error).__name__})
             steps.append({"track": "원문 확인", "text": "실패: {}".format(error)})
-
-    # 목표를 보고 어떤 조회를 돌릴지 고른다. 예전에는 지표 종류만 보고 정해서, 목표와
-    # 무관한 조회가 돌고 시간을 썼다. 계획을 못 세우면 예전 방식 그대로다.
-    if synthesize and targets.get("objective"):
-        try:
-            chosen = lookup_plan.plan(targets.get("objective"), targets.get("questions"),
-                                      [{"key": l["key"], "label": l["label"],
-                                        "consumes": l["consumes"]} for l in LOOKUPS],
-                                      route, targets=targets)
-            route["tracks"] = chosen["tracks"]
-            steps.extend({"track": "조회 계획", "text": line}
-                         for line in chosen.get("steps") or [])
-        except Exception as error:
-            steps.append({"track": "조회 계획", "text": "실패: {}".format(error)})
 
     # 1차 자료에서 읽은 글도 조회 재료다. 지표를 여기에만 싣는 연구 글이 많아서,
     # 넘기지 않으면 애써 받아온 IOC 표를 조회에 못 쓴다.
@@ -817,6 +838,24 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                                       len(fresh),
                                       ", ".join("{} {}건".format(k, v)
                                                 for k, v in sorted(kinds.items())))})
+    # Plan once after source enrichment, so reclassification cannot erase the plan.
+    if synthesize and targets.get("objective"):
+        try:
+            chosen = lookup_plan.plan(targets.get("objective"), targets.get("questions"),
+                                      [{"key": l["key"], "label": l["label"],
+                                        "consumes": l["consumes"]} for l in LOOKUPS],
+                                      route, targets=targets)
+            route["tracks"] = chosen["tracks"]
+            steps.extend({"track": "조회 계획", "text": line}
+                         for line in chosen.get("steps") or [])
+        except Exception as error:
+            steps.append({"track": "조회 계획", "text": "실패: {}".format(error)})
+    block["route"]["tracks"] = route["tracks"]
+    block["targets"] = targets
+    if primary.get("sources"):
+        block["primary"] = {"sources": [{key: source.get(key) for key in
+                              ("url", "host", "chars", "retrieved_at")}
+                              for source in primary["sources"]]}
     run_lookups({"iocs": iocs, "text": text, "title": title, "route": route,
                  "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets,
                  "body": body, "primary_text": primary_text, "block": block},
@@ -845,6 +884,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     block["steps_summary"] = summarize(block)
     # 대응 — 조사에서 나온 값과 본문의 구체값을 차단 목록·탐지 쿼리로 바꾼다.
     block["response"] = response_builder.build(block, iocs, primary=route["primary"], text=text)
+    analyst_workflow.prepare_queries(block.get("response"))
 
     # 마지막으로 조회 결과 전체를 읽고 판단한다. 여기까지는 값이 있으면 문장을 붙이는
     # 조립이었고, "그래서 무엇을 해야 하는가"를 정하는 단계가 없었다. 실패해도 앞의
@@ -882,9 +922,12 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                     more = primary_sources.collect(
                         [{"url": u} for u in intel_refs], article_url=article_url, limit=1)
                     primary["sources"] = (primary.get("sources") or []) + more["sources"]
+                    block.setdefault("lookup_status", []).extend(more.get("attempts") or [])
                     steps.extend({"track": "원문 확인", "text": line}
                                  for line in more.get("steps") or [])
                 except Exception as error:
+                    block.setdefault("lookup_status", []).append({"key": "primary", "status": "failed",
+                                                                   "detail": "참고 원문 수집 예외: " + type(error).__name__})
                     steps.append({"track": "원문 확인",
                                   "text": "참고 링크 원문 확인 실패: {}".format(error)})
             # 읽은 1차 자료를 블록에 남긴다. 남기지 않으면 산출물 점검이 "공개 분석·
@@ -893,7 +936,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             if primary.get("sources"):
                 block["primary"] = {"sources": [
                     {"url": source.get("url") or "", "host": source.get("host") or "",
-                     "chars": source.get("chars") or 0}
+                     "chars": source.get("chars") or 0,
+                     "retrieved_at": source.get("retrieved_at") or ""}
                     for source in primary["sources"]]}
             # 같은 계열의 과거 분석을 붙인다. 44건이 쌓여 있는데 어느 단계도 보지
             # 않고 있었다 — 같은 수법이 반복되는지는 기록에서만 보인다.
@@ -907,41 +951,119 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             except Exception as error:
                 steps.append({"track": "과거 분석", "text": "조회 실패: {}".format(error)})
             evidence = primary_sources.as_evidence(primary.get("sources"))
+            block["source_urls"] = list(dict.fromkeys(source_urls + [
+                source["url"] for source in primary.get("sources") or [] if source.get("url")]))
+            if set(block["source_urls"]) != set(source_urls):
+                block["response"] = response_builder.build(block, iocs, primary=route["primary"], text=text)
+                analyst_workflow.prepare_queries(block.get("response"))
+            history_evidence = past_analyses.as_evidence(related)
+
+            # 확인질문별 진행 원장 — "검색을 했다"가 아니라 "질문이 풀렸다"로 반복을
+            # 멈춘다(question_status는 response_synth가 매 라운드 채운다).
+            ledger = {q: "open" for q in (targets.get("questions") or [])}
+
+            def _apply_status(verdict_data):
+                for row in (verdict_data or {}).get("question_status") or []:
+                    question = row.get("question")
+                    if question in ledger:
+                        ledger[question] = row.get("status") or ledger[question]
+
             verdict = response_synth.synthesize(
                 title, text, targets, block, primary=evidence,
-                history=past_analyses.as_evidence(related))
-            # URLhaus가 URL에서 알려 준 페이로드 해시. 기사에 없던 값이라 판단이
-            # 요청할 수 없지만, 샘플 확보로 바로 이어지는 것이라 우리가 넣는다.
-            auto = []
-            known = {str(item.get("value") or "").lower() for item in iocs or []}
-            for value in ((block.get("intel") or {}).get("discovered_hashes") or []):
-                if value.lower() not in known:
-                    auto.append({"type": "hash", "value": value,
-                                 "question": "URLhaus가 이 URL의 페이로드로 준 해시가 "
-                                             "실제 무엇인지"})
-            pending = (verdict.get("followups") or []) if verdict else []
-            pending = auto + list(pending)
-            # 판단이 남긴 질문 중 우리 도구로 답할 수 있는 것을 한 바퀴 더 조회하고,
-            # 그 결과로 판단을 다시 받는다. 새로 얻은 것이 없으면 다시 받지 않는다.
-            if pending:
-                extra_lines, extra_steps = _run_followups(
-                    pending, urlscan_key=urlscan_key, vt_key=vt_key, block=block)
-                steps.extend({"track": "후속 조회", "text": line} for line in extra_steps)
-                if extra_lines:
-                    again = response_synth.synthesize(
-                        title, text, targets, block, primary=evidence,
-                        extra="\n".join(extra_lines),
-                        history=past_analyses.as_evidence(related))
-                    if again:
-                        again["followup_evidence"] = extra_lines
-                        # 2차 판단이 새로 낸 후속 조회 요청은 버린다. 한 바퀴만 돌기로
-                        # 했으니 그것들은 실행되지 않는데, 남겨 두면 화면에서
-                        # "요청한 것과 다른 것을 조회했다"로 읽힌다(실측: 요청 4건과
-                        # 실행 4건이 하나도 겹치지 않았다). 실행한 것만 남긴다.
-                        again["followups"] = pending
-                        verdict = again
+                history=history_evidence, article=body, related=related)
+            _apply_status(verdict)
+
+            # 후속 조회를 여러 라운드로 돈다(상한 MAX_INVESTIGATION_ROUNDS). 질문이
+            # 다 풀리거나, 더 조회할 것이 없거나, 새로 얻은 것이 없으면 상한 전에
+            # 먼저 멈춘다. 각 라운드는 세 가지를 새 조회 재료로 삼는다: URLhaus가
+            # 알려 준 페이로드 해시(기존 로직 그대로), 판단이 요청한 후속 조회
+            # (_run_followups — 검증된 값 그대로 조회하는 경로라 새 트랙을 여는
+            # classify() 재실행과 결과가 같다), 그리고 "동일 캠페인"으로 확정된
+            # 관련 보고서의 IOC(관련성 판정 자체는 이미 response_synth가 그라운딩을
+            # 거쳤다 — 여기서는 그 판정을 실행으로 옮길 뿐이다). 질문이 남아 있으면
+            # web_search도 그 질문에서 뽑은 검색어로 다시 돈다(같은 용어를 반복하지
+            # 않고 검색을 바꾼다).
+            executed_pending = None
+            round_num = 1
+            while verdict and round_num < MAX_INVESTIGATION_ROUNDS:
+                open_questions = [q for q, status in ledger.items() if status != "answered"]
+                if ledger and not open_questions:
+                    steps.append({"track": "조사 반복",
+                                  "text": "확인질문이 모두 풀려 반복을 멈췄습니다."})
+                    break
+                known = {str(item.get("value") or "").lower() for item in iocs or []}
+                pending = []
+                for value in ((block.get("intel") or {}).get("discovered_hashes") or []):
+                    if value.lower() not in known:
+                        pending.append({"type": "hash", "value": value,
+                                        "question": "URLhaus가 이 URL의 페이로드로 준 해시가 "
+                                                    "실제 무엇인지"})
+                        known.add(value.lower())
+                pending.extend(verdict.get("followups") or [])
+                for relation in verdict.get("campaign_relations") or []:
+                    if relation.get("relation") != "동일 캠페인":
+                        continue
+                    candidate = next((r for r in related
+                                      if r.get("title") == relation.get("title")), None)
+                    for item in (candidate or {}).get("iocs") or []:
+                        value = str(item.get("value") or "").strip()
+                        kind = {"sha256": "hash", "sha1": "hash", "md5": "hash",
+                               "domain": "domain", "ipv4": "ip", "cve": "cve"}.get(item.get("type"))
+                        if value and kind and value.lower() not in known:
+                            pending.append({"type": kind, "value": value,
+                                            "question": "관련 보고서(\"{}\")가 같은 캠페인의 "
+                                                        "지표로 제시한 값인지".format(
+                                                            relation.get("title", ""))[:120]})
+                            known.add(value.lower())
+                if not pending and not open_questions:
+                    break
+                extra_lines, extra_steps = [], []
+                if pending:
+                    extra_lines, extra_steps = _run_followups(
+                        pending, urlscan_key=urlscan_key, vt_key=vt_key, block=block)
+                    steps.extend({"track": "후속 조회", "text": line} for line in extra_steps)
+                    executed_pending = pending
+                if open_questions:
+                    web_round = None
+                    try:
+                        answered_refs = set(((block.get("intel") or {}).get("references") or [])
+                                            + ((block.get("web") or {}).get("references") or []))
+                        web_round = web_search.analyze(targets, answered=answered_refs,
+                                                       open_questions=open_questions)
+                    except Exception:
+                        web_round = None
+                    if web_round:
+                        existing_web = block.get("web") or {}
+                        block["web"] = dict(web_round, findings=(
+                            (existing_web.get("findings") or []) + (web_round.get("findings") or [])),
+                            references=list(dict.fromkeys(
+                                (existing_web.get("references") or [])
+                                + (web_round.get("references") or []))))
+                        steps.extend({"track": "연구 자료 검색", "text": line}
+                                     for line in web_round.get("steps") or [])
+                        extra_lines = extra_lines + (web_round.get("findings") or [])
+                block["response"] = response_builder.build(block, iocs, primary=route["primary"], text=text)
+                analyst_workflow.prepare_queries(block.get("response"))
+                if not extra_lines:
+                    break
+                again = response_synth.synthesize(
+                    title, text, targets, block, primary=evidence,
+                    extra="\n".join(extra_lines), history=history_evidence,
+                    article=body, related=related)
+                round_num += 1
+                if not again:
+                    break
+                again["followup_evidence"] = (verdict.get("followup_evidence") or []) + extra_lines
+                verdict = again
+                _apply_status(verdict)
+            if verdict is not None and executed_pending is not None:
+                # 실행한 것만 남긴다 — 화면에서 "요청한 것과 다른 것을 조회했다"로
+                # 읽히지 않게(마지막으로 실제 돌린 라운드의 목록만).
+                verdict["followups"] = executed_pending
             if verdict:
                 block["synthesis"] = verdict
+                block["questions"] = [{"question": q, "status": status}
+                                      for q, status in ledger.items()]
                 # 내놓기 전에 한 번 더 본다. 차단 목록은 지표에서 기계적으로 나오고
                 # 판단은 그 뒤에 따로 쓰여서, 둘이 어긋나도 아무도 몰랐다(실측:
                 # 판단이 "정상 CDN이 악용된 것"이라고 적은 도메인이 차단 후보에
@@ -962,7 +1084,16 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
         except Exception as error:
             steps.append({"track": "종합 판단", "text": "실패: {}".format(error)})
             block["steps"] = steps
-    if not route["tracks"] and not block["response"]:
+    analyst_workflow.finalize(block, targets)
+    if incident_label:
+        # build_for_article()이 사건별로 이 함수를 불러 결과를 합칠 때만 쓰인다 —
+        # 어느 항목이 어느 사건 것인지 화면에서 구분할 수 있게 라벨만 덧붙인다.
+        for step in block.get("steps") or []:
+            step["track"] = "[{}] {}".format(incident_label, step.get("track") or "")
+        for group in (block.get("response") or {}).get("blocklists") or []:
+            group["label"] = "[{}] {}".format(incident_label, group.get("label") or "")
+        block["incident_label"] = incident_label
+    if not route["tracks"] and not block["response"] and not block.get("synthesis"):
         # 이유를 말할 수 있으면 카드를 남긴다 — 빈 화면보다 "왜 없는지"가 낫다.
         if targets and targets.get("investigable") is False:
             block["steps"] = block.get("steps") or []
@@ -970,6 +1101,147 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             return block
         return None      # 근거도 없이 비어 있으면 예전처럼 카드를 만들지 않는다
     return block
+
+
+def log(message):
+    print(message)
+
+
+def build_for_article(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
+                      body="", synthesize=True, targets=None, links=None, article_url=""):
+    """build()의 기사 단위 진입점 — analysis_worker.py는 build() 대신 이 함수를 쓴다.
+
+    사건이 하나(대다수 기사)면 build()를 신규 인자 없이 그대로 한 번 불러 반환한다
+    — 오늘과 완전히 같은 코드 경로다. 종합 기사(analysis_targets가 사건구분을 둘
+    이상 파싱했을 때)만 incident_scope.split()으로 나눈 사건마다 build()를 따로
+    불러 결과를 합친다.
+
+    사건을 나누는 이유는 response_synth._corpus()가 investigation 전체를 문자열로
+    이어붙여 근거를 대조하기 때문이다 — 한 번의 build() 호출 안에서 여러 사건을
+    같이 다루면 사건 A의 판단이 사건 B의 IOC를 근거로 대조해도 걸러지지 않는다.
+    build()를 사건마다 따로 불러 block을 물리적으로 분리하면, response_synth.py를
+    더 건드리지 않고 이 문제가 없어진다.
+    """
+    incidents = incident_scope.split(targets or {}, iocs)
+    if len(incidents) < 2:
+        return build(iocs, text=text, urlscan_key=urlscan_key, vt_key=vt_key, title=title,
+                     category=category, body=body, synthesize=synthesize,
+                     targets=incidents[0]["targets"], links=links, article_url=article_url)
+
+    # 1차 자료는 기사 레벨 자료라 사건마다 반복해서 수집할 이유가 없다 — 한 번만
+    # 받아 모든 사건의 build()에 그대로 넘긴다.
+    shared_primary = {"sources": [], "steps": []}
+    if links:
+        try:
+            shared_primary = primary_sources.collect(links, article_url=article_url)
+        except Exception as error:
+            shared_primary = {"sources": [], "steps": [
+                "1차 자료 수집 실패(사건 공통): {}".format(error)]}
+
+    sub_blocks = []
+    for incident in incidents:
+        try:
+            sub = build(incident["iocs"], text=text, urlscan_key=urlscan_key, vt_key=vt_key,
+                       title=title, category=category, body=body, synthesize=synthesize,
+                       targets=incident["targets"], links=links, article_url=article_url,
+                       shared_primary=shared_primary, incident_label=incident["label"])
+        except Exception as error:
+            sub = None
+            log("[-] 사건 \"{}\" 조사 실패: {}".format(incident["label"], error))
+        if sub:
+            sub["incident_id"] = incident["incident_id"]
+            sub_blocks.append(sub)
+
+    if not sub_blocks:
+        return None
+    return _combine_incidents(sub_blocks)
+
+
+def _combine_incidents(sub_blocks):
+    """사건별 block N개를 기사 하나의 block으로 합친다.
+
+    기존 대시보드가 읽는 키(response/synthesis/steps/action_plan)는 모든 사건의
+    내용을 이어붙여 채운다 — 키 이름은 그대로라 기존 화면 코드가 그대로 동작하고,
+    내용만 사건별로 올바르게 분리된 채로 들어간다(build()가 이미 incident_label로
+    각 항목에 "[사건 라벨]"을 붙여 뒀다). 사건 단위로 다시 보고 싶은 화면을 위해
+    block["incidents"]에 사건별 block 전체를 그대로 남긴다.
+    """
+    labels = [b.get("incident_label") or (b.get("route") or {}).get("label") or ""
+             for b in sub_blocks]
+    combined = {
+        "route": {
+            "primary": "multi",
+            "label": "종합 기사 — 사건 {}건".format(len(sub_blocks)),
+            "explain": " / ".join(label for label in labels if label),
+            "tracks": sorted({track for b in sub_blocks
+                              for track in (b.get("route") or {}).get("tracks") or []}),
+            "scores": {},
+        },
+        "source_urls": sorted({url for b in sub_blocks for url in b.get("source_urls") or []}),
+        "targets": sub_blocks[0].get("targets") or {},
+        "seeds": [seed for b in sub_blocks for seed in b.get("seeds") or []],
+        "patterns": [pattern for b in sub_blocks for pattern in b.get("patterns") or []],
+        "findings": [finding for b in sub_blocks for finding in b.get("findings") or []],
+        "steps": [step for b in sub_blocks for step in b.get("steps") or []],
+        "incidents": sub_blocks,
+    }
+    responses = [b.get("response") for b in sub_blocks if b.get("response")]
+    if responses:
+        provenance = {}
+        for response in responses:
+            provenance.update(response.get("provenance") or {})
+        combined["response"] = {
+            "blocklists": [group for r in responses for group in r.get("blocklists") or []],
+            "kql": [query for r in responses for query in r.get("kql") or []],
+            "actions": [action for r in responses for action in r.get("actions") or []],
+            "commands": [command for r in responses for command in r.get("commands") or []],
+            "provenance": provenance,
+            "generated_at": common_utils.utc_now_iso(),
+        }
+    else:
+        combined["response"] = None
+    verdicts = [b.get("synthesis") for b in sub_blocks if b.get("synthesis")]
+    if verdicts:
+        # synthesis를 한 dict로 억지로 합치면(예: confirmed 리스트를 그냥 이어붙이면)
+        # 어느 사건 것인지 다시 알 수 없어진다. 대표 판단(첫 사건) + 사건별 원본
+        # 목록(per_incident)으로 둔다 — 기존 단일-사건 화면 코드는 대표 판단을,
+        # 사건 단위 화면은 per_incident를 읽으면 된다.
+        combined["synthesis"] = dict(verdicts[0])
+        combined["synthesis"]["per_incident"] = [
+            {"incident_id": b.get("incident_id"), "label": b.get("incident_label") or "",
+             **(b.get("synthesis") or {})}
+            for b in sub_blocks if b.get("synthesis")
+        ]
+        combined["synthesis"]["headline"] = " / ".join(
+            v.get("headline") or "" for v in verdicts if v.get("headline"))
+    action_plans = [b.get("action_plan") for b in sub_blocks if b.get("action_plan")]
+    if action_plans:
+        combined["action_plan"] = [step for plan in action_plans for step in plan]
+    questions = [question for b in sub_blocks for question in b.get("questions") or []]
+    if questions:
+        combined["questions"] = questions
+    coverage = [b.get("coverage") for b in sub_blocks if b.get("coverage")]
+    if coverage:
+        combined["coverage"] = coverage[0]
+    gaps = [gap for b in sub_blocks for gap in b.get("gaps") or []]
+    if gaps:
+        combined["gaps"] = gaps
+    combined["steps_summary"] = " ".join(
+        summary for summary in (b.get("steps_summary") for b in sub_blocks) if summary)
+    related = [item for b in sub_blocks for item in b.get("related") or []]
+    if related:
+        combined["related"] = related
+    primaries = [b.get("primary") for b in sub_blocks if b.get("primary")]
+    if primaries:
+        seen_urls, merged_sources = set(), []
+        for primary in primaries:
+            for source in primary.get("sources") or []:
+                if source.get("url") not in seen_urls:
+                    seen_urls.add(source.get("url"))
+                    merged_sources.append(source)
+        combined["primary"] = {"sources": merged_sources}
+    combined["lookup_status"] = [status for b in sub_blocks for status in b.get("lookup_status") or []]
+    return combined
 
 
 if __name__ == "__main__":

@@ -39,6 +39,15 @@ SPEC_TEMPLATE = """
 성공기준·부족한것·확인질문 네 줄은 본문에서 뽑는 것이 아니라 네가 판단해서 쓰는 줄이고,
 어떤 기사에서도 빠질 수 없다 — 본문에 근거가 없다는 이유로 건너뛰지 마라.
 {ENV}
+사건구분: 이 기사가 서로 무관하게 벌어진 사건 여러 건을 하나로 묶은 종합 기사라면, 각
+  사건에 짧은 라벨을 붙여 쉼표로 나열하라(예: GhostCode 침해, WaterPlum 캠페인). 한
+  사건을 여러 각도로 설명하는 기사면 사건은 하나다 — "없음"이라고 써라.
+  사건이 둘 이상일 때만: 아래 도메인부터 명령까지의 모든 값 뒤에, 그 값이 속한 사건
+  번호를 괄호로 붙여라(사건구분에 쓴 순서가 번호다). 예) 도메인: a.example(1), b.example(2)
+  값 하나가 여러 사건에 걸치면 콤마로 번호를 더 쓴다. 예) c.example(1,2)
+  번호를 안 붙인 값은 사건 1로 본다. 목표·확인질문·성공기준·부족한것·주력 다섯 줄도
+  사건마다 따로 쓴다 — 줄 이름 뒤에 번호를 붙인다: 목표1:, 목표2:, 확인질문1:,
+  확인질문2: 처럼. 사건이 하나면 지금까지처럼 번호 없이 각 줄을 한 번만 쓴다.
 도메인:
 IP:
 해시:
@@ -130,7 +139,10 @@ FIELD_MAP = {
 }
 EMPTY_VALUES = {"없음", "해당 없음", "해당없음", "-", "n/a", "na", "none", "null", ""}
 
-LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?([A-Za-z가-힣]+)\s*[:：]\s*(.*)$")
+LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?([A-Za-z가-힣]+)(\d{0,2})\s*[:：]\s*(.*)$")
+# 값 끝에 붙는 사건 번호 태그. "a.example(1)" / "b.example(1,2)".
+INCIDENT_TAG_RE = re.compile(r"\(([\d,\s]+)\)\s*$")
+MIN_INCIDENTS_FOR_TAGGING = 2
 # 모델이 "주력"으로 쓸 수 있는 축. investigation.TRACK_LABELS와 같은 이름이어야 한다 —
 # 여기서만 아는 이름을 쓰면 선언이 조용히 버려진다.
 PRIMARY_AXES = ("user_action", "malware", "vulnerability", "supply_chain")
@@ -140,6 +152,15 @@ DECOR_RE = re.compile(r"^[\s*_`\"']+|[\s*_`\"']+$")
 
 def _clean(value):
     return DECOR_RE.sub("", value or "").strip()
+
+
+def _strip_incident_tag(value):
+    """값 끝의 "(1)"/"(1,2)" 사건 번호 태그를 떼어 (값, [번호,...])로 돌려준다."""
+    match = INCIDENT_TAG_RE.search(value or "")
+    if not match:
+        return value, []
+    nums = [int(n) for n in re.findall(r"\d+", match.group(1))]
+    return value[:match.start()].strip(), nums
 
 
 def _split(value):
@@ -170,8 +191,8 @@ def _split(value):
 # 그대로 화면에 나갔다). 그래서 헤더가 없으면 필드 줄이 이어지는 구간을 찾아서 쓴다.
 FIELD_LINE_RE = re.compile(
     "^[ " + chr(9) + "]*(?:[-*][ ]*)?(" + "|".join(FIELD_MAP)
-    + "|조사가능|조사불가사유|목표|확인질문|성공기준|주력|부족한것)"
-    "[ ]*[:：]", re.M)
+    + "|조사가능|조사불가사유|사건구분|목표|확인질문|성공기준|주력|부족한것)"
+    r"\d{0,2}[ ]*[:：]", re.M)
 # 이만큼 이어져야 목록으로 본다. 한두 줄이면 본문 문장이 우연히 "제품: ..." 형태인
 # 경우와 구별되지 않는다.
 MIN_FIELD_LINES = 4
@@ -196,19 +217,48 @@ def _locate(text):
     return start, end, text[start:end]
 
 
+def _axis(value):
+    # 어휘 밖의 값은 버린다. 여기서 거르지 않으면 "네트워크 침투" 같은
+    # 자유 문장이 트랙 이름 자리에 들어와 조사 계획이 통째로 어긋난다.
+    candidate = _clean(value).lower().replace("-", "_").replace(" ", "_")
+    return candidate if candidate in PRIMARY_AXES else ""
+
+
 def parse(text):
-    """[조사 대상] 섹션을 dict로. 섹션이 없으면 빈 dict."""
+    """[조사 대상] 섹션을 dict로. 섹션이 없으면 빈 dict.
+
+    사건구분이 둘 이상이면 종합 기사다 — 값마다 붙은 "(N)" 태그로 어느 사건 소속인지
+    가르고(incident_map), 목표·확인질문·성공기준·부족한것·주력은 사건별 번호 줄
+    (목표1:, 목표2: ...)에서 따로 모은다(*_by_incident). 사건이 하나(대다수)면 이
+    분기를 전혀 타지 않아 기존 출력과 완전히 같다 — incident_scope.split()이 이
+    결과를 소비한다.
+    """
     located = _locate(text)
     if not located:
         return {}
-    found = {key: [] for key in FIELD_MAP.values()}
-    investigable, reason = None, ""
-    objective, questions, criteria, primary, gaps = "", [], [], "", []
+
+    raw_lines = []
+    incidents = []
     for line in located[2].splitlines():
         parsed = LINE_RE.match(line)
         if not parsed:
             continue
-        name, value = _clean(parsed.group(1)), parsed.group(2)
+        name, num, value = _clean(parsed.group(1)), parsed.group(2), parsed.group(3)
+        if name == "사건구분":
+            candidates = _split(value)
+            if len(candidates) >= MIN_INCIDENTS_FOR_TAGGING:
+                incidents = candidates
+            continue
+        raw_lines.append((name, num, value))
+
+    multi = len(incidents) >= MIN_INCIDENTS_FOR_TAGGING
+    found = {key: [] for key in FIELD_MAP.values()}
+    investigable, reason = None, ""
+    objective, questions, criteria, primary, gaps = "", [], [], "", []
+    by_incident = {"objective": {}, "questions": {}, "criteria": {}, "gaps": {}, "primary": {}}
+    incident_map = {}
+
+    for name, num, value in raw_lines:
         if name == "조사가능":
             cleaned = _clean(value)
             investigable = cleaned.startswith("예") or cleaned.lower().startswith("y")
@@ -216,27 +266,42 @@ def parse(text):
         if name == "조사불가사유":
             reason = _clean(value)
             continue
-        if name == "목표":
-            objective = _clean(value)
-            continue
-        if name == "확인질문":
-            questions = _split(value)
-            continue
-        if name == "성공기준":
-            criteria = _split(value)
-            continue
-        if name == "부족한것":
-            gaps = _split(value)
-            continue
-        if name == "주력":
-            # 어휘 밖의 값은 버린다. 여기서 거르지 않으면 "네트워크 침투" 같은
-            # 자유 문장이 트랙 이름 자리에 들어와 조사 계획이 통째로 어긋난다.
-            candidate = _clean(value).lower().replace("-", "_").replace(" ", "_")
-            primary = candidate if candidate in PRIMARY_AXES else ""
+        if name in ("목표", "확인질문", "성공기준", "부족한것", "주력"):
+            slot = {"목표": "objective", "확인질문": "questions", "성공기준": "criteria",
+                    "부족한것": "gaps", "주력": "primary"}[name]
+            if multi and num:
+                if slot == "objective":
+                    by_incident[slot][int(num)] = _clean(value)
+                elif slot == "primary":
+                    by_incident[slot][int(num)] = _axis(value)
+                else:
+                    by_incident[slot][int(num)] = _split(value)
+                continue
+            if slot == "objective":
+                objective = _clean(value)
+            elif slot == "primary":
+                primary = _axis(value)
+            elif slot == "questions":
+                questions = _split(value)
+            elif slot == "criteria":
+                criteria = _split(value)
+            else:
+                gaps = _split(value)
             continue
         key = FIELD_MAP.get(name)
-        if key:
-            found[key] = _split(value)
+        if not key:
+            continue
+        values = _split(value)
+        if multi:
+            clean_values = []
+            for item in values:
+                clean_value, tag_nums = _strip_incident_tag(item)
+                clean_values.append(clean_value)
+                if tag_nums:
+                    incident_map.setdefault(key, {})[clean_value.lower()] = tag_nums
+            found[key] = clean_values
+        else:
+            found[key] = values
 
     found = {key: values for key, values in found.items() if values}
     if investigable is None:
@@ -262,6 +327,15 @@ def parse(text):
     # 말을 담을 곳이 없어, 로그를 사람이 읽고 나서야 조회기를 만들었다).
     if gaps:
         found["gaps"] = gaps
+    if multi:
+        found["incidents"] = incidents
+        if incident_map:
+            found["incident_map"] = incident_map
+        for slot, key in (("objective", "objectives_by_incident"), ("questions", "questions_by_incident"),
+                          ("criteria", "criteria_by_incident"), ("gaps", "gaps_by_incident"),
+                          ("primary", "primary_by_incident")):
+            if by_incident[slot]:
+                found[key] = by_incident[slot]
     return found
 
 

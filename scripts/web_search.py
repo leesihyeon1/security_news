@@ -234,8 +234,32 @@ def security_query(term):
     return '"{}" {}'.format(term, SECURITY_CONTEXT)
 
 
-def terms_from(targets, exclude=()):
-    """검색할 이름 — 캠페인·악성코드 이름과 CVE. 이미 답이 나온 것은 뺀다."""
+# 질문 재검색에서 뺄 흔한 조사·질문 어미. 정교한 형태소 분석이 아니라, 검색어로
+# 못 쓸 토큰을 골라내는 정도의 휴리스틱이다.
+QUESTION_STOPWORDS = {
+    "이", "가", "을", "를", "은", "는", "의", "에", "에서", "으로", "로", "인가",
+    "있는가", "없는가", "확인", "여부", "무엇인가", "얼마나", "어떤",
+}
+# 라운드 재검색에서 질문 기반 검색어를 몇 개까지 더할지. 고정 용어(malware/actors/
+# cves)가 다 안 풀렸을 때만 쓰이므로 한도를 넉넉히 늘리지 않는다.
+MAX_QUESTION_TERMS = 1
+
+
+def _question_keyword(question):
+    """질문 문장에서 검색어로 쓸 핵심어 하나를 뽑는다 — 조사·흔한 어미를 뺀 토큰 중
+    가장 긴 것. 이 낱말이 이번 라운드에 실제로 검색된 적 없는 새 검색어가 된다."""
+    text = re.sub(r"[?？]", "", question or "")
+    tokens = [t for t in re.split(r"\s+", text) if len(t) >= 2 and t not in QUESTION_STOPWORDS]
+    return max(tokens, key=len) if tokens else ""
+
+
+def terms_from(targets, exclude=(), open_questions=None):
+    """검색할 이름 — 캠페인·악성코드 이름과 CVE. 이미 답이 나온 것은 뺀다.
+
+    open_questions를 주면(2라운드 이상), 고정 용어만으로 못 채운 자리에 아직 안
+    풀린 질문에서 뽑은 핵심어를 더한다 — 1라운드가 0건이어도 같은 용어를 그대로
+    다시 검색하지 않고 질문을 바꿔 재시도하게 된다.
+    """
     out = []
     lowered = {str(x).lower() for x in exclude}
     for key in ("malware", "actors", "cves"):
@@ -245,20 +269,29 @@ def terms_from(targets, exclude=()):
                 continue
             if value not in out:
                 out.append(value)
-    return out[:MAX_QUERIES_PER_ARTICLE]
+    out = out[:MAX_QUERIES_PER_ARTICLE]
+    for question in (open_questions or [])[:4]:
+        if len(out) >= MAX_QUERIES_PER_ARTICLE + MAX_QUESTION_TERMS:
+            break
+        keyword = _question_keyword(question)
+        if (keyword and len(keyword) >= MIN_TERM_CHARS
+                and keyword.lower() not in lowered and keyword not in out):
+            out.append(keyword)
+    return out
 
 
-def analyze(targets=None, answered=()):
+def analyze(targets=None, answered=(), open_questions=None):
     """웹 검색 트랙. 키가 없거나 검색할 이름이 없으면 None.
 
     answered에는 다른 조회에서 이미 자료를 찾은 이름을 넘긴다 — 같은 것을 또
-    검색해서 한도를 쓰지 않으려는 것이다.
+    검색해서 한도를 쓰지 않으려는 것이다. open_questions는 2라운드 이상에서 아직
+    안 풀린 질문을 넘겨 검색어를 바꿔 보게 한다(terms_from 참고).
 
     반환에 references를 실어 보낸다. 그 링크들이 1차 자료 수집의 입력이 된다.
     """
     if not available():
         return None
-    terms = terms_from(targets, exclude=answered)
+    terms = terms_from(targets, exclude=answered, open_questions=open_questions)
     if not terms:
         return None
 

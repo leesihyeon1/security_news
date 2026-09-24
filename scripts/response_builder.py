@@ -203,6 +203,30 @@ def _collect(block, iocs, text=""):
             if 4 < len(name) < 60 and name not in artifacts:
                 artifacts.append(name)
 
+    # 값 하나하나가 왜 이 버킷에 있는지 — 역할 분류는 지금까지 버킷 정렬에만 쓰이고
+    # 버려졌다. 부가 딕셔너리로 남겨 두면(기존 리스트 모양은 안 바꾸고) 대응 문구가
+    # "이 URL은 이런 근거로 이 역할이다"까지 좁힐 수 있고, 화면에서 값 단위로 왜
+    # 여기 있는지 되짚을 수 있다.
+    provenance = {}
+    for value in ioc_domains:
+        provenance[value] = {"role": "lure", "bucket": "domains"}
+    for value in ioc_ips:
+        provenance[value] = {"role": "lure", "bucket": "ips"}
+    for value in ioc_hashes:
+        provenance[value] = {"role": "hash", "bucket": "hashes"}
+    for value in host_roles["public_service"]:
+        provenance[value] = {"role": "public_service", "bucket": "public_service"}
+    for value in host_roles["leak_site"]:
+        provenance[value] = {"role": "leak_site", "bucket": "leak_site"}
+    for value in host_roles["tor"]:
+        provenance[value] = {"role": "tor", "bucket": "tor"}
+    for ip in named_ips:
+        provenance[ip] = {"role": "named_ip", "bucket": "named_ips"}
+    for value in observed_hosts:
+        provenance[value] = {"role": "observed", "bucket": "observed_hosts"}
+    for value in observed_ips:
+        provenance[value] = {"role": "observed", "bucket": "observed_ips"}
+
     return {
         "named_ips": ["{} ({})".format(
             ip, ", ".join((entry.get("hostnames") or [])[:3]) or entry.get("asn") or "?")
@@ -217,6 +241,7 @@ def _collect(block, iocs, text=""):
         "observed_hosts": observed_hosts[:MAX_VALUES_PER_LIST],
         "observed_ips": observed_ips[:MAX_VALUES_PER_LIST],
         "artifacts": artifacts[:20],
+        "provenance": provenance,
     }
 
 
@@ -488,8 +513,8 @@ def build(block, iocs, primary="", text=""):
                        "이 유형은 사용자가 직접 명령을 실행해야 감염이라, 접속만으로는 "
                        "감염으로 볼 수 없다.")
     if primary == "malware" and values["hashes"]:
-        actions.append("해시가 걸린 단말은 지속성(예약 작업·Run 키)까지 확인해 제거한다 — "
-                       "파일만 지우면 재감염된다.")
+        actions.append("해시가 관측된 단말은 파일 존재와 실제 실행을 구분하고, 프로세스·통신·"
+                       "지속성 증거를 보존한다. 침해가 확인되면 관측된 지속성 방식과 영향 범위에 맞춰 제거·복구한다.")
     if found["behaviours"]:
         actions.append("기사가 서술한 행위 {}가지를 탐지 쿼리로 만들어 뒀다 — IOC가 바뀌어도 "
                        "남는 신호이니 예외 처리 후 상시 탐지로 올리는 것을 권한다: {}."
@@ -542,4 +567,5 @@ def build(block, iocs, primary="", text=""):
     for query in queries:
         query["query"] = pattern_synth.format_kql(query.get("query") or "")
     return {"blocklists": blocklists, "kql": queries, "actions": actions,
-            "commands": commands, "generated_at": common_utils.utc_now_iso()}
+            "commands": commands, "generated_at": common_utils.utc_now_iso(),
+            "provenance": values.get("provenance") or {}}
