@@ -21,6 +21,7 @@ import re
 import urllib.parse
 
 import requests
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
 import network_safety
@@ -226,27 +227,32 @@ def fetch_text(url):
 def collect(links, article_url="", limit=MAX_SOURCES):
     """고른 1차 자료를 실제로 읽어 온다.
 
-    반환: {"sources": [{url, host, chars, text}], "steps": [...]}
+    반환: {"sources": [{url, host, chars, text, retrieved_at}], "steps": [...], "attempts": [...]}
     실패도 과정에 남긴다 — 읽지 못한 원문이 있다는 사실이 판단에 영향을 준다.
     """
     candidates = pick(links, article_url=article_url, limit=limit)
-    sources, steps = [], []
+    sources, steps, attempts = [], [], []
     if not candidates:
         steps.append("기사가 인용한 1차 자료(벤더 권고·연구 블로그)가 없어 원문 확인은 "
                      "건너뜁니다 — 뉴스 매체 링크만 있었습니다.")
-        return {"sources": sources, "steps": steps}
+        return {"sources": sources, "steps": steps, "attempts": attempts}
 
     for item in candidates:
         text = fetch_text(item["url"])
+        attempts.append({"key": "primary", "url": item["url"],
+                         "status": "returned" if text else "unavailable",
+                         "detail": "원문 수집됨" if text else "원문을 읽지 못함; 근거로 사용하지 않음",
+                         "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")})
         if not text:
             steps.append("1차 자료 {}를 열지 못했습니다 — 그쪽 내용은 판단에 반영되지 "
                          "않았습니다.".format(item["host"]))
             continue
         sources.append({"url": item["url"], "host": item["host"],
-                        "chars": len(text), "text": text})
+                        "chars": len(text), "text": text,
+                        "retrieved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")})
         steps.append("기사가 인용한 1차 자료 {}를 직접 읽었습니다({:,}자) — 2차 보도가 "
                      "생략한 내용을 확인하려는 것입니다.".format(item["host"], len(text)))
-    return {"sources": sources, "steps": steps}
+    return {"sources": sources, "steps": steps, "attempts": attempts}
 
 
 def as_evidence(sources):

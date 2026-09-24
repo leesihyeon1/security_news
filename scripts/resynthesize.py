@@ -38,6 +38,7 @@ import output_critic
 import past_analyses
 import primary_sources
 import response_synth
+import analyst_workflow
 
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
@@ -115,6 +116,7 @@ def rebuild(record):
     except Exception as error:
         log("    [-] 산출물 검토 실패(판단에는 영향 없음): {}".format(str(error)[:70]))
     block["action_plan"] = investigation.merge_actions(verdict, block.get("response"))
+    analyst_workflow.finalize(block, targets)
     block["steps"] = (block.get("steps") or []) + [
         {"track": "종합 판단", "text": line} for line in verdict.get("steps") or []]
     # store_result와 같은 경계 — 이 경로도 인증 없는 공개 API로 나가는 레코드를

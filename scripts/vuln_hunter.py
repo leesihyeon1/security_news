@@ -246,6 +246,9 @@ def analyze(cves, text="", with_nvd=True, products=None):
         entry = {
             "cve": cve,
             "kev": kev.get(cve) or {},
+            "kev_checked": bool(kev),
+            "epss_checked": cve in epss,
+            "nvd_checked": bool(detail),
             "epss": epss.get(cve),
             "nvd": detail,
             "url": "https://nvd.nist.gov/vuln/detail/{}".format(cve),
@@ -280,24 +283,23 @@ def _findings_for_cve(entry):
     lines.append(head + ".")
 
     if kev:
+        due = kev.get("due") or ""
+        overdue = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", due) and due < common_utils.utc_now_iso()[:10])
         lines.append("· CISA KEV에 {} 등재 — 실제 악용이 확인된 취약점입니다{}. 조치 기한은 "
-                     "{}입니다(미 연방기관 기준이지만 우선순위 판단에 그대로 쓸 수 있습니다)."
+                     "{}입니다(미 연방기관 기준이며 조직 적용 기한은 별도 판단합니다)."
                      .format(kev.get("added") or "?",
                              ", 랜섬웨어 캠페인에서 사용됨" if kev.get("ransomware") else "",
-                             kev.get("due") or "미지정"))
+                             (due + " (기한 경과)") if overdue else due or "미지정"))
         if kev.get("action"):
             lines.append("· CISA 권고 조치: {}".format(kev["action"][:180]))
-    elif epss is not None and epss >= 0.5:
-        lines.append("· KEV에는 없지만 EPSS {:.0%} — 30일 내 악용될 확률이 높습니다. 악용 "
-                     "확인 전에 패치하는 쪽이 안전합니다.".format(epss))
-    elif epss is not None and epss >= 0.1:
-        lines.append("· KEV 미등재, EPSS {:.0%} — 즉시는 아니지만 정규 패치 주기에서 밀리지 "
-                     "않게 관리해야 합니다.".format(epss))
-    elif epss is not None:
-        lines.append("· KEV 미등재, EPSS {:.1%} — 현재로선 악용 가능성이 낮습니다. CVSS가 "
-                     "높아도 순위를 낮춰 잡을 근거가 됩니다.".format(epss))
     else:
-        lines.append("· KEV·EPSS 정보를 확인하지 못했습니다 — 악용 여부는 별도로 확인해야 합니다.")
+        lines.append("· KEV {} — 미등재·조회 불가는 실제 악용이 없다는 뜻이 아닙니다.".format(
+            "미등재(목록 조회됨)" if entry.get("kev_checked") is True else "조회 상태 미확인"))
+    if epss is not None:
+        lines.append("· EPSS {:.1%}: 향후 30일 악용 확률 추정입니다. 노출·영향·실제 악용 근거와 "
+                     "함께 판단하며, 낮은 값만으로 패치를 미루지 않습니다.".format(epss))
+    else:
+        lines.append("· EPSS 미확인 — 0%로 취급하지 않습니다.")
 
     if nvd.get("products"):
         lines.append("· 영향 제품: {}. 자산 목록과 대조해 해당 버전이 있는지 확인합니다."
@@ -314,6 +316,8 @@ def response_material(track):
     from response_builder import _kql_list, LOOKBACK
 
     entries = track.get("cves") or []
+    if not entries:
+        return None
     ids = [entry["cve"] for entry in entries]
     kev_ids = [entry["cve"] for entry in entries if entry.get("kev")]
     high_epss = [entry["cve"] for entry in entries
@@ -324,10 +328,10 @@ def response_material(track):
         actions.append("KEV 등재 {}건({})은 실제 악용이 확인된 것이다 — 정규 패치 주기를 "
                        "기다리지 말고 예외 처리로 먼저 올린다.".format(len(kev_ids), ", ".join(kev_ids)))
     if high_epss:
-        actions.append("EPSS 50% 이상 {}건({})은 아직 악용 보고가 없지만 확률이 높다 — KEV 등재를 "
-                       "기다리면 늦는다.".format(len(high_epss), ", ".join(high_epss)))
-    actions.append("아래 쿼리로 해당 제품·버전이 사내에 있는지부터 확인한다. 없으면 패치 "
-                   "우선순위를 내려도 되고, 있으면 대수와 소유 부서를 함께 뽑아 계획을 세운다.")
+        actions.append("EPSS 50% 이상 {}건({})은 노출 자산을 우선 점검하고 벤더의 악용 "
+                       "보고·완화책을 함께 확인한다.".format(len(high_epss), ", ".join(high_epss)))
+    actions.append("해당 제품·버전과 외부 노출을 확인한다. 검색 0건이어도 TVM 수집 범위·보존 기간을 "
+                   "확인하고 CMDB·SBOM·장비 관리 목록으로 대조한 뒤 영향 여부를 판단한다.")
 
     queries = [{
         "name": "이 CVE에 노출된 단말·소프트웨어",
@@ -359,7 +363,7 @@ def response_material(track):
 
     blocklists = [{
         "label": "패치 대상 — CVE",
-        "note": "KEV 등재 여부와 EPSS를 함께 적었다. 순서가 곧 우선순위다.",
+        "note": "KEV·EPSS 기준의 검토 순서입니다. 실제 패치 우선순위는 자산 노출·업무 영향·벤더 권고를 반영합니다.",
         "values": ["{}{}{}".format(
             entry["cve"],
             " [KEV]" if entry.get("kev") else "",
@@ -376,7 +380,7 @@ def response_material(track):
     if products:
         blocklists.append({
             "label": "점검 대상 — 영향 제품·버전",
-            "note": "자산 목록과 대조한다. 여기 없는 제품이면 이 CVE는 우리 문제가 아니다.",
+            "note": "NVD 영향 제품 목록은 누락·지연될 수 있습니다. 자산 목록과 벤더 권고를 함께 대조합니다.",
             "values": products[:20],
         })
 

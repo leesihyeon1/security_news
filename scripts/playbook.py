@@ -39,6 +39,9 @@ def _response(block, key):
 
 def _blocklist_values(block):
     for item in ((block.get("response") or {}).get("blocklists") or []):
+        label = str(item.get("label") or "")
+        if label.startswith(("차단 금지", "검토 결과", "차단 불가")):
+            continue
         if item.get("values"):
             return True
     return False
@@ -80,8 +83,9 @@ ARTIFACTS = {
         "VirusTotal 행위 기반 검색 패턴",
         lambda b: _patterns(b, "virustotal")),
     "hunting_query": (
-        "사내에서 돌릴 헌팅 쿼리(MDE KQL)",
-        lambda b: _response(b, "kql")),
+        "사내 실행 전 검토할 헌팅 쿼리(MDE KQL)",
+        lambda b: any(q.get("query") and (q.get("validation") or {}).get("syntax") == "basic_checks_passed"
+                      for q in (b.get("response") or {}).get("kql") or [])),
     "blocklist": (
         "차단·확인 대상 목록",
         _blocklist_values),
@@ -109,12 +113,11 @@ ARTIFACTS = {
         "단말에서 실행할 확인·복구 명령",
         lambda b: _response(b, "commands")),
     "external_reports": (
-        "다른 연구자의 공개 분석·1차 자료",
+        "실제로 읽은 외부 원문",
         # 기사가 인용한 1차 자료를 직접 읽은 것도 여기 해당한다. 교차 인텔·웹 검색의
         # 참고 링크만 세다가, 벤더 원문 2건을 읽고도 미달로 찍은 적이 있다.
-        lambda b: bool((b.get("intel") or {}).get("references")
-                       or (b.get("web") or {}).get("references")
-                       or (b.get("primary") or {}).get("sources"))),
+        lambda b: any(s.get("url") and (s.get("chars") or 0) > 0
+                      for s in (b.get("primary") or {}).get("sources") or [])),
 }
 
 
