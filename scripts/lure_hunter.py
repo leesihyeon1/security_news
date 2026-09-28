@@ -39,6 +39,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from html.parser import HTMLParser
 
 import common_utils
 
@@ -290,27 +291,38 @@ def resource_facts(uuid, page_host, api_key):
         return None
 
     page_apex = _apex(page_host)
-    third_party, filenames, hashes, cloaked = {}, {}, {}, []
+    third_party, filenames, hashes, empty_hosts, http = {}, {}, {}, [], []
     requests = (data.get("data") or {}).get("requests") or []
     for entry in requests:
         request = (entry.get("request") or {}).get("request") or {}
         url = request.get("url") or ""
         if not url.startswith("http"):
             continue
-        host = urllib.parse.urlparse(url).netloc.split(":")[0].lower()
-        if not host or _apex(host) == page_apex or _apex(host) in NOISE_RESOURCE_APEXES:
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if not host:
             continue
 
         response = (entry.get("response") or {}).get("response") or {}
         body_hash = (entry.get("response") or {}).get("hash") or ""
+        if len(http) < 30:
+            http.append({"host": host, "path": (parsed.path or "/")[:160],
+                         "query_keys": sorted(urllib.parse.parse_qs(parsed.query))[:8],
+                         "method": request.get("method") or "GET",
+                         "status": response.get("status"),
+                         "mime": (response.get("mimeType") or "")[:80],
+                         "body_hash": body_hash[:64],
+                         "first_party": _apex(host) == page_apex})
+        if _apex(host) == page_apex or _apex(host) in NOISE_RESOURCE_APEXES:
+            continue
         info = third_party.setdefault(host, {"count": 0, "types": set(), "empty": 0})
         info["count"] += 1
         if response.get("mimeType"):
             info["types"].add(response["mimeType"])
         if body_hash == EMPTY_BODY_SHA256:
             info["empty"] += 1
-            if host not in cloaked:
-                cloaked.append(host)
+            if host not in empty_hosts:
+                empty_hosts.append(host)
 
         name = _urlscan_filename(url)
         if name:
@@ -325,7 +337,8 @@ def resource_facts(uuid, page_host, api_key):
                         for host, v in third_party.items()},
         "filenames": filenames,
         "script_hashes": hashes,
-        "cloaked_hosts": cloaked,
+        "empty_response_hosts": empty_hosts,
+        "http": http,
     }
 
 
@@ -335,17 +348,16 @@ def resource_pivots(resources):
     아무 파일명이나 쓰면 못 쓰는 질의가 된다 — main.min.js·loader.js처럼 흔한 이름은
     수백만 건이 걸린다. 쓸 만한 형태는 두 가지다:
       · 질의 키가 붙은 이름(jsrepo?rnd=) — 공격 킷이 만든 고유한 형태다.
-      · 스캐너에게 빈 응답을 준 호스트의 파일 — 클로킹했다는 건 숨길 게 있다는 뜻이다.
+      · 동일한 스크립트 해시 — 빈 응답만으로 클로킹을 추정하지 않는다.
     """
-    cloaked = set(resources["cloaked_hosts"])
     pivots = []
 
     def filename_rank(item):
         name, info = item
-        return (0 if info["host"] in cloaked else 1, -info["count"])
+        return -info["count"]
 
     for name, info in sorted(resources["filenames"].items(), key=filename_rank):
-        usable = ("?" in name and name.endswith("=")) or (info["host"] in cloaked and len(name) >= 6)
+        usable = "?" in name and name.endswith("=")
         if not usable:
             continue
         pivots.append(("같은 파일을 불러오는 사이트 전체", 'filename:"{}"'.format(name), 3))
@@ -354,7 +366,7 @@ def resource_pivots(resources):
 
     def host_rank(host):
         info = resources["third_party"][host]
-        return (0 if host in cloaked else 1, -info["count"])
+        return -info["count"]
 
     for host in sorted(resources["third_party"], key=host_rank)[:3]:
         pivots.append(("이 호스트를 불러오는 사이트 전체", 'domain:"{}"'.format(host), 3))
@@ -387,6 +399,28 @@ def brand_tokens(title):
     return [brand for brand in BRAND_APEX if brand in lowered]
 
 
+# 호스팅·CDN이 찍어 주는 기본 제목. 캠페인 킷의 제목이 아니라서 "같은 제목" 검색이
+# 무관한 사이트를 쓸어 온다(실측 2026-09-26: fsputnik.com의 제목 "Account disabled by
+# server administrator"로 76건 — 카지노·사칭 도메인이 후보 8곳을 다 채웠다).
+GENERIC_TITLE_RE = re.compile(
+    r"account\s+(?:disabled|suspended)|suspended\s+(?:page|account)|this\s+account\s+has\s+been|"
+    r"^\s*(?:40[0-9]|50[0-9])\b|forbidden|not\s+found|bad\s+gateway|service\s+unavailable|"
+    r"index\s+of\s*/|welcome\s+to\s+(?:nginx|apache|iis)|default\s+(?:web\s+)?page|"
+    r"it\s+works|test\s+page|coming\s+soon|under\s+construction|parked|domain\s+(?:for\s+sale|is\s+for\s+sale)|"
+    r"just\s+a\s+moment|attention\s+required|access\s+denied|^\s*(?:loading|redirecting)\b|"
+    r"^\s*(?:home|untitled|document)\s*$", re.I)
+
+
+def _usable_title(title, domain):
+    """피벗에 쓸 만한 제목인가. 기본 제목·도메인 이름 그대로인 제목은 뺀다."""
+    title = (title or "").strip()
+    if len(title) < 6 or GENERIC_TITLE_RE.search(title):
+        return False
+    host = (domain or "").lower()
+    lowered = title.lower()
+    return not (host and (host in lowered or _apex(host) in lowered))
+
+
 def build_pivots(facts):
     """인프라 지문에서 피벗 질의를 만든다.
 
@@ -401,7 +435,7 @@ def build_pivots(facts):
     if facts.get("asn"):
         raw.append(("동일 ASN + 신규 도메인",
                     'page.asn:{} AND page.domainAgeDays:<{}'.format(facts["asn"], age), 2))
-    if facts.get("title"):
+    if _usable_title(facts.get("title"), facts.get("domain")):
         raw.append(("동일 제목(클론 킷) + 신규 도메인",
                     'page.title:"{}" AND page.domainAgeDays:<{}'.format(
                         facts["title"].replace('"', ""), age), 2))
@@ -416,6 +450,39 @@ def build_pivots(facts):
             for name, query, weight in raw]
 
 
+def _add_candidates(candidates, results, name, weight, seed_domain):
+    """검색 결과의 페이지 도메인을 후보로 모은다. 어느 검색에 걸렸는지 누적한다."""
+    for result in results:
+        page = result.get("page") or {}
+        domain = (page.get("domain") or "").lower()
+        if not domain or domain == seed_domain:
+            continue
+        # 사칭 대상의 정식 도메인은 당연히 같은 제목을 쓴다 — 후보가 아니다.
+        if any(domain == apex or domain.endswith("." + apex) for apex in BRAND_APEX.values()):
+            continue
+        if _apex(domain) in NOISE_RESOURCE_APEXES:
+            continue
+        entry = candidates.setdefault(domain, {
+            "domain": domain,
+            "url": (result.get("task") or {}).get("url") or "",
+            "uuid": result.get("_id") or "",
+            "scanned_at": ((result.get("task") or {}).get("time") or "")[:19],
+            "ip": page.get("ip") or "",
+            "asn": page.get("asn") or "",
+            "asnname": page.get("asnname") or "",
+            "server": page.get("server") or "",
+            "tls_issuer": page.get("tlsIssuer") or "",
+            "title": page.get("title") or "",
+            "country": page.get("country") or "",
+            "domain_age_days": page.get("domainAgeDays"),
+            "pivots": [],
+            "pivot_weight": 0,
+        })
+        if name not in entry["pivots"]:
+            entry["pivots"].append(name)
+            entry["pivot_weight"] += weight
+
+
 def collect_candidates(facts, api_key=None):
     """피벗을 돌려 후보를 모으고, 어떤 피벗에 걸렸는지 기록한다."""
     candidates = {}
@@ -424,35 +491,116 @@ def collect_candidates(facts, api_key=None):
         results, total = urlscan_search(query, api_key=api_key)
         pivot_stats.append({"name": name, "query": query, "total": total, "returned": len(results)})
         log("    [{:>5}건] {} — {}".format(total, name, query[:78]))
-        for result in results:
-            page = result.get("page") or {}
-            domain = (page.get("domain") or "").lower()
-            if not domain or domain == facts["domain"]:
-                continue
-            # 사칭 대상의 정식 도메인은 당연히 같은 제목을 쓴다 — 후보가 아니다.
-            if any(domain == apex or domain.endswith("." + apex) for apex in BRAND_APEX.values()):
-                continue
-            entry = candidates.setdefault(domain, {
-                "domain": domain,
-                "url": (result.get("task") or {}).get("url") or "",
-                "uuid": result.get("_id") or "",
-                "scanned_at": ((result.get("task") or {}).get("time") or "")[:19],
-                "ip": page.get("ip") or "",
-                "asn": page.get("asn") or "",
-                "asnname": page.get("asnname") or "",
-                "server": page.get("server") or "",
-                "tls_issuer": page.get("tlsIssuer") or "",
-                "title": page.get("title") or "",
-                "country": page.get("country") or "",
-                "domain_age_days": page.get("domainAgeDays"),
-                "pivots": [],
-                "pivot_weight": 0,
-            })
-            if name not in entry["pivots"]:
-                entry["pivots"].append(name)
-                entry["pivot_weight"] += weight
+        _add_candidates(candidates, results, name, weight, facts["domain"])
         time.sleep(REQUEST_PAUSE_SECONDS)
     return candidates, pivot_stats
+
+
+# 공격 페이지가 요청하는 서버 쪽 파일의 확장자. 이런 이름은 킷마다 거의 고유해서
+# "같은 파일을 요청하는 다른 사이트" 검색이 된다(실측: admin777111777.php).
+WEB_FILE_EXTENSIONS = {"php", "asp", "aspx", "jsp", "cgi", "js"}
+INFECTED_SITE_PIVOT = "이 유포지를 불러오는 다른 사이트(감염 사이트 후보)"
+
+
+def web_files_from(targets):
+    """조사 대상에서 웹 요청 파일명만 추린다(흔한 이름은 뺀다). 서버 스크립트를 앞에 둔다."""
+    names = []
+    for value in (targets or {}).get("files") or []:
+        name = str(value or "").strip().strip("/").rsplit("/", 1)[-1]
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext in WEB_FILE_EXTENSIONS and name.lower() not in COMMON_FILENAMES and name not in names:
+            names.append(name)
+    return sorted(names, key=lambda n: n.lower().endswith(".js"))
+
+
+def technique_pivots(domain, facts, dom, web_files=()):
+    """인프라가 아니라 공격 방식(심는 방법·요청하는 파일·가짜 인증 화면)으로 찾는 질의.
+
+    build_pivots는 "같은 서버·호스팅"을 찾는다. 그런데 정상 사이트를 침해해 숨긴
+    iframe·스크립트로 유포지를 불러오는 캠페인(실측: 우크라이나 사이트 6곳 →
+    uasputnik.com 가짜 CAPTCHA)에서는 감염 사이트마다 서버가 다 달라 인프라 피벗으로는
+    안 잡힌다. 그 사이트들의 공통점은 "유포지를 불러온다"와 "같은 파일을 요청한다"다.
+    """
+    pivots = []
+    if facts:
+        pivots.append((INFECTED_SITE_PIVOT,
+                       'domain:"{0}" AND NOT page.domain:"{0}"'.format(domain), 3))
+    for name in list(web_files)[:2]:
+        pivots.append(("같은 공격 파일({})을 요청하는 페이지".format(name),
+                       'filename:"{}"'.format(name), 3))
+    # 가짜 인증 화면은 킷이 만든 제목을 그대로 쓴다. 침해된 오래된 사이트에도 뜨므로
+    # 신규 도메인 조건 없이 최근 스캔으로만 좁힌다.
+    if (facts and _usable_title(facts.get("title"), domain)
+            and (dom or {}).get("markers", {}).get("fake_captcha")):
+        pivots.append(("같은 가짜 인증 화면(제목 동일, 기존 사이트 포함)",
+                       'page.title:"{}" AND task.time:>now-{}d'.format(
+                           facts["title"].replace('"', ""), SCAN_WITHIN_DAYS), 2))
+    return pivots
+
+
+# 기사 1건에서 실제로 돌려 볼 검색 수와 시간. 검색 결과 건수와 상위 후보만 확인한다 —
+# 대량 수집·판정은 hunt()(수동 CLI)의 일이다.
+MAX_PIVOT_RUNS = 8
+PIVOT_BUDGET_SECONDS = 50
+PIVOT_SAMPLE_SIZE = 20
+MAX_CANDIDATE_DOM_CHECKS = 2
+MAX_SEED_CANDIDATES = 8
+MAX_USEFUL_HITS = 300
+
+
+def run_pivots(domain, facts, queries, pivots, api_key, state):
+    """만든 질의를 실제로 한 번씩 돌려 건수와 후보를 붙인다.
+
+    queries는 화면에 나갈 질의 dict 목록이고(여기에 "total"을 채운다), pivots는
+    (이름, 질의, 가중치). state는 기사 전체 예산 {"runs": n, "deadline": t}를 공유한다.
+    후보는 인프라·파일 공유 기준의 "비슷한 곳"이지 공격 확정이 아니다 — DOM에서
+    붙여넣기 유도 코드가 확인된 곳만 확정으로 올린다.
+    """
+    by_query = {q["query"]: q for q in queries}
+    candidates = {}
+    ran = 0
+    for name, query, weight in sorted(pivots, key=lambda p: -p[2]):
+        if state["runs"] >= MAX_PIVOT_RUNS or time.time() > state["deadline"]:
+            break
+        try:
+            results, total = urlscan_search(query, size=PIVOT_SAMPLE_SIZE, api_key=api_key)
+        except Exception as error:
+            log("    [-] 검색 실패({}): {}".format(name, str(error)[:60]))
+            continue
+        state["runs"] += 1
+        ran += 1
+        if query in by_query:
+            by_query[query]["total"] = total
+        # 수천 건이 걸리는 질의는 가르지 못한다 — 앞쪽 20건은 그 캠페인과 무관한 표본이다
+        # (실측: 동일 ASN + 신규 도메인 10,000건). 건수만 남기고 후보는 받지 않는다.
+        if total > MAX_USEFUL_HITS:
+            if query in by_query:
+                by_query[query]["too_broad"] = True
+        else:
+            _add_candidates(candidates, results, name, weight, domain)
+        time.sleep(REQUEST_PAUSE_SECONDS)
+
+    ranked = sorted((score_candidate(c, facts or {"domain": domain}) for c in candidates.values()),
+                    key=lambda c: (-c["score"], c.get("domain_age_days")
+                                   if isinstance(c.get("domain_age_days"), int) else 9999))
+    ranked = ranked[:MAX_SEED_CANDIDATES]
+    if api_key:
+        for candidate in ranked[:MAX_CANDIDATE_DOM_CHECKS]:
+            if time.time() > state["deadline"] or not candidate.get("uuid"):
+                break
+            dom = verify_dom(candidate["uuid"], api_key)
+            candidate["dom_confirmed"] = bool(dom.get("confirmed"))
+            if candidate["dom_confirmed"]:
+                candidate["score"] += 4
+                candidate["reasons"].append("DOM에 붙여넣기 유도 코드")
+            time.sleep(REQUEST_PAUSE_SECONDS)
+        ranked.sort(key=lambda c: -c["score"])
+    return ran, [{
+        "domain": c["domain"], "score": c["score"], "reasons": c["reasons"][:4],
+        "scanned_at": c["scanned_at"], "domain_age_days": c.get("domain_age_days"),
+        "dom_confirmed": bool(c.get("dom_confirmed")),
+        "urlscan": "https://urlscan.io/result/{}/".format(c["uuid"]) if c.get("uuid") else "",
+    } for c in ranked]
 
 
 def score_candidate(candidate, facts):
@@ -490,24 +638,56 @@ def score_candidate(candidate, facts):
     return candidate
 
 
+class _VisibleText(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hidden = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "template"):
+            self.hidden += 1
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "template") and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def _inspect_dom(dom):
+    """Only a copied executable command plus visible paste guidance is strong ClickFix evidence."""
+    visible = _VisibleText()
+    visible.feed(dom)
+    page_text = " ".join(visible.parts)
+    hits = {}
+    for group, patterns in CLICKFIX_MARKERS.items():
+        source = page_text if group in ("instruction", "fake_captcha") else dom
+        found = [match.group(0)[:40] for pattern in patterns
+                 if (match := re.search(pattern, source, re.I))]
+        if found:
+            hits[group] = sorted(set(found))[:4]
+    copied = re.search(r"navigator\.clipboard\.writeText\s*\(\s*(['\"`])([^'\"`]{1,1200})\1", dom, re.I)
+    command = copied.group(2) if copied else ""
+    executable = bool(re.search(r"(?:^|\W)(?:powershell(?:\.exe)?|pwsh(?:\.exe)?|cmd(?:\.exe)?|mshta(?:\.exe)?|curl(?:\.exe)?|certutil(?:\.exe)?|iwr|irm)(?:\W|$)", command, re.I))
+    risky = bool(re.search(r"(?:https?://|-[Ee](?:nc(?:odedcommand)?)?\b|FromBase64String|Invoke-(?:WebRequest|RestMethod|Expression)|\biwr\b|\birm\b|\bmshta\b)", command, re.I))
+    paste = bool(re.search(r"Win(?:dows)?\s*\+\s*R|Ctrl\s*\+\s*V|paste|붙여넣|실행창", page_text, re.I))
+    confirmed = bool(copied and executable and risky and paste)
+    return {"markers": hits, "confirmed": confirmed,
+            "copied_command": command[:180] if confirmed else "",
+            "status": "confirmed" if confirmed else "review" if hits else "unobserved",
+            "dom_bytes": len(dom)}
+
+
 def verify_dom(uuid, api_key):
-    """저장된 DOM에서 ClickFix 표식을 찾는다. 표식이 있으면 확정, 없으면 미확정이다."""
+    """Inspect stored DOM; partial markers remain candidates, never confirmed lures."""
     try:
         dom = _request(DOM_URL.format(uuid), api_key=api_key, raw=True)
     except Exception as error:
         return {"error": str(error)[:120]}
-    hits = {}
-    for group, patterns in CLICKFIX_MARKERS.items():
-        found = []
-        for pattern in patterns:
-            match = re.search(pattern, dom, re.I)
-            if match:
-                found.append(match.group(0)[:40])
-        if found:
-            hits[group] = sorted(set(found))[:4]
-    # 클립보드 쓰기 + (안내문 또는 명령)이 함께 있으면 붙여넣기 유도로 본다.
-    confirmed = bool(hits.get("clipboard")) and bool(hits.get("instruction") or hits.get("command"))
-    return {"markers": hits, "confirmed": confirmed, "dom_bytes": len(dom)}
+    return _inspect_dom(dom)
 
 
 def hunt(seed, api_key=None, verify=True):
@@ -685,10 +865,10 @@ def _raw_hosts_from_iocs(iocs):
                 continue
             if not want_url and kind != "domain":
                 continue
-            host = value
-            if "://" in host:
-                host = urllib.parse.urlparse(host).netloc
-            host = host.split("@")[-1].split(":")[0].strip("/.").lower()
+            # 경로만 적힌 URL("/api/v1/agent/")·파일명("admin777111777.php")은 호스트가
+            # 아니다. 예전에는 그대로 호스트로 받아, 앞에서부터 차는 조사 칸(최대 3개)을
+            # 경로가 다 차지하고 진짜 유포 도메인이 밀려났다(실측 2026-09-26).
+            host = common_utils.host_from_indicator(value)
             if not host or IP_LITERAL_RE.match(host):
                 continue
             if common_utils.is_benign_ioc("domain", host):
@@ -753,20 +933,36 @@ def _dedupe_seed_queries(seeds):
     return seeds
 
 
-def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS, text=""):
+def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS, text="",
+                           web_files=(), primary=""):
     """IOC 도메인을 시드로 "조사&대응" 블록을 만든다(심층분석 결과에 붙는다).
 
     확인내용은 urlscan의 공개 관측치에서 나온 사실만, 사람이 읽는 문장으로 적는다 —
     각 줄이 "무엇이 관측됐다 + 그게 무슨 뜻이다"까지 담아야 판단에 쓸 수 있다.
+
+    web_files는 원문이 지목한 웹 요청 파일(admin777111777.php 등) — 같은 파일을
+    요청하는 다른 사이트를 찾는 질의에 쓴다(web_files_from).
     """
     api_key = api_key if api_key is not None else _api_key()
     started = time.time()
     seeds, findings, steps = [], [], []
+    to_run = []          # (seed dict, facts, pivots) — 시드 조사가 끝난 뒤 한꺼번에 돌린다
+    web_files = list(web_files or [])
 
     # 조사 과정을 그대로 기록한다 — 무엇을 어떤 질의로 조회해서 몇 건이 나왔는지가
     # 남아야, 결론에 동의하지 않는 사람도 같은 경로를 다시 밟아 검증할 수 있다.
     roles = classify_ioc_hosts(iocs, text=text)
-    all_domains = roles["lure"]
+    # 조사 칸(max_seeds)은 원문 근거로 역할이 확정된 도메인(유포지·C2·유출 수신지)부터
+    # 채운다. 예전에는 IOC 순서대로 채워, 역할을 모르는 주변 도메인 3곳이 칸을 다 쓰고
+    # 확정된 도메인은 조사되지 않았다(실측 2026-09-28, Lunex 건).
+    assessed = any("role" in (item or {}) for item in iocs or [])
+    confirmed_hosts = {common_utils.host_from_indicator(item.get("value")) for item in iocs or []
+                       if (item or {}).get("actionable") is True}
+    confirmed_hosts.discard("")
+    all_domains = sorted(roles["lure"], key=lambda host: 0 if host in confirmed_hosts else 1)
+    if assessed and confirmed_hosts & set(all_domains):
+        steps.append("원문 근거로 역할이 확정된 도메인 {}곳을 먼저 조사합니다.".format(
+            len(confirmed_hosts & set(all_domains))))
     steps.append("IOC {}건의 도메인을 역할별로 나눴습니다 — 유포지·C2 후보 {}건, 공용 서비스 "
                  "{}건, 유출 사이트 {}건, Tor 주소 {}건. 조사 대상은 유포지·C2 후보뿐이고 "
                  "그중 앞의 {}건을 봤습니다.".format(
@@ -807,8 +1003,11 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
             if facts else " — 이 도메인은 아무도 스캔한 적이 없습니다"))
 
         if not facts:
-            seeds.append({"domain": domain, "in_urlscan": False,
-                          "queries": [_observation_query(domain)]})
+            seed = {"domain": domain, "in_urlscan": False, "queries": [_observation_query(domain)]}
+            tech = technique_pivots(domain, None, {}, web_files)
+            seed["queries"] += [_query_row(name, query) for name, query, _ in tech]
+            seeds.append(seed)
+            to_run.append((seed, None, tech))
             findings.append("{} — urlscan에 스캔 기록이 아예 없습니다. 웹으로 접근하는 유포지가 "
                             "아니라 악성코드가 직접 통신하는 서버(페이로드·C2)일 가능성이 "
                             "큽니다.".format(domain))
@@ -819,11 +1018,11 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
         resources = resource_facts(facts["uuid"], domain, api_key) if api_key else None
         if resources:
             hosts = len(resources["third_party"])
-            cloaked = len(resources["cloaked_hosts"])
+            empty = len(resources["empty_response_hosts"])
             if hosts:
                 tail = "외부 호스트 {}곳을 찾았습니다(정상 CDN·통계 스크립트는 제외).{}".format(
-                    hosts, " 그중 {}곳은 스캐너에게 빈 응답을 돌려줬습니다.".format(cloaked)
-                    if cloaked else " 빈 응답을 준 곳은 없습니다.")
+                    hosts, " 그중 {}곳은 빈 응답이 관측됐습니다(원인 미확인).".format(empty)
+                    if empty else " 빈 응답을 준 곳은 없습니다.")
             else:
                 tail = ("이 페이지가 따로 불러오는 외부 호스트는 없었습니다 — 리소스 쪽에서 "
                         "얻을 단서가 없다는 뜻입니다.")
@@ -861,6 +1060,9 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
         else:
             headline += "urlscan에 스캔 기록이 {}건 있습니다.".format(facts["scan_count"])
         findings.append(headline)
+        if assessed and domain not in confirmed_hosts:
+            findings.append("· 원문이 이 도메인의 역할(유포지·C2 등)을 밝히지 않았습니다 — 아래 "
+                            "관측은 역할을 가릴 재료이지, 차단 근거가 아닙니다.")
 
         age = facts.get("domain_age_days")
         if isinstance(age, int):
@@ -887,53 +1089,54 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
             facts["scan_count"], (facts.get("scanned_at") or "-")[:10],
             " 관측치가 1건뿐이라 판단 근거가 얇습니다." if facts["scan_count"] <= 1 else ""))
 
-        if resources and resources["cloaked_hosts"]:
+        if resources and resources["empty_response_hosts"]:
             findings.append("· 이 페이지가 뒤에서 불러오는 호스트 중 {}는 스캐너에게 빈 응답을 "
-                            "줬습니다. 방문자를 골라서 악성 코드를 내려주는 것(클로킹)이라, "
-                            "스캔 결과가 깨끗해도 안전하다는 뜻이 아닙니다.".format(
-                                ", ".join(resources["cloaked_hosts"][:3])))
+                            "줬습니다. 실패·차단·클로킹 등 원인은 미확인으로, 응답 본문과 "
+                            "재현 조건을 추가 확인해야 합니다.".format(
+                                ", ".join(resources["empty_response_hosts"][:3])))
         elif resources and resources["third_party"]:
             findings.append("· 이 페이지가 뒤에서 불러오는 외부 호스트: {}.".format(
                 ", ".join(sorted(resources["third_party"])[:4])))
 
         if dom.get("confirmed"):
             findings.append("· 저장된 페이지 코드에서 붙여넣기 유도 코드를 찾았습니다({}). "
-                            "유포지로 확정입니다.".format(
+                            "복사되는 실행 명령과 화면 안내가 함께 관측됐습니다. 실제 유포 "
+                            "여부는 요청 목적지와 사용자 유입 기록으로 확인해야 합니다.".format(
                                 ", ".join(sum(dom["markers"].values(), [])[:4])))
         elif dom.get("markers"):
             findings.append("· 페이지 코드에 의심스러운 흔적이 일부 있지만({}) 확정하기엔 "
                             "부족합니다.".format(", ".join(dom["markers"])))
         elif dom.get("dom_bytes"):
-            findings.append("· 저장된 페이지 코드 {:,}자를 다 훑었지만 명령을 복사시키는 코드가 "
-                            "없습니다. 스캐너에게는 미끼를 감췄거나, 미끼가 이 주소가 아닌 다른 "
-                            "경로에 있습니다.".format(dom["dom_bytes"]))
+            findings.append("· 저장된 페이지 코드 {:,}자에서 확인 가능한 붙여넣기 유도 "
+                            "표식을 찾지 못했습니다. 동적 생성·다른 경로·스캔 조건 차이 "
+                            "가능성이 있어 실제 방문 화면과 요청을 추가 확인해야 합니다.".format(
+                                dom["dom_bytes"]))
 
         queries = [_observation_query(domain)]
+        # 수법 기반 질의를 앞에 둔다 — 침해 사이트를 경유하는 유포에서는 이쪽이 먼저 맞는다.
+        tech_pivots = technique_pivots(domain, facts, dom, web_files)
         page_pivots = build_pivots(facts)
-        for name, query, _weight in page_pivots:
-            queries.append({"name": name, "query": query,
-                            "url": SEARCH_UI_URL.format(urllib.parse.quote(query, safe=""))})
         res_pivots = resource_pivots(resources) if resources else []
-        for name, query, _weight in res_pivots:
-            queries.append({"name": name, "query": query,
-                            "url": SEARCH_UI_URL.format(urllib.parse.quote(query, safe=""))})
-        if page_pivots or res_pivots:
-            steps.append("{} — 확보한 지문으로 검색 쿼리 {}개를 만들었습니다: 이 도메인 관측 이력 "
-                         "1개 + 페이지 속성 기반 {}개(IP·호스팅 ASN·서버 배너·TLS 발급자·제목 조합, "
-                         "모두 최근 {}일 스캔으로 한정) + 리소스 기반 {}개(불러온 파일명·호스트·"
-                         "스크립트 해시).".format(domain, len(queries), len(page_pivots),
-                                             SCAN_WITHIN_DAYS, len(res_pivots)))
-        else:
-            steps.append("{} — 피벗으로 쓸 지문이 없어(IP·ASN·제목 모두 비어 있음) 이 도메인 "
-                         "관측 이력 쿼리 1개만 만들었습니다.".format(domain))
+        for name, query, _weight in tech_pivots + page_pivots + res_pivots:
+            queries.append(_query_row(name, query))
+        steps.append("{} — 검색 쿼리 {}개를 만들었습니다: 이 도메인 관측 이력 1개 + 수법 기반 {}개"
+                     "(이 유포지를 불러오는 사이트·같은 공격 파일·같은 가짜 인증 화면) + 페이지 속성 "
+                     "기반 {}개(IP·호스팅 ASN·서버 배너·TLS 발급자·제목 조합, 최근 {}일 스캔) + "
+                     "리소스 기반 {}개(불러온 파일명·호스트·스크립트 해시).".format(
+                         domain, len(queries), len(tech_pivots), len(page_pivots),
+                         SCAN_WITHIN_DAYS, len(res_pivots)))
 
-        seeds.append({
+        seed = {
             "domain": domain,
             "in_urlscan": True,
             "dom_confirmed": bool(dom.get("confirmed")),
             "dom_markers": dom.get("markers") or {},
-            "cloaked_hosts": (resources or {}).get("cloaked_hosts") or [],
+            "dom_status": dom.get("status") or "unobserved",
+            "copied_command": dom.get("copied_command") or "",
+            "empty_response_hosts": (resources or {}).get("empty_response_hosts") or [],
+            "http": (resources or {}).get("http") or [],
             "scanned_at": facts.get("scanned_at") or "",
+            "scan_url": facts.get("url") or "",
             "title": facts.get("title") or "",
             "ip": facts.get("ip") or "",
             "asn": facts.get("asn") or "",
@@ -945,7 +1148,11 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
             "urlscan": "https://urlscan.io/result/{}/".format(facts["uuid"]) if facts.get("uuid") else "",
             "screenshot": SCREENSHOT_URL.format(facts["uuid"]) if facts.get("uuid") else "",
             "queries": queries,
-        })
+        }
+        seeds.append(seed)
+        to_run.append((seed, facts, tech_pivots + page_pivots + res_pivots))
+
+    _run_seed_pivots(to_run, api_key, findings, steps)
 
     catalog = catalog_patterns(iocs, text=text)
     steps.append("조사 중 손으로 확인해 등록해 둔 패턴 목록과 대조했습니다 — 이 기사에 "
@@ -955,20 +1162,83 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
     if not seeds and not catalog and not findings:
         return None
 
-    if seeds:
+    # 아래 두 문장은 특정 유형의 설명이다. 조건 없이 붙이면 다른 유형의 기사에서 결과
+    # 칸 맨 위에 오른다(실측 2026-09-28, Lunex BYOVD 건: ClickFix용 문장이 "알 수
+    # 없습니다"라는 표현 때문에 강한 근거로 분류돼 조사 결과 1위였다).
+    lure_case = primary == "user_action" or any(
+        seed.get("dom_confirmed") or seed.get("dom_markers") for seed in seeds)
+    if seeds and lure_case:
         findings.append("이 캠페인 유형은 화면을 정상 사이트처럼 꾸며 두기 때문에, 스크린샷이나 "
                         "제목으로는 유포지인지 알 수 없습니다. 어느 서버·어느 스크립트를 쓰는지로 "
                         "찾아야 합니다 — 아래 검색 쿼리가 그 용도입니다.")
-    else:
-        findings.append("기사의 도메인 IOC에는 조사할 유포지·C2가 없습니다. 이 캠페인은 공용 "
-                        "서비스를 경유해 설정을 받고 Tor·블로그로 협상하는 구조라, URL 쪽에서 "
-                        "차단할 대상이 나오지 않습니다 — 대응은 파일·행위 탐지로 갑니다.")
+    elif not seeds and (roles["public_service"] or roles["tor"] or roles["leak_site"]):
+        findings.append("기사의 도메인 IOC에는 조사할 유포지·C2가 없습니다. 공용 서비스·Tor·유출 "
+                        "사이트뿐이라 URL 쪽에서 차단할 대상이 나오지 않습니다 — 대응은 파일·행위 "
+                        "탐지로 갑니다.")
     if not api_key:
         findings.append("URLSCAN_API_KEY가 없어 페이지 코드까지는 대조하지 않았습니다. 검색 "
                         "결과로 나온 도메인은 차단 전에 사람이 확인해야 합니다.")
     return {"seeds": _dedupe_seed_queries(seeds), "patterns": catalog,
             "findings": findings, "steps": steps,
             "generated_at": common_utils.utc_now_iso()}
+
+
+def _query_row(name, query):
+    return {"name": name, "query": query,
+            "url": SEARCH_UI_URL.format(urllib.parse.quote(query, safe=""))}
+
+
+def _run_seed_pivots(to_run, api_key, findings, steps):
+    """시드별로 만든 질의를 실제로 돌려 건수·후보를 붙이고, 결과를 문장으로 남긴다.
+
+    예전에는 질의를 만들어 사람에게 넘기기만 해서, 그 질의가 0건인지 수천 건인지, 그
+    안에 진짜 유포지가 있는지 아무도 모른 채 화면에 나갔다. 시드 조사가 다 끝난 뒤에
+    따로 예산을 잡아 돌린다 — 시드 조사 시간을 잡아먹지 않게.
+    """
+    state = {"runs": 0, "deadline": time.time() + PIVOT_BUDGET_SECONDS}
+    seen = set()
+    for seed, facts, pivots in to_run:
+        # 같은 질의는 한 번만 돌린다(같은 캠페인의 시드는 ASN·TLS 발급자를 공유한다).
+        fresh = [p for p in pivots if p[1] not in seen]
+        seen.update(p[1] for p in fresh)
+        if not fresh:
+            continue
+        ran, candidates = run_pivots(seed["domain"], facts, seed["queries"], fresh, api_key, state)
+        if not ran:
+            steps.append("{} — 검색 예산을 다 써서 질의를 실제로 돌리지는 못했습니다(질의만 "
+                         "남깁니다).".format(seed["domain"]))
+            continue
+        seed["candidates"] = candidates
+        totals = ["{} {:,}건{}".format(q["name"], q["total"],
+                                        "(너무 넓어 후보로 쓰지 않음)" if q.get("too_broad") else "")
+                  for q in seed["queries"] if isinstance(q.get("total"), int)]
+        steps.append("{} — 만든 질의 {}개를 urlscan에서 실제로 돌렸습니다: {}.".format(
+            seed["domain"], ran, "; ".join(totals[:6])))
+        if not candidates:
+            findings.append("· {}와 같은 방식으로 찾은 다른 사이트는 없었습니다(질의 {}개, 최근 "
+                            "공개 스캔 기준).".format(seed["domain"], ran))
+            continue
+        # 유포지를 불러오는 사이트는 공격자 인프라가 아니라 침해당한 정상 사이트다 —
+        # 차단이 아니라 운영자 통보·방문자 확인 대상이라 따로 적는다. 붙여넣기 유도 코드는
+        # 유포지 페이지에 있으므로 이 사이트들의 DOM에서는 안 나오는 것이 정상이다.
+        infected = [c for c in candidates if INFECTED_SITE_PIVOT in " ".join(c["reasons"])]
+        others = [c for c in candidates if c not in infected]
+        if infected:
+            findings.append("· {}를 불러오는 다른 사이트 {}곳: {}. 공격자 소유가 아니라 숨긴 "
+                            "iframe·스크립트가 심긴 감염 사이트 후보입니다 — 차단 대상이 아니라, "
+                            "사내 사용자가 방문했는지(프록시·DNS 로그) 확인하고 운영자에게 알릴 "
+                            "대상입니다.".format(seed["domain"], len(infected),
+                                               ", ".join(c["domain"] for c in infected[:6])))
+        if others:
+            confirmed = [c["domain"] for c in others if c["dom_confirmed"]]
+            findings.append("· {}와 인프라·파일을 공유하는 후보 {}곳(질의 {}개 실행): {}.{} 공유한다는 "
+                            "뜻이지 공격 확정이 아닙니다 — 페이지 코드로 확정된 곳만 차단 검토 "
+                            "대상입니다.".format(
+                                seed["domain"], len(others), ran,
+                                ", ".join("{}({})".format(c["domain"], ", ".join(c["reasons"][:2]))
+                                          for c in others[:5]),
+                                " 페이지 코드에서 붙여넣기 유도 코드가 확인된 곳: {}.".format(
+                                    ", ".join(confirmed)) if confirmed else ""))
 
 
 def _observation_query(domain):

@@ -31,8 +31,10 @@ IOC_TYPE_TO_FIELD = {ioc_type: field for field, ioc_types in FIELD_TO_IOC_TYPES.
 # 비례해 늘어난다. 모델이 과분할하는 경우를 막는 상한.
 MAX_INCIDENTS_PER_ARTICLE = 4
 
-TARGET_FIELDS = ("domains", "ips", "hashes", "urls", "cves", "products", "packages",
+TARGET_FIELDS = ("domains", "ips", "hashes", "urls", "url_paths", "cves", "products", "packages",
                  "actors", "malware", "files", "paths", "registry", "commands")
+# analysis_targets가 파싱 뒤에 옮겨 담는 칸. 사건 태그는 원래 칸 이름으로 남아 있다.
+TAG_FIELD_ALIASES = {"url_paths": ("urls",), "files": ("domains",)}
 
 
 def _label(incidents, index):
@@ -42,7 +44,12 @@ def _label(incidents, index):
 
 
 def _incident_numbers_for(incident_map, field, value):
-    return (incident_map.get(field) or {}).get(str(value or "").strip().lower()) or [1]
+    key = str(value or "").strip().lower()
+    for name in (field,) + TAG_FIELD_ALIASES.get(field, ()):
+        numbers = (incident_map.get(name) or {}).get(key)
+        if numbers:
+            return numbers
+    return [1]
 
 
 def _split_targets(targets, incidents, incident_map):
@@ -62,6 +69,12 @@ def _split_targets(targets, incidents, incident_map):
     criteria = targets.get("criteria_by_incident") or {}
     gaps = targets.get("gaps_by_incident") or {}
     primaries = targets.get("primary_by_incident") or {}
+    issue_sets = targets.get("issues_by_incident") or {}
+    decision_statuses = targets.get("decision_status_by_incident") or {}
+    missing_issue_sets = targets.get("missing_issues_by_incident") or {}
+    missing_step_sets = targets.get("missing_steps_by_incident") or {}
+    unverified_issue_sets = targets.get("unverified_issues_by_incident") or {}
+    review_reason_sets = targets.get("review_reasons_by_incident") or {}
 
     out = []
     for index in range(1, count + 1):
@@ -78,6 +91,20 @@ def _split_targets(targets, incidents, incident_map):
         primary = primaries.get(index) or targets.get("primary") or ""
         if primary:
             slot["primary"] = primary
+        if issue_sets.get(index):
+            slot["issues"] = issue_sets[index]
+        if decision_statuses.get(index):
+            slot["decision_status"] = decision_statuses[index]
+        if missing_issue_sets.get(index):
+            slot["missing_issues"] = missing_issue_sets[index]
+        if missing_step_sets.get(index):
+            slot["missing_steps"] = missing_step_sets[index]
+        if unverified_issue_sets.get(index):
+            slot["unverified_issues"] = unverified_issue_sets[index]
+        if review_reason_sets.get(index):
+            slot["review_reasons"] = review_reason_sets[index]
+        if targets.get("decision_status") == "failed":
+            slot["decision_status"] = "failed"
         investigable = slot["investigable"]
         slot = {key: value for key, value in slot.items() if value not in (None, [], "")}
         slot["investigable"] = investigable

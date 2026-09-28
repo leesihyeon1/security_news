@@ -198,6 +198,32 @@ def _excerpt(text):
     return head + " … " + "".join(parts)
 
 
+def extract_html(html):
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
+        tag.decompose()
+    candidates = list(soup.select("article, main, [itemprop=articleBody], .payload-richtext, .rich-text, .prose"))
+    for paragraph in soup.find_all("p"):
+        if len(paragraph.get_text(" ", strip=True)) >= 100:
+            candidates.extend(p for p in list(paragraph.parents)[:3] if p.name in ("div", "section"))
+    candidates.append(soup.body or soup)
+    scored = [(node, sum(len(p.get_text(" ", strip=True)) for p in node.find_all("p")
+                        if len(p.get_text(" ", strip=True)) >= 100)) for node in candidates]
+    best_score = max(score for _, score in scored)
+    eligible = [node for node, score in scored if score >= max(400, best_score * 0.7)]
+    node = min(eligible, key=lambda n: len(n.get_text(" ", strip=True))) if eligible else (soup.body or soup)
+    text = "\n".join(" ".join(line.split()) for line in node.get_text("\n", strip=True).splitlines() if line.strip())
+    # Keep table rows intact, including tables outside the narrative container.
+    rows, seen = [], set()
+    for row in soup.select("table tr"):
+        cells = [" ".join(cell.get_text(" ", strip=True).split()) for cell in row.find_all(["td", "th"], recursive=False)]
+        line = " | ".join(cells)
+        if re.search(r"\b[a-fA-F0-9]{40,64}\b", line) and line not in seen:
+            rows.append(line)
+            seen.add(line)
+    return _excerpt(text) + ("\n[원문 해시 표]\n" + "\n".join(rows)[:6000] if rows else "")
+
+
 def fetch_text(url):
     """본문 텍스트만. 실패하거나 너무 짧으면 빈 문자열."""
     # 이 url은 기사 본문에 실린 링크·웹 검색 결과다 — 우리가 고른 것이 아니다.
@@ -213,15 +239,11 @@ def fetch_text(url):
     except Exception as error:
         log("    [-] 원문 조회 실패({}): {}".format(_host(url), str(error)[:60]))
         return ""
-    soup = BeautifulSoup(response.text, "html.parser")
-    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
-        tag.decompose()
-    node = soup.find("article") or soup.find("main") or soup.body or soup
-    text = " ".join(node.get_text(" ", strip=True).split())
+    text = extract_html(response.text)
     if len(text) < MIN_BODY_CHARS:
         log("    [-] 원문이 {}자뿐이라 쓰지 않습니다({}).".format(len(text), _host(url)))
         return ""
-    return _excerpt(text)
+    return text
 
 
 def collect(links, article_url="", limit=MAX_SOURCES):

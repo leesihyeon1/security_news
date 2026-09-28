@@ -35,6 +35,7 @@ import vuln_hunter
 import web_search
 import source_evidence
 import analyst_workflow
+import browser_research
 
 # 키워드가 있느냐 없느냐로 방향을 정하면 틀린다. 실측(REVSTEALER 기사): 제목에
 # STEALER·Miner, 분류가 "악성코드", 해시 5건인데도 본문에 "클립보드 하이재킹"(악성코드의
@@ -453,45 +454,101 @@ def merge_actions(verdict, response):
     return merged
 
 
-def summarize(block):
-    """조사 과정을 한두 문장으로. 상세 단계는 접어두고 이걸 먼저 읽게 한다.
+# 교차 인텔 관측 중 "있다"는 쪽. 없다는 문장("…없습니다", "…않습니다")은 세지 않는다.
+INTEL_HIT_RE = re.compile(r"커뮤니티 보고서 \d+건에 실려|등재돼 있습니다|ThreatFox 항목|신고된 URL \d+건")
+INTEL_FAMILY_RE = re.compile(r"귀속:\s*([^.]+)")
 
-    단계 문장을 다시 파싱하지 않고 결과물에서 센다 — 문구가 바뀌어도 요약이 어긋나지
-    않는다.
-    """
-    seeds = block.get("seeds") or []
-    malware = block.get("malware") or {}
-    parts = []
 
-    if seeds:
-        observed = sum(1 for seed in seeds if seed.get("in_urlscan"))
-        dom_checked = sum(1 for seed in seeds if seed.get("dom_markers") is not None
-                          and (seed.get("dom_confirmed") or seed.get("dom_markers") == {} or seed.get("dom_markers")))
-        cloaked = sum(1 for seed in seeds if (seed.get("cloaked_hosts") or []))
-        text = "도메인 {}곳을 urlscan에서 조회했습니다({}곳은 스캔 기록 있음)".format(
-            len(seeds), observed)
-        if cloaked:
-            text += ", 그중 {}곳은 스캐너에게 응답을 감췄습니다".format(cloaked)
-        parts.append(text)
-
+def _malware_outcome(malware):
     files = malware.get("files") or []
-    if files:
-        if malware.get("checked"):
-            parts.append("파일 해시 {}건 중 {}건을 VT 동적 분석으로 확인했습니다".format(
-                malware.get("total_hashes") or len(files), len(files)))
-        else:
-            parts.append("파일 해시 {}건은 VT 링크만 준비했습니다(키 없음)".format(
-                malware.get("total_hashes") or len(files)))
+    if not files:
+        return ""
+    if not malware.get("checked"):
+        return "파일 해시 {}건 — VT 키가 없어 링크만 준비".format(malware.get("total_hashes") or len(files))
+    verdicts = []
+    for entry in files:
+        report = entry.get("report") or {}
+        malicious = report.get("malicious")
+        if isinstance(malicious, int) and malicious > 0:
+            label = str(report.get("label") or "악성").split("/")[0]
+            engines = report.get("engines")
+            verdicts.append("{} {}{}".format(
+                label, malicious, "/{}".format(engines) if isinstance(engines, int) and engines else ""))
+    return "VT 동적 분석 {}건 — {}".format(
+        len(files), "악성 판정 " + ", ".join(verdicts[:3]) if verdicts else "악성 판정 없음")
 
-    queries = sum(len(seed.get("queries") or []) for seed in seeds)
-    queries += sum(len(file.get("queries") or []) for file in files)
-    tail = []
-    if queries:
-        tail.append("검색 쿼리 {}개".format(queries))
-    if block.get("patterns"):
-        tail.append("알려진 패턴 {}개".format(len(block["patterns"])))
-    if tail:
-        parts.append("{}를 확보했습니다".format("와 ".join(tail)))
+
+def _intel_outcome(intel):
+    findings = intel.get("findings") or []
+    if not findings:
+        return ""
+    hits = [line for line in findings if INTEL_HIT_RE.search(line) and "않습니다" not in line]
+    families = []
+    for line in hits:
+        match = INTEL_FAMILY_RE.search(line)
+        for name in (match.group(1).split(",") if match else []):
+            name = name.strip()
+            if name and name not in families:
+                families.append(name)
+    if not hits:
+        return "교차 인텔 — 공개 보고·등재 없음"
+    return "교차 인텔 — 공개 보고·등재 {}건{}".format(
+        len(hits), "(귀속 {})".format(", ".join(families[:3])) if families else "")
+
+
+def _url_outcome(seeds):
+    if not seeds:
+        return ""
+    confirmed = sum(1 for seed in seeds if seed.get("dom_confirmed"))
+    empty = sum(1 for seed in seeds if seed.get("empty_response_hosts"))
+    infected = {c.get("domain") for seed in seeds for c in seed.get("candidates") or []
+                if lure_hunter.INFECTED_SITE_PIVOT in " ".join(c.get("reasons") or [])}
+    bits = ["유포지 코드 확인 {}곳".format(confirmed) if confirmed else "유포지 코드 미확인"]
+    if empty:
+        bits.append("빈 응답(원인 미확인) {}곳".format(empty))
+    if infected:
+        bits.append("감염 사이트 후보 {}곳".format(len(infected)))
+    return "urlscan 도메인 {}곳 — {}".format(len(seeds), ", ".join(bits))
+
+
+def summarize(block):
+    """조사 과정을 한두 문장으로 — 무엇을 돌렸는지가 아니라 각 조회에서 무엇이 나왔는지.
+
+    예전에는 "도메인 3곳 조회·해시 2건 VT·쿼리 37개 확보"처럼 한 일의 양만 셌다(실측
+    2026-09-28, Lunex 건 — 85단계를 돌고도 요약에는 결과가 한 마디도 없었다). 조회마다
+    결과를 한 조각씩 뽑고, 판단이 있으면 그 결론의 크기(확인·미확인·질문 상태)를 앞에
+    둔다. 단계 문장을 다시 파싱하지 않고 결과물에서 센다 — 문구가 바뀌어도 요약이
+    어긋나지 않는다. 판단이 붙은 뒤 build()가 한 번 더 부른다.
+    """
+    parts = []
+    synthesis = block.get("synthesis") or {}
+    if synthesis:
+        questions = synthesis.get("question_status") or []
+        status = {key: sum(1 for row in questions if row.get("status") == key)
+                  for key in ("answered", "partial", "open")}
+        bits = ["확인 {}건".format(len(synthesis.get("confirmed") or [])),
+                "미확인 {}건".format(len(synthesis.get("unconfirmed") or []))]
+        if questions:
+            bits.append("검증 질문 {}개 중 확인 {}·부분 {}·미해결 {}".format(
+                len(questions), status["answered"], status["partial"], status["open"]))
+        parts.append("판단 {} — {}".format(synthesis.get("verdict") or "-", ", ".join(bits)))
+
+    sources = (block.get("primary") or {}).get("sources") or []
+    if sources:
+        hosts = list(dict.fromkeys(str(s.get("host") or "").replace("www.", "") for s in sources))
+        parts.append("1차 자료 {}건 읽음({})".format(len(sources), ", ".join(h for h in hosts[:3] if h)))
+    for piece in (_malware_outcome(block.get("malware") or {}),
+                  _intel_outcome(block.get("intel") or {}),
+                  _url_outcome(block.get("seeds") or [])):
+        if piece:
+            parts.append(piece)
+    cves = (block.get("vulnerability") or {}).get("cves") or []
+    if cves:
+        kev = sum(1 for entry in cves if (entry.get("kev") or {}).get("added"))
+        parts.append("취약점 {}건 — KEV 등재 {}건".format(len(cves), kev))
+    web_refs = (block.get("web") or {}).get("references") or []
+    if web_refs:
+        parts.append("연구 자료 {}건 찾음".format(len(web_refs)))
 
     if not parts:
         return ""
@@ -511,7 +568,9 @@ def summarize(block):
 
 def _run_url(ctx):
     return lure_hunter.investigation_for_iocs(
-        ctx["iocs"], api_key=ctx["urlscan_key"], text=ctx["text"])
+        ctx["iocs"], api_key=ctx["urlscan_key"], text=ctx["text"],
+        web_files=lure_hunter.web_files_from(ctx["targets"]),
+        primary=(ctx.get("route") or {}).get("primary") or "")
 
 
 def _merge_url(block, track):
@@ -528,9 +587,13 @@ def _run_malware(ctx):
 def _run_extension(ctx):
     # 확장 ID는 모델에게 묻지 않고 본문에서 직접 뽑는다 — 32자 a-p 문자열이라
     # 오인할 수 없는 형태다. 1차 자료에도 ID가 실리는 경우가 많아 함께 본다.
-    ids = extension_hunter.ids_from_text(
-        ctx["text"], ctx.get("body") or "", ctx.get("primary_text") or "")
-    return extension_hunter.analyze(ids, objective=(ctx["targets"] or {}).get("objective") or "")
+    texts = (ctx["text"], ctx.get("body") or "", ctx.get("primary_text") or "")
+    ids = extension_hunter.ids_from_text(*texts)
+    # 같은 ID라도 "악성 확장"인지 "탈취 대상 지갑"인지는 문맥이 가른다 — 원문(body·1차
+    # 자료)만 본다. 우리말 분석문(text)은 모델이 옮겨 쓴 것이라 역할 근거로 삼지 않는다.
+    roles = extension_hunter.roles_from_text(ctx.get("body") or "", ctx.get("primary_text") or "")
+    return extension_hunter.analyze(ids, objective=(ctx["targets"] or {}).get("objective") or "",
+                                    roles=roles)
 
 
 def _run_github(ctx):
@@ -538,6 +601,20 @@ def _run_github(ctx):
 
 
 def _run_intel(ctx):
+    # OTX는 해시 하나당 응답이 크고 최대 2회 재시도한다. 대표 샘플을 고른
+    # 계획이 있으면 그 해시만 교차 조회하고, 도메인·IP는 그대로 확인한다.
+    # 전체 해시는 IOC·헌팅 목록에 이미 보존되어 있어 조사 범위를 줄여도 값이
+    # 사라지지 않는다.
+    selected = {str(value).lower() for value in ctx.get("route", {}).get("hashes") or []}
+    if selected:
+        selected_iocs = []
+        hash_types = {"md5", "sha1", "sha256"}
+        for item in ctx["iocs"]:
+            kind = str(item.get("type") or "").lower()
+            value = str(item.get("value") or "")
+            if kind not in hash_types or value.lower() in selected:
+                selected_iocs.append(item)
+        return intel_hunter.analyze(selected_iocs, targets=ctx["targets"])
     return intel_hunter.analyze(ctx["iocs"], targets=ctx["targets"])
 
 
@@ -550,7 +627,8 @@ def _run_web(ctx):
 
 
 def _run_supply(ctx):
-    return supply_chain_hunter.analyze(ctx["text"], title=ctx["title"], iocs=ctx["iocs"])
+    return supply_chain_hunter.analyze(ctx["text"], title=ctx["title"], iocs=ctx["iocs"],
+                                      targets=ctx["targets"])
 
 
 def _run_vuln(ctx):
@@ -646,6 +724,21 @@ def run_lookups(ctx, block, steps):
 # "남은 질문"을 만들어 놓고 거기서 멈췄다(실측: Magento 건이 남긴 질문 5개 중 3개는
 # 우리가 가진 도구로 답할 수 있는 것이었다). 한 바퀴로 묶는 이유는 시간이다 —
 # 기사 하나에 이미 400초가 넘게 든다.
+def _corroborate_roles(block, steps):
+    """조회 결과(샌드박스 통신·urlscan DOM)로 역할 미확인 지표를 확정 후보로 올린다.
+
+    source_evidence.corroborate 참고. 바뀐 것은 조사 과정에 남기고, 판단 재료로도
+    쓸 수 있게 문장으로 돌려준다.
+    """
+    lines = []
+    for item in source_evidence.corroborate(block):
+        label = source_evidence.ROLE_LABELS.get(item["role"], item["role"])
+        line = "{}: {}. {}".format(item["value"], label, item.get("evidence") or "")
+        steps.append({"track": "지표 역할 검토", "text": line})
+        lines.append(line)
+    return lines
+
+
 def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
     """요청받은 값을 종류별로 조회해 판단 재료로 쓸 문장을 만든다.
 
@@ -657,6 +750,7 @@ def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
     for item in requests or []:
         kind, value = item.get("type"), item.get("value")
         question = item.get("question") or ""
+        before = len(lines)
         try:
             if kind in ("domain", "ip"):
                 field = "page.domain" if kind == "domain" else "ip"
@@ -718,8 +812,20 @@ def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
                 continue
             steps.append("후속 조회 \"{}\" — {} {}를 다시 확인했습니다.".format(
                 question[:60], kind, value[:40]))
+            if block is not None:
+                block.setdefault("followup_results", []).append({
+                    "type": kind, "value": value, "question": question,
+                    "lookup": {"domain": "urlscan", "ip": "urlscan", "hash": "virustotal",
+                               "cve": "nvd", "package": "registry"}[kind],
+                    "status": "returned", "result": lines[before] if len(lines) > before else "",
+                })
         except Exception as error:
             steps.append("후속 조회 실패({} {}): {}".format(kind, value[:30], str(error)[:50]))
+            if block is not None:
+                block.setdefault("followup_results", []).append({
+                    "type": kind, "value": value, "question": question,
+                    "status": "failed", "result": "조회 실패: {}".format(str(error)[:80]),
+                })
     return lines, steps
 
 
@@ -744,6 +850,10 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     source_urls = [article_url] if article_url else []
     iocs, _ = source_evidence.filter_iocs(iocs, source_urls)
     targets = source_evidence.filter_targets(targets, source_urls)
+    documents = [{"url": article_url, "text": body}]
+    assessed = source_evidence.assess_iocs(iocs, documents)
+    iocs = source_evidence.lookup_iocs(assessed)
+    targets = source_evidence.restrict_targets(targets, assessed)
     # 이 기사를 전에 분석했다면 그때 정한 축을 가져온다. 한 번만 읽어 재분류까지 쓴다.
     pinned = ""
     try:
@@ -756,6 +866,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                        for key in ("primary", "label", "explain", "tracks", "scores")}}
     block["source_urls"] = source_urls
     block["targets"] = targets
+    block["indicator_assessments"] = assessed
 
     # 지표가 없어도 본문에서 대응 재료가 나오면 블록을 만든다 — 예전에는 트랙이 없으면
     # 통째로 건너뛰어서, IOC를 싣지 않은 기사(실측 31건 중 25건)에는 조사&대응이 아예
@@ -821,7 +932,11 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             if str(item.get("value") or "").lower() not in known]
         fresh, _ = source_evidence.filter_iocs(fresh, source_urls)
         if fresh:
-            iocs = list(iocs or []) + fresh
+            assessed = source_evidence.assess_iocs(list(assessed) + fresh,
+                                                   documents + (primary.get("sources") or []))
+            block["indicator_assessments"] = assessed
+            iocs = source_evidence.lookup_iocs(assessed)
+            targets = source_evidence.restrict_targets(targets, assessed)
             kinds = {}
             for item in fresh:
                 kinds[item["type"]] = kinds.get(item["type"], 0) + 1
@@ -844,14 +959,37 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             chosen = lookup_plan.plan(targets.get("objective"), targets.get("questions"),
                                       [{"key": l["key"], "label": l["label"],
                                         "consumes": l["consumes"]} for l in LOOKUPS],
-                                      route, targets=targets)
+                                      route, targets=targets, evidence=body[:4000] + "\n" + primary_text[:3500]
+                                      + "\n[원문 후반·표]\n" + primary_text[-3000:])
             route["tracks"] = chosen["tracks"]
+            block["question_lookups"] = chosen.get("question_lookups") or []
+            if chosen.get("hashes"):
+                # 1차 자료의 전체 해시는 IOC·헌팅 목록에 남기되, VT 동적 분석은
+                # 계획이 고른 대표 버전만 본다. 11개 버전을 전부 순차 조회하면 외부
+                # API 지연으로 종합 판단까지 도달하지 못하고, 대표 샘플을 고르는
+                # 목표도 무시하게 된다.
+                all_hashes = list(route.get("hashes") or [])
+                route["hashes"] = chosen["hashes"][:2]
+                steps.append({"track": "조회 계획",
+                              "text": "전체 해시 {}건 중 대표 샘플 {}건만 동적 분석하고, 나머지는 IOC·헌팅 대상으로 보존합니다."
+                                      .format(len(all_hashes), len(route["hashes"]))})
+            elif "malware" in route.get("tracks", []) and len(route.get("hashes") or []) > 2:
+                all_hashes = list(route["hashes"])
+                route["hashes"] = all_hashes[:2]
+                steps.append({"track": "조회 계획",
+                              "text": "동적 분석 대표 해시가 지정되지 않아 앞의 {}건만 우선 분석하고, 전체 {}건은 IOC·헌팅 대상으로 보존합니다."
+                                      .format(len(route["hashes"]), len(all_hashes))})
             steps.extend({"track": "조회 계획", "text": line}
                          for line in chosen.get("steps") or [])
         except Exception as error:
             steps.append({"track": "조회 계획", "text": "실패: {}".format(error)})
     block["route"]["tracks"] = route["tracks"]
     block["targets"] = targets
+    for item in assessed:
+        if item.get("role"):
+            steps.append({"track": "지표 역할 검토", "text": "{}: {}. {}".format(
+                item["value"], source_evidence.ROLE_LABELS.get(item["role"], item["role"]),
+                item.get("evidence") or "")})
     if primary.get("sources"):
         block["primary"] = {"sources": [{key: source.get(key) for key in
                               ("url", "host", "chars", "retrieved_at")}
@@ -860,23 +998,45 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                  "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets,
                  "body": body, "primary_text": primary_text, "block": block},
                 block, steps)
+    _corroborate_roles(block, steps)
+
+    browser_track = browser_research.investigate(targets, block, route)
+    if browser_track:
+        block["browser_research"] = browser_track
+        rows = block.setdefault("question_lookups", [])
+        browser_results = browser_track["results"]
+        browser_live = next((item for item in browser_results
+                             if item["source"] == "isolated_browser"), {})
+        state = "returned" if browser_live.get("status") == "observed" else "partial"
+        block.setdefault("lookup_status", []).append({
+            "key": "브라우저 조사", "status": state,
+            "detail": "격리 브라우저 관측" if state == "returned" else
+                      browser_live.get("reason") or "저장된 스캔만 확인"})
+        archived = [item["evidence"] for item in browser_results
+                    if item["source"] == "archived_scan"]
+        summary = "저장된 urlscan {}건의 DOM·HTTP 관측을 대조했습니다".format(len(archived))
+        if state == "returned":
+            snapshot = browser_live["evidence"]
+            summary += "; 브라우저에서 {} 후 DOM 변경 {}, 클립보드 쓰기 {}건, HTTP 응답 {}건 관측".format(
+                snapshot["action"], snapshot["before"]["dom_sha256"] != snapshot["after"]["dom_sha256"],
+                len(snapshot["clipboard"]), len(snapshot["responses"]))
+        else:
+            summary += "; " + (browser_live.get("reason") or "브라우저 관측 미실행")
+        block.setdefault("findings", []).append(summary)
+        for question in browser_track["questions"]:
+            row = next((item for item in rows if item.get("question") == question), None)
+            if row is None:
+                row = {"question": question, "lookups": []}
+                rows.append(row)
+            row.setdefault("lookups", []).append({
+                "key": "브라우저 조사", "why": "저장 스캔과 실제 페이지의 클릭 전후 DOM·HTTP를 대조"})
+            block.setdefault("followup_results", []).append({
+                "type": "browser", "value": archived[0]["domain"] if archived else "",
+                "question": question, "lookup": "브라우저 조사", "status": state,
+                "result": summary})
+            steps.append({"track": "브라우저 조사", "text": "{} — {}".format(question, summary)})
 
     block.setdefault("patterns", [])
-
-    # 여기까지는 미리 정해둔 규칙만 돌았다 — IOC 값 쿼리와 손으로 등록한 카탈로그다.
-    # 그것만으로는 "본문에 적힌 이번 사건의 구체값"이 다음 사건에도 쓸 수 있는 형태로
-    # 올라가지 않는다. 그 일반화는 LLM에게 맡기고, 나온 쿼리는 실제로 조회해서
-    # 살아남은 것만 받는다(pattern_synth). 실패해도 나머지 결과는 그대로 낸다.
-    if synthesize and (text or body):
-        try:
-            synth = pattern_synth.synthesize(title, text, body=body, iocs=iocs,
-                                             api_key=urlscan_key, targets=targets)
-            if synth.get("patterns"):
-                block["patterns"] = list(block["patterns"]) + synth["patterns"]
-            steps.extend({"track": "패턴 합성", "text": line}
-                         for line in synth.get("steps") or [])
-        except Exception as error:
-            steps.append({"track": "패턴 합성", "text": "실패: {}".format(error)})
 
     block["steps"] = steps
     block.setdefault("seeds", [])
@@ -958,6 +1118,21 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 analyst_workflow.prepare_queries(block.get("response"))
             history_evidence = past_analyses.as_evidence(related)
 
+            if text or body:
+                try:
+                    synth = pattern_synth.synthesize(
+                        title, text, body=body + "\n" + primary_text + "\n" + evidence,
+                        iocs=iocs, api_key=urlscan_key, targets=targets, web_evidence=block)
+                    if synth.get("patterns"):
+                        block["patterns"] = list(block["patterns"]) + synth["patterns"]
+                    steps.extend({"track": "패턴 합성", "text": line}
+                                 for line in synth.get("steps") or [])
+                    block["response"] = response_builder.build(
+                        block, iocs, primary=route["primary"], text=text)
+                    analyst_workflow.prepare_queries(block.get("response"))
+                except Exception as error:
+                    steps.append({"track": "패턴 합성", "text": "실패: {}".format(error)})
+
             # 확인질문별 진행 원장 — "검색을 했다"가 아니라 "질문이 풀렸다"로 반복을
             # 멈춘다(question_status는 response_synth가 매 라운드 채운다).
             ledger = {q: "open" for q in (targets.get("questions") or [])}
@@ -971,6 +1146,11 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             verdict = response_synth.synthesize(
                 title, text, targets, block, primary=evidence,
                 history=history_evidence, article=body, related=related)
+            if verdict is None:
+                steps.append({"track": "종합 판단", "text": "판단 생성 실패: 모델 응답 없음·형식 오류·근거 검증 탈락. 조사 자료는 보존했으며 분석 완료로 간주하지 않습니다."})
+                block["synthesis_status"] = {"status": "failed", "retryable": True}
+            else:
+                block["synthesis_status"] = {"status": "completed"}
             _apply_status(verdict)
 
             # 후속 조회를 여러 라운드로 돈다(상한 MAX_INVESTIGATION_ROUNDS). 질문이
@@ -1023,22 +1203,30 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                         pending, urlscan_key=urlscan_key, vt_key=vt_key, block=block)
                     steps.extend({"track": "후속 조회", "text": line} for line in extra_steps)
                     executed_pending = pending
+                    # 후속 해시 조회로 샌드박스 통신이 새로 생겼을 수 있다.
+                    extra_lines = extra_lines + _corroborate_roles(block, steps)
                 if open_questions:
                     web_round = None
                     try:
-                        answered_refs = set(((block.get("intel") or {}).get("references") or [])
-                                            + ((block.get("web") or {}).get("references") or []))
-                        web_round = web_search.analyze(targets, answered=answered_refs,
+                        # 이미 검색한 말은 빼고, 남은 질문에서 뽑은 말로만 다시 찾는다.
+                        searched = set((block.get("web") or {}).get("terms") or [])
+                        web_round = web_search.analyze(targets, answered=searched,
                                                        open_questions=open_questions)
                     except Exception:
                         web_round = None
                     if web_round:
                         existing_web = block.get("web") or {}
+                        known_findings = set(existing_web.get("findings") or [])
+                        new_findings = [line for line in web_round.get("findings") or []
+                                        if line not in known_findings]
                         block["web"] = dict(web_round, findings=(
-                            (existing_web.get("findings") or []) + (web_round.get("findings") or [])),
+                            (existing_web.get("findings") or []) + new_findings),
                             references=list(dict.fromkeys(
                                 (existing_web.get("references") or [])
-                                + (web_round.get("references") or []))))
+                                + (web_round.get("references") or []))),
+                            terms=list(dict.fromkeys(
+                                (existing_web.get("terms") or []) + (web_round.get("terms") or []))))
+                        web_round["findings"] = new_findings
                         steps.extend({"track": "연구 자료 검색", "text": line}
                                      for line in web_round.get("steps") or [])
                         extra_lines = extra_lines + (web_round.get("findings") or [])
@@ -1084,6 +1272,9 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
         except Exception as error:
             steps.append({"track": "종합 판단", "text": "실패: {}".format(error)})
             block["steps"] = steps
+    # 판단이 붙은 뒤 요약을 다시 만든다 — 앞에서 만든 요약에는 결론이 들어갈 수 없었다.
+    if block.get("synthesis"):
+        block["steps_summary"] = summarize(block)
     analyst_workflow.finalize(block, targets)
     if incident_label:
         # build_for_article()이 사건별로 이 함수를 불러 결과를 합칠 때만 쓰인다 —
@@ -1220,6 +1411,8 @@ def _combine_incidents(sub_blocks):
     questions = [question for b in sub_blocks for question in b.get("questions") or []]
     if questions:
         combined["questions"] = questions
+    combined["question_lookups"] = [row for b in sub_blocks
+                                     for row in b.get("question_lookups") or []]
     coverage = [b.get("coverage") for b in sub_blocks if b.get("coverage")]
     if coverage:
         combined["coverage"] = coverage[0]

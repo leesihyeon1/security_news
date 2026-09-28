@@ -110,7 +110,7 @@ def extract_vulnerabilities(advisory, limit=5):
                 "ecosystem": clean_text(package.get("ecosystem")),
                 "package": clean_text(package.get("name")),
                 "vulnerable_range": clean_text(vulnerability.get("vulnerable_version_range")),
-                "patched_versions": clean_text(vulnerability.get("patched_versions")),
+                "patched_versions": clean_text(vulnerability.get("first_patched_version")),
             }
         )
 
@@ -369,6 +369,11 @@ def main():
                 score=score,
                 cves=[item["cve_id"]],
                 affected_products=affected_product_names(item),
+                affected_packages=[{
+                    "product": entry["package"],
+                    "affected": entry["vulnerable_range"],
+                    "fixed": entry["patched_versions"],
+                } for entry in item["affected"] if entry["package"]],
                 fix_available=has_patched_version(item),
                 remediation=build_remediation(item),
                 published_at=item["published"],

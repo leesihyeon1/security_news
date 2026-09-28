@@ -39,6 +39,11 @@ MIN_VALUE_CHARS = 7
 # 관련 기록 하나에서 딸려 보낼 IOC 수 상한. 동일 캠페인으로 확정된 뒤에만 실제로
 # 재조회에 쓰이므로, 많이 실어도 손해는 아니지만 프롬프트/조회 비용을 생각해 묶는다.
 MAX_RELATED_IOCS = 20
+# 과거 기록에서 자동 재조회로 이어질 수 있는 네트워크 IOC의 역할. 저장 당시
+# 역할 정보가 없던 오래된 도메인은 판단 자료에는 넣지 않는다 — 예전의 출처·정찰
+# 도메인이 새 사건의 C2로 승격되는 것을 막기 위한 보수적 기본값이다.
+ACTIONABLE_IOC_ROLES = {"c2", "exfiltration", "distribution"}
+NETWORK_IOC_TYPES = {"domain", "url", "ip", "ipv4", "ipv6", "ip-dst", "ip-src"}
 # 이름 취급하지 않을 일반명사. campaign_radar의 STOPNAMES와 같은 이유다.
 STOPNAMES = {
     "unknown", "n/a", "none", "various", "unattributed", "ransomware",
@@ -120,6 +125,28 @@ def _record_targets(record):
     return record.get("targets") or {}
 
 
+def _related_iocs(record):
+    """과거 기록에서 재조회 가능한 지표만 꺼낸다.
+
+    새 기록은 indicator_assessments의 역할을 함께 저장한다. 예전 기록에는 역할이
+    없으므로 네트워크 값을 보수적으로 제외하고, 해시·CVE 같은 비네트워크 지표만
+    이어 붙인다. 과거 분석의 결론은 절대 이 목록에 섞지 않는다.
+    """
+    out = []
+    for item in record.get("iocs") or []:
+        if not isinstance(item, dict) or not item.get("value"):
+            continue
+        kind = str(item.get("type") or "").lower()
+        role = str(item.get("role") or "").lower()
+        if kind in NETWORK_IOC_TYPES and role not in ACTIONABLE_IOC_ROLES:
+            continue
+        out.append({key: item[key] for key in ("type", "value", "role", "actionable")
+                    if key in item})
+        if len(out) >= MAX_RELATED_IOCS:
+            break
+    return out
+
+
 def find_related(targets, exclude_title="", client=None):
     """같은 계열의 과거 분석. [{title, when, why}] 형식, 최신순.
 
@@ -166,8 +193,7 @@ def find_related(targets, exclude_title="", client=None):
             # 다음 조사 라운드의 iocs에 합쳐 재조회한다 — "관련 보고서의 IOC를 이어
             # 조사"하는 동작의 입력. 판단 근거로 쓰지 않는다는 모듈 원칙은 그대로다;
             # 여기 실린 값은 IOC일 뿐, 과거 판단문은 여전히 넘기지 않는다.
-            "iocs": [item for item in (record.get("iocs") or [])
-                    if isinstance(item, dict) and item.get("value")][:MAX_RELATED_IOCS],
+            "iocs": _related_iocs(record),
         })
     # 최신 분석이 앞에 오게 한다 — 같은 계열이면 최근 것이 더 쓸모 있다.
     related.sort(key=lambda item: item["when"], reverse=True)
@@ -233,9 +259,19 @@ def as_evidence(related):
         return ""
     blocks = ["[전에 우리가 분석한 같은 계열]"]
     for item in related:
+        historical_iocs = []
+        for ioc in item.get("iocs") or []:
+            kind = str(ioc.get("type") or "").lower()
+            value = str(ioc.get("value") or "").strip()
+            if not value:
+                continue
+            historical_iocs.append("{} {}".format(kind or "지표", value))
         blocks.append("- {} ({}) · {}{}".format(
             item["title"], item["when"] or "?", item["why"],
             "\n  그때 세운 목표: " + item["objective"] if item["objective"] else ""))
+        if historical_iocs:
+            blocks.append("  재조회 후보(과거 저장 지표이며 이번 사건의 IOC로 확정하지 않음): "
+                          + ", ".join(historical_iocs[:8]))
     blocks.append("이 연결이 이번 건 판단에 무엇을 뜻하는지 밝혀라 — 같은 인프라를 다시 "
                   "쓰는 것인지, 수법만 같은 것인지, 무관한데 이름만 겹친 것인지.")
     return "\n".join(blocks)

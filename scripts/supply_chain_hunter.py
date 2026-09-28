@@ -32,6 +32,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import common_utils
+import analysis_targets
 
 # 한 번에 받는 최대 건수. GitHub API의 페이지 상한이 100이라 이 위는 잘린다 —
 # 잘렸다는 사실을 확인내용에 밝혀야 "100건"이 실제 총계인 것처럼 읽히지 않는다.
@@ -264,10 +265,18 @@ def _registry_link(ecosystem):
     return ADVISORY_UI_URL.format(urllib.parse.quote(ecosystem))
 
 
-def analyze(text, title="", iocs=None):
+def analyze(text, title="", iocs=None, targets=None):
     """공급망 트랙. 조사할 것이 없으면 None."""
     blob = "{} {}".format(title or "", text or "")
     ecosystems = registries_from_text(blob)
+    packages = analysis_targets.packages(targets or {})
+    known = {(p["ecosystem"], p["name"].lower()) for p in packages}
+    packages.extend(p for p in packages_from_text(blob)
+                    if (p["ecosystem"], p["name"].lower()) not in known)
+    packages = packages[:MAX_PACKAGE_LOOKUPS]
+    for package in packages:
+        if package["ecosystem"] not in ecosystems:
+            ecosystems.append(package["ecosystem"])
     docker = mentions_docker(blob)
     if not ecosystems and not docker:
         return None
@@ -276,7 +285,8 @@ def analyze(text, title="", iocs=None):
     listed = []
     total_recent = 0
 
-    for ecosystem in ecosystems:
+    # A named incident must not inherit unrelated packages from a registry feed.
+    for ecosystem in ([] if packages else ecosystems):
         advisories = load_malware_advisories(ecosystem)
         if not advisories:
             steps.append("{} 악성 패키지 권고를 조회했지만 결과를 받지 못했습니다."
@@ -296,7 +306,7 @@ def analyze(text, title="", iocs=None):
             capped = len(advisories) >= ADVISORY_PAGE_SIZE and len(recent) == len(advisories)
             findings.append(
                 "{}에 최근 {}일간 악성 패키지가 {}{}건 등재됐습니다(가장 최근 {} · {}). "
-                "이 기사가 말하는 유포 경로가 지금도 열려 있다는 뜻입니다.".format(
+                "레지스트리 배경 통계이며 이번 사건과의 연관성은 확인되지 않았습니다.".format(
                     REGISTRY_LABELS.get(ecosystem, ecosystem), RECENT_DAYS,
                     "최소 " if capped else "", len(recent),
                     newest["published"], newest["packages"][0] if newest["packages"] else newest["id"]))
@@ -321,7 +331,6 @@ def analyze(text, title="", iocs=None):
         steps.append("Docker Hub 언급을 확인했지만, 등재 현황을 셀 수 있는 공개 목록이 "
                      "없어 조회 대신 확인 절차로 대체했습니다.")
 
-    packages = packages_from_text(blob)
     checked = []
     for item in packages:
         if item["ecosystem"] == "docker":
@@ -329,7 +338,7 @@ def analyze(text, title="", iocs=None):
         info = lookup_package(item["ecosystem"], item["name"])
         checked.append(info)
         state = ("레지스트리에 아직 있습니다" if info["exists"] is True
-                 else "이미 내려갔습니다" if info["exists"] is False
+                 else "현재 조회되지 않습니다(삭제·차단 여부는 원문과 대조)" if info["exists"] is False
                  else "존재 여부를 확인하지 못했습니다")
         findings.append("기사에 적힌 {} 패키지 {}: {}{}".format(
             REGISTRY_LABELS.get(item["ecosystem"], item["ecosystem"]), item["name"], state,
@@ -511,8 +520,6 @@ def response_material(track):
 
     actions, blocklists, queries = [], [], []
     names = []
-    for registry in track.get("registries") or []:
-        names.extend(registry.get("packages") or [])
     # 기사에 적힌 패키지 중 아직 살아 있는 것은 앞에 둔다 — 먼저 볼 대상이다.
     for item in track.get("packages") or []:
         if item.get("name") and item["name"] not in names:
@@ -520,18 +527,17 @@ def response_material(track):
 
     if names:
         actions.append(
-            "아래 목록은 최근 {}일간 등재된 악성 패키지다. 차단 목록에 넣기 전에 사내 "
+            "아래 목록은 이번 기사에서 식별한 조사 대상 패키지다. 차단 목록에 넣기 전에 사내 "
             "아티팩트 저장소(Nexus·Artifactory 등)와 CI 캐시에 이미 받아둔 것이 있는지 "
-            "먼저 확인한다 — 이미 들어와 있으면 차단만으로는 끝나지 않는다.".format(RECENT_DAYS))
+            "먼저 확인한다 — 이미 들어와 있으면 차단만으로는 끝나지 않는다.")
         # 화면(renderBlocklist)은 label과 문자열 배열을 받는다 — 다른 키 이름이나 객체를
         # 넣으면 "[object Object]"로 찍힌다(실측).
         blocklists.append({
-            "label": "확인 대상 — 최근 등재된 악성 패키지",
-            "note": "이름이 계속 바뀌므로 이 목록은 오늘 기준이다. 영구 차단 목록이 아니라 "
-                    "지금 사내에 들어와 있는지 확인할 대상으로 쓴다.",
+            "label": "확인 대상 — 이번 사건의 패키지",
+            "note": "관련 없는 최근 등재 패키지는 제외했습니다. 버전·실행 조건·관측 시기를 원문과 대조합니다.",
             "values": names[:80],
         })
-        for registry in track.get("registries") or []:
+        for registry in incident_registries(track):
             if registry.get("packages"):
                 queries.append(_install_kql(registry["packages"][:60], registry["label"],
                                             ecosystem=registry.get("ecosystem") or "npm"))
@@ -547,19 +553,30 @@ def response_material(track):
             "기사에 패키지 이름이 없으므로 개별 차단으로는 대응이 끝나지 않는다. "
             "의존성 목록을 뽑아 두면 다음부터 등재분과 자동으로 대조할 수 있다.")
 
-    commands = _local_commands(track.get("registries") or [])
+    commands = [c for c in _local_commands(incident_registries(track))
+                if "설치 여부 확인" in c["name"]]
     if commands:
         # 제거로 끝난다고 읽히면 안 된다 — 설치 시점에 postinstall 스크립트가 이미
         # 사용자 권한으로 돌았기 때문에, 그때 빠져나간 것은 지운다고 돌아오지 않는다.
         actions.append(
-            "패키지를 지워도 설치 시점에 실행된 스크립트가 한 일은 되돌아오지 않는다. "
-            "해당 단말·계정의 npm 토큰(~/.npmrc), PyPI 토큰, 클라우드 키(~/.aws), SSH "
-            "개인키, git 자격증명을 교체하고, 그 계정으로 최근에 나간 커밋·배포가 있는지 "
-            "확인한다. 제거·재설치는 그 다음이다.")
+            "설치와 실제 실행·탈취를 구분한다. 실행 버전·조건을 대조하고 패키지·잠금 파일·CI 로그를 "
+            "먼저 보존한다. 노출이 확인되거나 배제할 수 없는 자격증명만 범위를 정해 폐기·재발급한다. "
+            "오염된 node_modules와 빌드 산출물은 검증한 소스·잠금 파일로 격리 환경에서 재구축한다. "
+            "조사 중 npm install·uninstall로 의심 패키지의 수명주기 스크립트를 실행하지 않는다.")
     if not actions and not queries and not commands:
         return None
     return {"actions": actions, "blocklists": blocklists, "kql": queries,
             "commands": commands}
+
+
+def incident_registries(track):
+    grouped = {}
+    for item in track.get("packages") or []:
+        if item.get("name"):
+            ecosystem = item.get("ecosystem") or "npm"
+            grouped.setdefault(ecosystem, []).append(item["name"])
+    return [{"ecosystem": key, "label": REGISTRY_LABELS.get(key, key), "packages": names}
+            for key, names in grouped.items()]
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ import json
 import re
 
 import common_utils
+import browser_research
 
 # 계획 출력은 짧다 — 길게 쓰라고 하면 이유가 장황해지고 판단에 도움이 안 된다.
 MAX_REASON_CHARS = 120
@@ -36,11 +37,20 @@ PROMPT = """당신은 SOC 대응 책임자다. 이 건의 대응 목표와 확�
 - 목표 달성에 도움이 안 되는 조회는 skip에 넣고 이유를 적어라. 시간이 드는 작업이라
   전부 돌리는 것이 좋은 것은 아니다.
 - run은 먼저 볼 것부터 순서대로 적어라.
+- 아래 사건 근거에 있는 지표의 역할을 지켜라. 정찰 대상·피해 서비스는 유출지나 C2가 아니다.
+- hashes는 동적 분석에서 먼저 비교할 샘플 최대 2개다. 버전별 기능·실행 조건 차이를
+  확인할 대표 샘플을 고르되 [확보된 해시]의 값만 사용하라.
+- question_lookups는 각 [확인해야 할 질문]에 실제로 고른 run 조회를 연결한다.
+  질문 문장을 그대로 쓰고, lookups의 key는 run에 있는 값만 쓴다. 조회로 답할 수 없는
+  질문은 빈 배열로 두고 조회를 지어내지 마라. why에는 그 조회로 무엇을 확인할지 적어라.
 
 [출력 형식 — JSON 하나만. 설명 문장을 앞뒤에 붙이지 마라]
 {
   "run": [{"key": "조회 키", "why": "이 목표에 왜 필요한가(한 문장)"}],
-  "skip": [{"key": "조회 키", "why": "왜 안 하는가(한 문장)"}]
+  "skip": [{"key": "조회 키", "why": "왜 안 하는가(한 문장)"}],
+  "question_lookups": [{"question": "확인해야 할 질문 원문", "lookups":
+    [{"key": "run의 조회 키", "why": "이 질문에서 확인할 것"}]}],
+  "hashes": ["우선 비교할 실제 해시"]
 }
 """
 
@@ -78,7 +88,25 @@ def _availability(route, targets):
     }
 
 
-def build_prompt(objective, questions, catalog, availability):
+def _mandatory_tracks(route, targets, runnable):
+    """증거가 있으면 모델이 빼도 반드시 실행할 최소 조회."""
+    route = route or {}
+    targets = targets or {}
+    required = []
+    if route.get("hashes") and "malware" in runnable:
+        required.append("malware")
+    if (route.get("domains") and "user_action" in runnable and
+            any(browser_research.QUESTION_RE.search(question) for question in
+                (targets.get("questions") or []))):
+        required.append("user_action")
+    if (route.get("hashes") or route.get("domains") or route.get("ips")) and "intel" in runnable:
+        required.append("intel")
+    if (targets.get("packages") or "supply_chain" in (route.get("tracks") or [])) and "supply_chain" in runnable:
+        required.append("supply_chain")
+    return required
+
+
+def build_prompt(objective, questions, catalog, availability, evidence="", hashes=None):
     lines = []
     for item in catalog:
         lines.append("- {} ({}): {} 조회. 지금 입력 = {}".format(
@@ -90,6 +118,8 @@ def build_prompt(objective, questions, catalog, availability):
         + ("\n\n[확인해야 할 질문]\n" + "\n".join("- " + q for q in questions)
            if questions else "")
         + "\n\n[쓸 수 있는 조회]\n" + "\n".join(lines)
+        + "\n\n[사건 근거]\n" + evidence[:11000]
+        + "\n\n[확보된 해시]\n" + "\n".join(hashes or [])
         + "\n\nJSON만 출력하라."
     )
 
@@ -111,7 +141,7 @@ def parse(raw):
     return data if isinstance(data, dict) else {}
 
 
-def plan(objective, questions, catalog, route, targets=None, timeout=120):
+def plan(objective, questions, catalog, route, targets=None, timeout=120, evidence=""):
     """돌릴 조회를 정한다.
 
     반환: {"tracks": [실행할 키], "reasons": {키: 이유}, "skipped": [{key, why}],
@@ -121,9 +151,11 @@ def plan(objective, questions, catalog, route, targets=None, timeout=120):
     fallback = list(route.get("tracks") or [])
     availability = _availability(route, targets)
     runnable = {item["key"] for item in catalog if availability.get(item["key"]) != "없음"}
+    mandatory = _mandatory_tracks(route, targets, runnable)
+    fallback = list(dict.fromkeys(fallback + mandatory))
 
     raw = common_utils.llm_generate(
-        build_prompt(objective, questions, catalog, availability),
+        build_prompt(objective, questions, catalog, availability, evidence, route.get("hashes")),
         timeout=timeout, json_format=True)
     data = parse(raw)
     if not data:
@@ -153,6 +185,13 @@ def plan(objective, questions, catalog, route, targets=None, timeout=120):
             skipped.append({"key": item["key"],
                             "why": " ".join(str(item.get("why") or "").split())[:MAX_REASON_CHARS]})
 
+    added_mandatory = []
+    for key in mandatory:
+        if key not in tracks:
+            tracks.append(key)
+            reasons[key] = "확보된 지표가 있어 누락할 수 없는 필수 조회입니다."
+            added_mandatory.append(key)
+
     if not tracks:
         return {"tracks": fallback, "reasons": {}, "skipped": skipped,
                 "steps": ["조회 계획이 실행 가능한 조회를 하나도 고르지 않아, 지표 종류로 "
@@ -171,4 +210,26 @@ def plan(objective, questions, catalog, route, targets=None, timeout=120):
         steps.append("· 건너뜀 {}: {}".format(item["key"], item["why"]))
     for reason in dropped[:3]:
         steps.append("· 계획에서 제외: {}".format(reason))
-    return {"tracks": tracks, "reasons": reasons, "skipped": skipped, "steps": steps}
+    if added_mandatory:
+        steps.append("· 증거 보존을 위해 필수 조회를 추가했습니다: "
+                     + ", ".join(added_mandatory))
+    wanted_questions = {" ".join(str(q).split()): q for q in questions or []}
+    question_lookups = []
+    for row in data.get("question_lookups") or []:
+        if not isinstance(row, dict):
+            continue
+        question = wanted_questions.get(" ".join(str(row.get("question") or "").split()))
+        if not question or any(entry["question"] == question for entry in question_lookups):
+            continue
+        lookups = []
+        for item in row.get("lookups") or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if key in tracks and key not in [entry["key"] for entry in lookups]:
+                lookups.append({"key": key,
+                                "why": " ".join(str(item.get("why") or "").split())[:MAX_REASON_CHARS]})
+        question_lookups.append({"question": question, "lookups": lookups})
+    hashes = [v for v in data.get("hashes") or [] if isinstance(v, str) and v in (route.get("hashes") or [])][:2]
+    return {"tracks": tracks, "reasons": reasons, "skipped": skipped, "steps": steps,
+            "hashes": hashes, "question_lookups": question_lookups}

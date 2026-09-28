@@ -926,6 +926,167 @@ def _union(group, field):
     return merged
 
 
+def build_cve_details(cve_ids, group):
+    details = []
+    for cve_id in cve_ids:
+        related = [event for event in group if cve_id in (event.get("cves") or [])]
+        records = []
+        seen = set()
+        for event in related:
+            source_url = event.get("url") or ""
+            source_name = source_label(event.get("source"))
+            for entry in event.get("affected_packages") or []:
+                if not isinstance(entry, dict):
+                    continue
+                product = str(entry.get("product") or "").strip()
+                affected = str(entry.get("affected") or "").strip()
+                fixed = str(entry.get("fixed") or "").strip()
+                if not product or not (affected or fixed):
+                    continue
+                key = (product, affected, fixed)
+                if key not in seen:
+                    seen.add(key)
+                    records.append({"product": product, "affected": affected, "fixed": fixed,
+                                    "source": source_name, "url": source_url})
+            # 기사 한 건이 여러 CVE를 함께 다룬 경우에는 버전을 특정 CVE에 귀속시키지 않는다.
+            if len(event.get("cves") or []) == 1:
+                products = event.get("affected_products") or []
+                product = products[0] if len(products) == 1 else ""
+                for affected in event.get("affected_versions") or []:
+                    key = (product, affected, "")
+                    if key not in seen:
+                        seen.add(key)
+                        records.append({"product": product, "affected": affected, "fixed": "",
+                                        "source": source_name, "url": source_url})
+
+        fix_values = [event.get("fix_available") for event in related]
+        fix_status = "confirmed" if any(value is True for value in fix_values) or any(row["fixed"] for row in records) else (
+            "unavailable" if any(value is False for value in fix_values) else "unknown")
+        actions = [event for event in related if event.get("remediation")]
+        actions.sort(key=lambda event: (event.get("source") != "github_advisory",
+                                        event.get("source") == "cisa_kev"))
+        action = actions[0] if actions else {}
+        detail = {
+            "id": cve_id,
+            "versions": records,
+            "fix_status": fix_status,
+            "remediation": action.get("remediation") or "",
+            "remediation_url": action.get("url") or "",
+            "due_date": next((event.get("due_date") for event in related if event.get("due_date")), ""),
+            "kev": any(event.get("kev") for event in related),
+            "exploitation": "active" if any(event.get("exploitation_status") == "active" for event in related)
+                            else "poc" if any(event.get("exploitation_status") == "poc" for event in related)
+                            else "none",
+            "poc": {"status": "unsearched"},
+        }
+        details.append(detail)
+    return details
+
+
+# ── 대시보드 CVE 탭: 수집된 CVE 전체 ──────────────────────────────────────────
+# CVE 탭은 복수 소스로 교차 확인된 카드만 보여 줘서, 교차되지 않은 날에는 NVD CVE
+# 154건을 수집하고도 "해당 없음"만 떴다(실측 2026-09-28). 그 기간에 수집된 CVE를
+# 번호마다 한 줄로 따로 싣는다. 카드에 든 CVE는 in_cards로 표시해 목록 맨 앞에 둔다.
+MAX_CVE_ITEMS = 2000
+CVE_ITEM_SUMMARY_CHARS = 150
+CVE_ITEM_ID_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.I)
+CVE_SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "IMPORTANT": 1, "MEDIUM": 2, "MODERATE": 2, "LOW": 3}
+# NVD 설명의 상용구. 리눅스 커널 CVE는 전부 이 문장으로 시작해서, 그대로 자르면 한 줄
+# 요약이 수백 건 모두 같아진다.
+NVD_BOILERPLATE_RE = re.compile(
+    r"^\s*In the Linux kernel, the following vulnerability has been resolved:\s*", re.I)
+# CVE 이름으로 쓸 제목을 주는 권고 피드. NVD 제목은 CVE 번호 그대로이고, 뉴스 제목은
+# 기사 제목이라 CVE 이름이 아니다.
+CVE_TITLE_SOURCES = {"msrc", "cisa_kev", "github_advisory", "cisco_psirt", "fortinet_psirt",
+                     "paloalto_psirt", "exploit_db"}
+
+
+def _cve_item_text(text):
+    text = NVD_BOILERPLATE_RE.sub("", " ".join(str(text or "").split()))
+    return public_text(summary_excerpt(text, CVE_ITEM_SUMMARY_CHARS))
+
+
+def build_cve_items(events, cards=None):
+    """기간 안에 수집된 CVE를 번호마다 하나씩 — 대시보드 CVE 탭의 "수집된 CVE" 목록.
+
+    공개 페이로드 규칙을 지킨다: 자산 매칭·PIR·트리아지 사유는 넣지 않는다(긴급도
+    level은 기존 기사 목록처럼 공개). 링크는 화면이 CVE 번호로 만든다 — 항목마다
+    URL을 실으면 주간 파일(1,500건 안팎)이 수백 KB 늘어난다. 같은 이유로 비어 있는
+    필드는 싣지 않는다.
+    """
+    carded = {str(cve).upper() for card in cards or [] for cve in card.get("cve_ids") or []}
+    level_rank = {"P1": 0, "P2": 1}
+    merged = {}
+    for event in events or []:
+        cves = [str(cve).upper() for cve in (event.get("cves") or [])
+                if CVE_ITEM_ID_RE.fullmatch(str(cve))]
+        if not cves:
+            continue
+        source = event.get("source") or ""
+        label = source_label(source)
+        text = (event.get("ai_summary") or event.get("summary") or "").strip()
+        blob = " ".join([event.get("title") or "", text]).upper()
+        for cve in dict.fromkeys(cves):
+            item = merged.setdefault(cve, {"cve": cve, "sources": [], "severity": "", "cvss": None,
+                                           "kev": False, "epss": None, "level": "", "published": "",
+                                           "title": "", "summaries": [], "products": []})
+            if label and label not in item["sources"]:
+                item["sources"].append(label)
+            # 긴급도·EPSS·제품·요약은 이 CVE를 다룬 이벤트에서만 가져온다. 여러 사건을 묶은
+            # 기사는 이벤트 단위 값이라, 본문에 이 CVE가 안 나오면 다른 CVE의 값이다 —
+            # 실측(2026-09-28): CVE-2026-92005에 같은 기사의 시스코 ISE 제로데이 때문에
+            # "긴급 대응"과 Claude Code·OpenAI Codex가 붙었다. 그런 기사는 출처로만 센다.
+            if len(cves) > 1 and cve not in blob:
+                continue
+            if source == "nvd" and isinstance(event.get("score"), (int, float)):
+                item["cvss"] = max(item["cvss"] or 0, float(event["score"]))
+            severity = str(event.get("severity") or "").upper()
+            if severity in CVE_SEVERITY_RANK and (source == "nvd" or not item["severity"]):
+                item["severity"] = severity
+            item["kev"] = item["kev"] or bool(event.get("kev")) or source == "cisa_kev"
+            if isinstance(event.get("epss"), (int, float)):
+                item["epss"] = max(item["epss"] or 0, float(event["epss"]))
+            level = event_level(event)
+            if level in level_rank and (not item["level"] or level_rank[level] < level_rank[item["level"]]):
+                item["level"] = level
+            published = str(event.get("published_at") or "")[:10]
+            if published and (not item["published"] or published < item["published"]):
+                item["published"] = published
+            if source in CVE_TITLE_SOURCES and not item["title"]:
+                title = re.sub(r"^\s*CVE-\d{4}-\d{4,7}\s*[-:–]\s*", "", event.get("title") or "", flags=re.I)
+                if title and not CVE_ITEM_ID_RE.fullmatch(title.strip()):
+                    item["title"] = title.strip()[:120]
+            if text:
+                # 요약 본문에 이 CVE가 직접 나오는 것을 먼저, 그다음 언어(한국어 > 권고 피드 >
+                # NVD)로 고른다. CVE 하나만 다룬 이벤트의 설명은 그 CVE 설명으로 본다.
+                specific = cve in text.upper() or len(cves) == 1
+                language = 0 if is_korean_text(text) else (1 if source != "nvd" else 2)
+                item["summaries"].append((0 if specific else 1, language, text))
+            for product in event.get("affected_products") or []:
+                product = str(product or "").strip()
+                if product and product not in item["products"] and len(item["products"]) < 3:
+                    item["products"].append(product)
+
+    items = []
+    for cve, item in merged.items():
+        summary = _cve_item_text(min(item["summaries"])[2]) if item["summaries"] else ""
+        row = {"cve": cve, "sources": item["sources"], "severity": item["severity"],
+               "cvss": item["cvss"], "kev": item["kev"], "epss": item["epss"], "level": item["level"],
+               "published": item["published"], "title": item["title"], "summary": summary,
+               "products": item["products"], "in_cards": cve in carded}
+        items.append({key: value for key, value in row.items() if value not in (None, "", [], False)})
+    # 최신이 먼저 오게 한 번 정렬한 뒤(안정 정렬), 중요도 순으로 다시 정렬한다.
+    items.sort(key=lambda row: row.get("published") or "", reverse=True)
+    items.sort(key=lambda row: (
+        0 if row.get("in_cards") else 1,
+        0 if row.get("kev") else 1,
+        level_rank.get(row.get("level"), 2),
+        CVE_SEVERITY_RANK.get(row.get("severity"), 4),
+        -(row.get("cvss") or 0),
+    ))
+    return items[:MAX_CVE_ITEMS]
+
+
 def build_cve_card(cve_label, cve_ids, group, sources):
     """같은 CVE(들)를 다루는 여러 소스의 이벤트를 카드 하나로 병합.
 
@@ -970,6 +1131,7 @@ def build_cve_card(cve_label, cve_ids, group, sources):
     return {
         "cve": cve_label,
         "cve_ids": cve_ids,
+        "cve_details": build_cve_details(cve_ids, group),
         "github_poc": None,  # main()에서 상위 카드만 골라 채운다 (API 호출 비용 제한)
         "sources": sources,
         "level": min(levels, key=lambda l: level_rank[l]) if levels else "",
@@ -1299,13 +1461,13 @@ def card_severity_bits(card, include_assets=True):
     elif card["exploitation"] == "active":
         bits.append("악용 정황")
     elif card["exploitation"] == "poc":
-        bits.append("PoC 공개")
+        bits.append("PoC 관련 신호")
     if card["ransomware"]:
         bits.append("랜섬웨어 연계")
     if include_assets and card["assets"]:
         bits.append("자산매칭: {}".format(", ".join(card["assets"])))
     if (card.get("github_poc") or {}).get("count"):
-        bits.append("GitHub PoC 저장소 {}개".format(card["github_poc"]["count"]))
+        bits.append("GitHub 관련 저장소 검색 {}개".format(card["github_poc"]["count"]))
     return bits
 
 
@@ -1387,12 +1549,24 @@ def enrich_cards_with_issue_analysis(cards, events):
 
 def enrich_cards_with_github_poc(cards):
     """카드 목록(리포트에 실제 노출되는 상위 N개만 넘길 것)에 GitHub PoC 공개 여부를 붙인다."""
+    remaining_searches = 10
     for card in cards:
         for cve_id in card["cve_ids"][:MAX_GITHUB_POC_CVES_PER_CARD]:
+            if remaining_searches <= 0:
+                return
+            remaining_searches -= 1
             result = common_utils.check_github_poc(cve_id)
+            detail = next((item for item in card.get("cve_details") or [] if item["id"] == cve_id), None)
+            if detail is not None:
+                detail["poc"] = {
+                    "status": "candidate" if result and result["count"] > 0 else "none" if result else "error",
+                    "count": result["count"] if result else 0,
+                    "url": result["latest_url"] if result else "",
+                    "checked_at": common_utils.utc_now_iso(),
+                }
             if result and result["count"] > 0:
-                card["github_poc"] = result
-                break
+                if not card.get("github_poc"):
+                    card["github_poc"] = result
 
 
 def event_line(event):
@@ -2486,7 +2660,7 @@ def ai_public_narrative(period_label, stats, cards):
 
 
 def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads,
-                             keywords=None, weekly_trends=None, campaigns=None):
+                             keywords=None, weekly_trends=None, campaigns=None, cve_items=None):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
 
     이메일/슬랙/텍스트 리포트는 지면이 한정돼 있어 highlights·cards를 상위 N개로
@@ -2541,13 +2715,33 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         return domestic, overseas
 
     def serialize_card(card):
+        details = []
+        for detail in card.get("cve_details") or []:
+            details.append({
+                "id": detail["id"],
+                "versions": [{
+                    "product": public_text(row.get("product") or ""),
+                    "affected": public_text(row.get("affected") or ""),
+                    "fixed": public_text(row.get("fixed") or ""),
+                    "source": row.get("source") or "",
+                    "url": row.get("url") if (row.get("url") or "").startswith(("https://", "http://")) else "",
+                } for row in detail["versions"]],
+                "fix_status": detail["fix_status"],
+                "remediation": public_text(detail["remediation"]),
+                "remediation_url": detail["remediation_url"] if detail["remediation_url"].startswith(("https://", "http://")) else "",
+                "due_date": detail["due_date"],
+                "kev": detail["kev"],
+                "exploitation": detail["exploitation"],
+                "poc": detail["poc"],
+            })
         return {
             "cve": card["cve"],
             "level": card.get("level") or "",
             "sources": [source_label(s) for s in card["sources"]],
             "severity_bits": card_severity_bits(card, include_assets=False),
             "products": card["products"][:CARD_PRODUCTS_MAX],
-            "remediation": public_text(card["remediation"])[:CARD_REMEDIATION_CHARS] if card["remediation"] else "",
+            "remediation": public_text(card["remediation"]) if card["remediation"] else "",
+            "cve_details": details,
             "due_date": card.get("due_date") or "",
             "summary": public_text(card["summary"]),
             "evidence": card.get("evidence") or [],
@@ -2636,6 +2830,8 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         # 뽑고, 이쪽은 새로 등장한 캠페인이라 대개 P1/P2로 이미 알림된 건들이다.
         "campaigns": [serialize_campaign(row) for row in (campaigns or [])],
         "cards": [serialize_card(card) for card in cards],
+        # CVE 탭 아래쪽 "수집된 CVE" — 카드(복수 소스 교차)에 들지 못한 CVE까지 전부.
+        "cve_items": cve_items or [],
         "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
         "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
         "keywords": keywords or [],
@@ -2774,10 +2970,16 @@ def main():
         print("[-] 신규 공격 캠페인 탐지 실패(리포트에는 영향 없음): {}".format(error))
         campaigns = []
 
-    dashboard_narrative = ai_public_narrative(period_label, stats, cards)
+    try:
+        dashboard_narrative = ai_public_narrative(period_label, stats, cards)
+    except Exception as error:
+        # AI 요약이 실패해도 최신 수집 데이터는 발행한다. 공개 페이로드가 빈 요약을
+        # 누락 상태로 표시하면 대시보드에서 해당 기간의 요약만 다시 생성할 수 있다.
+        print("[-] 공개 AI 요약 생성 실패 — 누락 상태로 대시보드를 발행합니다: {}".format(error))
+        dashboard_narrative = ""
     dashboard_payload = build_dashboard_payload(
         title, args.period, period_label, stats, dashboard_narrative, all_highlights, cards, all_trend_reads, keywords,
-        weekly_trends=weekly_trends, campaigns=campaigns,
+        weekly_trends=weekly_trends, campaigns=campaigns, cve_items=build_cve_items(events, cards),
     )
     publish_web_dashboard.publish(dashboard_payload)
 

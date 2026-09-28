@@ -29,6 +29,7 @@ import json
 import re
 
 import common_utils
+import response_synth
 
 # 한 개의 잘못된 차단 후보도 실제 운영에 영향을 준다.
 MIN_VALUES = 1
@@ -142,16 +143,18 @@ def review(synthesis, response, investigation=None, timeout=180):
               + "\n".join("- " + value for value in candidates)
               + "\n\nJSON만 출력하라.")
     try:
-        raw = common_utils.llm_generate(prompt, timeout=timeout, json_format=True)
+        # 판단 호출과 같은 이유로 상한을 올린다 — 추론 모델이 기본 8192 토큰에서
+        # 잘리면 검토가 조용히 통째로 건너뛰어졌다(실측 2026-09-26).
+        raw = common_utils.llm_generate(prompt, timeout=max(timeout, response_synth.SYNTH_TIMEOUT),
+                                        json_format=True, max_tokens=response_synth.SYNTH_MAX_TOKENS)
     except Exception as error:
         log("    [-] 산출물 검토를 건너뜁니다(조사에는 영향 없음): {}".format(str(error)[:70]))
         return []
-    try:
-        start, end = raw.index("{"), raw.rindex("}")
-        data = json.loads(raw[start:end + 1])
-    except (ValueError, TypeError):
-        return []
-    if not isinstance(data, dict):
+    # 잘린 응답도 완결된 항목까지는 쓴다. 살아남은 spare도 아래에서 하나씩 후보 목록·
+    # 보호 목록과 대조하므로, 일부만 읽혀도 "덜 풀어 준다" 쪽으로만 틀린다.
+    data = response_synth.parse(raw)
+    if not data:
+        log("    [-] 산출물 검토 응답을 JSON으로 읽지 못해 검토 없이 넘어갑니다.")
         return []
 
     # 목록에 없는 값은 버린다. 검토 단계가 재료를 늘리면 그건 검토가 아니다.
@@ -226,8 +229,16 @@ def _stale_action(text, spared):
 
 def reconcile_plan(verdict, spared):
     if verdict and spared:
-        verdict["plan"] = [step for step in verdict.get("plan") or []
-                           if not _stale_action(json.dumps(step, ensure_ascii=False), spared)]
+        kept = [(index, step) for index, step in enumerate(verdict.get("plan") or [], 1)
+                if not _stale_action(json.dumps(step, ensure_ascii=False), spared)]
+        positions = {old: new for new, (old, _) in enumerate(kept, 1)}
+        verdict["plan"] = [step for _, step in kept]
+        for row in verdict.get("question_status") or []:
+            old = row.get("plan_index")
+            if old in positions:
+                row["plan_index"] = positions[old]
+            else:
+                row.pop("plan_index", None)
 
 
 def steps(spared):

@@ -40,7 +40,8 @@ def refresh(repo):
             raise RuntimeError("Korean narrative sections missing; existing report retained")
         payload = report.build_dashboard_payload(old["title"], period, label, stats, narrative, highlights,
                                                  cards, reads, report.fallback_keywords(stats, cards),
-                                                 weekly_trends=trends, campaigns=old.get("campaigns") or [])
+                                                 weekly_trends=trends, campaigns=old.get("campaigns") or [],
+                                                 cve_items=report.build_cve_items(events, cards))
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         assert sum(payload["stats"]["actionable_by_category"].values()) == payload["stats"]["actionable"]
         print(period, "events", len(events), "actionable", payload["stats"]["actionable"],

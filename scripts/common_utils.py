@@ -599,6 +599,52 @@ FILE_EXTENSIONS = {
 }
 
 
+# 호스트명의 마지막 조각(TLD)으로는 쓰이지 않는 파일 확장자. FILE_EXTENSIONS와 달리
+# zip·mov처럼 실제 TLD인 것은 넣지 않는다 — 진짜 .zip 도메인을 버리면 안 된다.
+NON_TLD_FILE_EXTENSIONS = {
+    "php", "asp", "aspx", "jsp", "cgi", "html", "htm", "js", "css", "json", "xml",
+    "png", "jpg", "jpeg", "gif", "svg", "ico", "txt", "log", "exe", "dll", "msi",
+    "ps1", "bat", "cmd", "vbs", "hta", "lnk", "scr", "sys", "jar", "apk", "dmg",
+    "iso", "img", "doc", "docx", "xls", "xlsx", "pdf", "rar", "7z", "gz", "tar", "tmp",
+}
+HOSTNAME_RE = re.compile(
+    r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$", re.I)
+
+
+def host_from_indicator(value):
+    """IOC 값에서 호스트(도메인·IP)를 꺼낸다. 호스트가 없으면(경로·파일명) "".
+
+    실측(2026-09-26, ClickFix·Psychedelic Stealer 건): 모델이 URL 칸에 경로만 적었다
+    ("admin777111777.php", "/api/v1/agent/"). 그걸 호스트로 받아 유포지 조사 칸 3개를
+    다 채우는 바람에, 정작 악성 도메인 uasputnik.com은 조사되지 않았다. 파일명
+    ("tracker.js")도 디팽 표기라 도메인으로 잡혔다.
+    """
+    text = str(value or "").strip().replace("[.]", ".").replace("[:]", ":")
+    text = re.sub(r"^hxxp", "http", text, flags=re.I)
+    if not text or text.startswith(("/", "\\")):
+        return ""
+    if "://" in text:
+        try:
+            host = urllib.parse.urlsplit(text).hostname or ""
+        except ValueError:
+            return ""
+    else:
+        host = re.split(r"[/?#]", text, maxsplit=1)[0].split("@")[-1]
+        if host.count(":") == 1:
+            host = host.split(":")[0]
+    host = host.strip(".").lower()
+    if not host:
+        return ""
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    if not HOSTNAME_RE.match(host) or host.rsplit(".", 1)[-1] in NON_TLD_FILE_EXTENSIONS:
+        return ""
+    return host
+
+
 def _is_hostname_label(text, start, end):
     """이 자리의 16진수가 도메인 이름의 한 조각인가.
 
@@ -654,7 +700,9 @@ def extract_iocs(*texts, limit=50):
             add("url", re.sub(r"^hxxp", "http", match.replace("[.]", "."), flags=re.IGNORECASE))
         # URL로 이미 수집된 구간은 제외하고 디팽된 도메인만 스캔 (중복 방지)
         for match in DEFANGED_DOMAIN_RE.findall(HXXP_URL_RE.sub(" ", text)):
-            add("domain", match.replace("[.]", "."))
+            # "tracker[.]js"처럼 디팽한 파일명은 도메인이 아니다.
+            if host_from_indicator(match):
+                add("domain", match.replace("[.]", "."))
 
         refanged = text.replace("[.]", ".")
         for pattern, ioc_type in ((SHA256_RE, "sha256"), (SHA1_RE, "sha1"), (MD5_RE, "md5")):
@@ -734,7 +782,10 @@ def has_broken_chars(text):
     """LLM 응답이 깨진 문자를 포함하는지. 정상 텍스트에 U+FFFD가 들어갈 일은 없다."""
     return REPLACEMENT_CHAR in (text or "")
 
-def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False):
+NVIDIA_DEFAULT_MAX_TOKENS = 8192
+
+
+def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False, max_tokens=None):
     """예전엔 429(rate limit)만 한 번 재시도하고 그 외(타임아웃·일시적 5xx·연결
     오류)는 즉시 실패 처리했다 — ai_narrative()처럼 큰 digest를 8192 토큰까지
     생성하는 호출은 이런 일시적 문제가 드물지 않은데, 한 번 실패하면 바로
@@ -750,7 +801,7 @@ def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False):
         "model": NVIDIA_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
-        "max_tokens": 8192,
+        "max_tokens": max_tokens or NVIDIA_DEFAULT_MAX_TOKENS,
         "stream": False,
     }
     # JSON을 받기로 한 호출에는 형식을 API 차원에서 못박는다. 지금까지는 프롬프트에
@@ -810,6 +861,13 @@ def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False):
                 time.sleep(delay)
             continue
 
+        # 추론 모델은 생각에 쓴 토큰도 max_tokens에서 깎는다. 상한에 닿으면 본문이
+        # 중간에서 잘린 채로 200이 오는데, 예전에는 그걸 알릴 곳이 없어 JSON 파싱
+        # 실패가 "원인 불명"으로만 남았다(실측 2026-09-26: 종합 판단이 추론 15.7k자 +
+        # 본문 7.2k자에서 8192 토큰에 잘려, 로그에 실패 흔적 없이 판단이 비었다).
+        if choices[0].get("finish_reason") == "length":
+            print("[-] NVIDIA 응답이 max_tokens({})에서 잘렸습니다 — 본문이 불완전할 수 있습니다."
+                  .format(payload["max_tokens"]))
         return (choices[0].get("message") or {}).get("content") or ""
 
     raise last_error or RuntimeError("NVIDIA 호출 실패")
@@ -823,7 +881,7 @@ def _generate_ollama(prompt, timeout, json_format):
         raise RuntimeError("HTTP {}".format(response.status_code))
     return (response.json() or {}).get("response", "")
 
-def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
+def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2, max_tokens=None):
     """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
 
     LLM_PROVIDER=nvidia 이면 NVIDIA NIM을 먼저 시도하고 실패 시 로컬 Ollama로 폴백한다.
@@ -846,7 +904,8 @@ def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
                         raise RuntimeError("NVIDIA_API_KEY 미설정")
                     text = _generate_nvidia(prompt, timeout,
                                            max_attempts=nvidia_max_attempts,
-                                           json_format=json_format)
+                                           json_format=json_format,
+                                           max_tokens=max_tokens)
                 else:
                     text = _generate_ollama(prompt, timeout, json_format)
                 text = THINK_TAG_RE.sub("", text).strip()
@@ -1949,7 +2008,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
                cluster=None, pirs=None, content_depth="", body_chars=None,
                recommended_actions=None, affected_versions=None, novelty="", category_reason="",
-               analyst_review=None):
+               analyst_review=None, affected_packages=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -1988,6 +2047,10 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "content_depth": clean_text(content_depth).lower(),
         "novelty": clean_text(novelty).lower(),
         "affected_versions": _clean_str_list(affected_versions or [], 10),
+        "affected_packages": [
+            {key: clean_text(entry.get(key) or "") for key in ("product", "affected", "fixed")}
+            for entry in (affected_packages or []) if isinstance(entry, dict) and entry.get("product")
+        ][:20],
         "body_chars": body_chars,
         "analyst_review": analyst_review or None,
         "recommended_actions": _clean_str_list(recommended_actions or [], 3),

@@ -340,6 +340,10 @@ def analyze(targets=None, answered=(), open_questions=None):
         "findings": findings,
         "steps": steps,
         "references": unique[:MAX_RESULTS],
+        # 실제로 검색한 말. 다음 라운드가 같은 말을 다시 검색하지 않게 넘겨받는다 —
+        # 예전에는 참고 링크(URL)를 넘겨서 이름과 한 번도 겹치지 않았고, 1라운드
+        # 검색이 그대로 반복돼 결과가 두 번씩 쌓였다(실측 2026-09-28, Lunex 건).
+        "terms": terms,
         "used_today": usage_today(),
         "cap": daily_cap(),
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

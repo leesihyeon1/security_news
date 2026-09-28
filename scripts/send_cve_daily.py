@@ -173,6 +173,42 @@ def extract_references(cve, limit=3):
     return links
 
 
+def extract_affected_packages(cve, limit=20):
+    """NVD CPE 조건에서 명시된 영향 버전만 추출한다. 상한을 수정 버전으로 추정하지 않는다."""
+    rows = []
+    seen = set()
+
+    def visit(node):
+        if node.get("negate"):
+            return
+        for match in node.get("cpeMatch") or []:
+            if not match.get("vulnerable"):
+                continue
+            parts = (match.get("criteria") or "").split(":")
+            if len(parts) < 6 or parts[2] not in ("a", "o", "h"):
+                continue
+            product = "{} {}".format(parts[3], parts[4]).replace("_", " ")
+            bounds = []
+            for key, symbol in (("versionStartIncluding", ">="), ("versionStartExcluding", ">"),
+                                ("versionEndIncluding", "<="), ("versionEndExcluding", "<")):
+                if match.get(key):
+                    bounds.append("{} {}".format(symbol, match[key]))
+            affected = ", ".join(bounds) or (parts[5] if parts[5] not in ("*", "-") else "")
+            if not affected:
+                continue
+            row = (product, affected)
+            if row not in seen and len(rows) < limit:
+                seen.add(row)
+                rows.append({"product": product, "affected": affected, "fixed": ""})
+        for child in node.get("nodes") or []:
+            visit(child)
+
+    for config in cve.get("configurations") or []:
+        for node in config.get("nodes") or []:
+            visit(node)
+    return rows
+
+
 def fetch_nvd_cves_by_date(start_param, end_param):
     now = datetime.utcnow()
     start = now - timedelta(hours=LOOKBACK_HOURS)
@@ -215,6 +251,7 @@ def parse_nvd_vulnerabilities(vulnerabilities):
             "description": extract_description(cve),
             "link": nvd_link(cve_id),
             "references": extract_references(cve),
+            "affected_packages": extract_affected_packages(cve),
         }
 
     return list(cves.values())
@@ -638,6 +675,7 @@ def main():
                 score=cvss_score_value(item),
                 cves=[item["id"]],
                 references=item.get("references"),
+                affected_packages=item.get("affected_packages"),
                 published_at=item["published"],
                 email_sent=email_sent and item["id"] in emailed_nvd_ids,
                 slack_sent=slack_sent and item["id"] in emailed_nvd_ids,

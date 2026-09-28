@@ -33,9 +33,11 @@ import requests
 from bs4 import BeautifulSoup
 
 import analysis_targets
+import issue_decision
 import common_utils
 import dashboard_text
 import investigation
+import response_synth
 import network_safety
 import source_evidence
 
@@ -49,6 +51,8 @@ except ImportError:  # requirements.txt에 있지만 설치가 빠진 환경 방
     redis = None
 
 QUEUE_KEY = "analysis:queue"
+SUMMARY_QUEUE_KEY = "report-summary:queue"
+SUMMARY_RESULT_TTL_SECONDS = 60 * 60 * 24 * 90
 INSIGHTS_LIST_KEY = "insights:list"
 MAX_INSIGHTS_LIST_SIZE = 300          # analyze.js와 같은 값이어야 목록이 어긋나지 않는다
 ANALYSIS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 90
@@ -306,7 +310,7 @@ def build_prompt(title, body, category_hint):
             + sections
             + '[선수 정보]\n- 용어명1: 이 용어를 모르면 위 분석을 이해할 수 없는 실무자를 위한 1문장 해설\n- 용어명2: 용어명1과 동일한 형태의 해설\n\n섹션 누락 금지: 위 출력 형식의 섹션을 맨 끝의 [조사 대상]까지 하나도 빠짐없이 순서대로 써라 — [권장 대응]이나 [선수 정보]에서 끝내지 마라. [조사 대상]은 도구가 읽는 마지막 섹션이라 빠지면 자동 조사가 통째로 돌지 않는다.\n\n번호 목록 작성 규칙: 번호(예: "1.")만 쓰고 뒤에 설명 문장을 비워두지 마라 — 쓰기로 한 항목은 반드시 같은 줄에 실질적인 문장으로 채우고, 번호는 1부터 순서대로 매겨라.\n\n강조 규칙: 각 섹션에서 가장 핵심적인 용어·수치·행위만 **이렇게** 볼드로 표시하라. 섹션당 2~4개로 제한하고, 문장 전체를 통째로 볼드 처리하지 마라.\n\n선수 정보 작성 규칙: 독자는 보안 실무자다. "이 단어를 모르면 위 분석을 못 읽는가"만 기준으로 삼아라.\n- 고를 것: 특정 기술·기법·표준·시스템의 이름(예: Active Directory, RMM, 횡적 이동, DLL 사이드로딩, KCMVP)\n- 고르지 말 것: 실무자가 이미 아는 보안 상식어(악성코드, 피싱, 랜섬웨어, 자격 증명, 데이터 유출, 취약점, 보안 패치, 공급망 공격 등), 널리 알려진 서비스·회사명(GitHub, npm, AWS, Windows), 이 기사에만 등장하는 제품·브랜드명\n- 최대 3개까지만 쓰고, 개수를 채우려고 상식어를 넣지 마라. 기준에 맞는 용어가 하나도 없으면 항목 대신 "- 해당 없음" 한 줄만 써라.\n- 해설에 용어를 그대로 되풀이하지 마라. 그 용어가 무엇을 하는지, 이 기사에서 왜 중요한지를 써라.\n- 용어명은 본문에 나온 표기 그대로 쓰고 볼드(**)나 번호를 붙이지 마라.\n\n주의: 본문에 없는 사실을 지어내지 마라. 본문이 부실하면 그 사실을 그대로 밝혀라. 모든 출력은 한국어로만 쓰고 한자·중국어를 섞지 마라.'
             + '\n\n근거 규칙: 여러 독립 사건을 다룬 종합 기사라면 기존 섹션 안에서 사건별로 나누어 쓰고, 하나의 침투·실행·지속화·확산 체인으로 합치지 마라. 원문에 없는 단계는 "원문 미기재"로 남기고 다른 사건의 C2·파일·기법을 옮겨 붙이지 마라. 기사 출처·참고 문서 URL은 IOC나 조사 대상 URL로 넣지 마라. ATT&CK ID와 이름 및 실제 행위가 모두 맞는 경우만 쓰고, 추정 매핑은 생략하라. OAuth 정상 인증 흐름 악용을 비밀번호 탈취나 MFA 직접 우회로 바꾸어 쓰지 마라. 패치 버전·설정·기한을 임의로 보충하지 마라.'
-            + analysis_targets.spec()
+            + analysis_targets.indicator_spec()
             + "\n\n본문:\n" + (body or "(본문을 가져오지 못해 제목만으로 분석합니다.)"))
 
 
@@ -576,7 +580,12 @@ def analyze_one(job):
     prompt = build_prompt(title, body[:BODY_MAX_CHARS], job.get("category") or "")
 
     started = time.time()
-    raw = common_utils.llm_generate(prompt, timeout=300, nvidia_max_attempts=3)
+    # [조사 대상] 목록은 분석문 맨 끝에 온다. 추론 모델이 기본 8192 토큰에서 잘리면 그
+    # 목록부터 잘려 조사 입력이 통째로 빈다(실측 2026-09-26: 같은 기사가 21,635자 →
+    # 4,988자로 잘렸다). 판단 호출과 같은 상한을 쓴다.
+    raw = common_utils.llm_generate(prompt, timeout=response_synth.SYNTH_TIMEOUT,
+                                    nvidia_max_attempts=3,
+                                    max_tokens=response_synth.SYNTH_MAX_TOKENS)
     if not raw:
         log("[-] LLM 생성 실패: {}".format(title[:50]))
         return None
@@ -602,6 +611,26 @@ def analyze_one(job):
     iocs = analysis_targets.merge_iocs(common_utils.extract_iocs(body), targets)
     iocs, _ = source_evidence.filter_iocs(iocs, [url])
     targets = source_evidence.filter_targets(targets, [url])
+    iocs = source_evidence.assess_iocs(iocs, [{"url": url, "text": body}])
+    targets = source_evidence.restrict_targets(targets, iocs)
+
+    # The article analysis is complete here. Decide which of its issues warrant
+    # investigation before choosing external lookups.
+    try:
+        decisions = issue_decision.decide(title, body[:BODY_MAX_CHARS], analysis, targets)
+        if decisions:
+            targets = issue_decision.apply(targets, decisions)
+        else:
+            targets["decision_status"] = "failed"
+            log("[-] 이슈별 판단 실패 — 기존 조사 후보로 진행합니다.")
+    except Exception as error:
+        log("[-] 이슈별 판단 예외 — 원문·기본 분석으로 조사 후보를 복구합니다: {}".format(error))
+        try:
+            targets = issue_decision.apply(
+                targets, issue_decision.fallback(title, body[:BODY_MAX_CHARS], analysis, targets))
+        except Exception as fallback_error:
+            targets["decision_status"] = "failed"
+            log("[-] 이슈별 판단 복구 실패: {}".format(fallback_error))
 
     # 조사&대응 — 사건 성격에 따라 조사 방향이 갈린다. 사용자 행위 기반(ClickFix 등)은
     # 유포지를 urlscan으로 추적하고, 악성코드 기반은 VT 동적 분석으로 실제 행위를 본다.
@@ -629,7 +658,7 @@ def analyze_one(job):
         "source_label": job.get("source_label") or "",
         "analysis": analysis,
         "links": links,
-        "iocs": iocs,
+        "iocs": source_evidence.display_iocs(iocs),
         "category": category,
         "attack_techniques": extract_mitre(analysis),
         # 전술(킬체인 단계)별로 묶어 둔다 — 기법 ID를 20개씩 한 줄에 나열하면 읽히지
@@ -755,10 +784,56 @@ def main():
         _run_once()
 
 
+def process_summary_job(client):
+    raw = client.lpop(SUMMARY_QUEUE_KEY)
+    if raw is None:
+        return False
+    try:
+        job = json.loads(raw)
+        report_id = job["id"]
+    except (ValueError, KeyError, TypeError):
+        log("[-] 일일 요약 요청 형식이 잘못되어 버립니다.")
+        return True
+
+    lock_key = "report-summary:lock:" + report_id
+    error_key = "report-summary:error:" + report_id
+    try:
+        base_url = os.environ.get("REPORT_DASHBOARD_URL", "https://boannews-vercel.vercel.app").rstrip("/")
+        response = requests.get(base_url + "/data/daily-latest.json", timeout=15)
+        response.raise_for_status()
+        report = response.json()
+        if report.get("period") != "daily" or report.get("generated_at") != report_id:
+            raise ValueError("보고서가 갱신되어 이전 요청을 처리하지 않았습니다.")
+        if report.get("narrative") and not any(
+                marker in report["narrative"] for marker in (
+                    "한국어 요약을 준비하지 못했습니다", "AI 해석을 생성하지 못해", "요약을 생성하지 못했습니다")):
+            raise ValueError("현재 보고서에는 이미 AI 요약이 있습니다.")
+
+        from generate_report import ai_public_narrative
+        narrative = ai_public_narrative(report.get("period_label") or "", report.get("stats") or {},
+                                        report.get("cards") or [])
+        result_key = "report-summary:result:" + report_id
+        client.set(result_key, json.dumps({"id": report_id, "narrative": narrative}, ensure_ascii=False),
+                   ex=SUMMARY_RESULT_TTL_SECONDS)
+        client.delete(error_key)
+        log("[+] 일일 AI 요약 재생성 완료: {}".format(report_id))
+    except Exception as error:
+        log("[-] 일일 AI 요약 재생성 실패: {}".format(error))
+        client.set(error_key, "요약 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.", ex=300)
+    finally:
+        client.delete(lock_key)
+    return True
+
+
 def _run_once():
     client = get_client()
     if client is None:
         log("[-] REDIS_URL이 없거나 연결할 수 없어 건너뜁니다.")
+        return
+
+    deadline = time.time() + RUN_BUDGET_SECONDS
+    if process_summary_job(client) and time.time() >= deadline:
+        log("[*] 일일 요약 처리로 이번 회차 예산을 사용했습니다.")
         return
 
     pending = client.llen(QUEUE_KEY)
@@ -767,7 +842,6 @@ def _run_once():
         return
     log("[*] 대기 중인 분석 요청 {}건".format(pending))
 
-    deadline = time.time() + RUN_BUDGET_SECONDS
     done = 0
     for _ in range(MAX_ITEMS_PER_RUN):
         if time.time() >= deadline:

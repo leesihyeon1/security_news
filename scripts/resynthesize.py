@@ -116,6 +116,8 @@ def rebuild(record):
     except Exception as error:
         log("    [-] 산출물 검토 실패(판단에는 영향 없음): {}".format(str(error)[:70]))
     block["action_plan"] = investigation.merge_actions(verdict, block.get("response"))
+    # 요약에 결론(확인·미확인·질문 상태)이 들어간다 — 판단을 새로 받았으면 다시 만든다.
+    block["steps_summary"] = investigation.summarize(block)
     analyst_workflow.finalize(block, targets)
     block["steps"] = (block.get("steps") or []) + [
         {"track": "종합 판단", "text": line} for line in verdict.get("steps") or []]

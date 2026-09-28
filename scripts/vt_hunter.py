@@ -144,10 +144,19 @@ def parse_behaviour(payload):
         if ip:
             traffic.append("{}:{}".format(ip, port) if port else ip)
     http = []
+    http_details = []
     for entry in data.get("http_conversations") or []:
         url = (entry or {}).get("url")
         if url:
             http.append(url)
+            parsed = urllib.parse.urlsplit(url)
+            http_details.append({
+                "host": (parsed.hostname or "").lower(), "path": (parsed.path or "/")[:160],
+                "query_keys": sorted(urllib.parse.parse_qs(parsed.query))[:8],
+                "method": (entry or {}).get("request_method") or "",
+                "status": (entry or {}).get("status_code"),
+                "response_body_type": (entry or {}).get("response_body_filetype") or "",
+            })
     registry = []
     for entry in data.get("registry_keys_set") or []:
         key = (entry or {}).get("key")
@@ -199,6 +208,7 @@ def parse_behaviour(payload):
         "dns": _trim(dns),
         "ip_traffic": _trim(traffic),
         "http": _trim(http),
+        "http_details": http_details[:12],
         "mutexes": _trim(data.get("mutexes_created"), limit=3),
         "techniques": techniques[:14],
         "sandboxes": _trim(data.get("verdicts"), limit=3, width=40),
@@ -507,10 +517,10 @@ def _c2_candidates(behaviour, view):
     for url in behaviour.get("http") or []:
         host = str(url).split("//")[-1].split("/")[0].lower()
         if host and host not in corroborated and not SANDBOX_ENV_DOMAIN_RE.search(host):
-            items.append({"value": str(url)[:120], "why": "HTTP 요청 관측", "confidence": "medium"})
+            items.append({"value": str(url)[:120], "why": "HTTP 요청 관측(C2 역할 미확인)", "confidence": "low"})
     for host in view.get("unconfirmed_hosts") or []:
-        items.append({"value": host, "why": "DNS 조회 관측(기사 IOC에는 없음)",
-                      "confidence": "medium"})
+        items.append({"value": host, "why": "DNS 조회 관측(기사 IOC에는 없음, 역할 미확인)",
+                      "confidence": "low"})
     for host in behaviour.get("memory_domains") or []:
         host = str(host).lower()
         if host in corroborated or SANDBOX_ENV_DOMAIN_RE.search(host):
@@ -589,6 +599,15 @@ def fetch_sandboxes(hash_value, api_key):
             "name": name,
             "verdict": verdicts[0] if verdicts else "",
             "has_network": bool(attributes.get("ip_traffic") or attributes.get("dns_lookups")),
+            "process_tree": [str(process.get("name") or "")[:130] for process in
+                             (attributes.get("processes_tree") or [])[:8]
+                             if isinstance(process, dict)],
+            "http": [{"host": (urllib.parse.urlsplit(entry.get("url") or "").hostname or "").lower(),
+                      "path": urllib.parse.urlsplit(entry.get("url") or "").path[:160],
+                      "method": entry.get("request_method") or "",
+                      "status": entry.get("status_code")}
+                     for entry in (attributes.get("http_conversations") or [])[:8]
+                     if isinstance(entry, dict)],
             "url": GUI_SANDBOX_URL.format(hash_value, urllib.parse.quote(name)),
         })
     return out

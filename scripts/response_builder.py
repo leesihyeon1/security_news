@@ -46,16 +46,6 @@ NOISE_DOMAIN_RE = re.compile(
     re.I,
 )
 
-# CDN·클라우드 뒤에 숨은 유포지의 IP는 그 CDN의 것이다 — 차단하면 정상 사이트가
-# 같이 막힌다. 실측: REVSTEALER 유포 도메인의 urlscan page.ip가 172.67.161.55
-# (Cloudflare)이었다.
-SHARED_HOSTING_RE = re.compile(
-    r"cloudflare|akamai|fastly|amazon|aws|google|azure|microsoft|oracle|"
-    r"digitalocean|linode|ovh|hetzner|godaddy|hostinger|namecheap|wix|squarespace|"
-    r"shopify|cloudfront|incapsula|imperva|sucuri|stackpath|bunny",
-    re.I,
-)
-
 MAX_VALUES_PER_LIST = 40
 MAX_KQL_QUERIES = 10
 # 이보다 오래 운영된 도메인은 공격자가 등록한 유포지가 아니라 원래 있던
@@ -95,8 +85,14 @@ def _collect(block, iocs, text=""):
     references = block.get("source_urls") or []
     reference_hosts = source_evidence.reference_hosts(references)
     iocs, _ = source_evidence.filter_iocs(iocs, references)
+    assessments = {i["value"].lower(): i for i in block.get("indicator_assessments") or []}
+    def actionable(item):
+        assessed = assessments.get(str(item.get("value") or "").lower(), item)
+        return assessed.get("role") is None or assessed.get("actionable") is True
+    iocs = [i for i in iocs if actionable(i)]
     seeds = [seed for seed in block.get("seeds") or []
-             if (seed.get("domain") or seed.get("host") or "").lower() not in reference_hosts]
+             if (seed.get("domain") or seed.get("host") or "").lower() not in reference_hosts
+             and actionable({"value": seed.get("domain") or seed.get("host")})]
     malware = block.get("malware") or {}
 
     # 도메인은 역할별로 나눠 받는다 — 공용 서비스·Tor·유출 사이트를 차단 후보에 섞으면
@@ -140,11 +136,7 @@ def _collect(block, iocs, text=""):
             if value.lower() not in ioc_hashes:
                 ioc_hashes.append(value.lower())
         elif kind in ("domain", "url"):
-            host = value
-            if "://" in host:
-                from urllib.parse import urlparse
-                host = urlparse(host).netloc
-            host = host.split("@")[-1].split(":")[0].strip("/.").lower()
+            host = common_utils.host_from_indicator(value)
             if host and host not in reference_hosts and not NOISE_DOMAIN_RE.search(host) and not common_utils.is_benign_ioc("domain", host):
                 if host in host_roles["lure"] and host not in ioc_domains:
                     ioc_domains.append(host)
@@ -152,8 +144,7 @@ def _collect(block, iocs, text=""):
             if not _is_noise_ip(value) and value not in ioc_ips and value not in named_ips:
                 ioc_ips.append(value)
 
-    # 유포지 조사에서 확인한 호스팅 IP는 기사 IOC와 같은 급으로 본다(그 페이지가 실제로
-    # 그 IP에 있었다는 관측이다).
+    # 페이지를 호스팅한 IP는 공유 인프라일 수 있으므로 기사 IOC와 같은 급으로 차단하지 않는다.
     shared_hosting = []
     for seed in seeds:
         # 공용 서비스로 판정된 도메인의 호스팅 IP는 그 서비스의 IP다 — 막으면 도메인을
@@ -166,15 +157,8 @@ def _collect(block, iocs, text=""):
                     seed["ip"], seed.get("asnname") or "?", seed_host))
             continue
         if seed.get("ip") and not _is_noise_ip(seed["ip"]) and seed["ip"] not in ioc_ips:
-            if SHARED_HOSTING_RE.search(seed.get("asnname") or ""):
-                # CDN·대형 클라우드 IP는 차단 후보가 아니다 — 도메인으로 막아야 한다.
-                shared_hosting.append("{} ({})".format(seed["ip"], seed.get("asnname") or ""))
-            else:
-                ioc_ips.append(seed["ip"])
-        for host in seed.get("cloaked_hosts") or []:
-            host = host.lower()
-            if host not in reference_hosts and host not in ioc_domains and not NOISE_DOMAIN_RE.search(host):
-                ioc_domains.append(host)
+            shared_hosting.append("{} ({} 호스팅, 차단 전 전용 여부 확인)".format(
+                seed["ip"], seed.get("asnname") or seed_host or "?"))
 
     # 샌드박스 관측값 — 정상 서비스가 섞이므로 따로 담는다.
     observed_hosts, observed_ips, artifacts = [], [], []
@@ -241,6 +225,12 @@ def _collect(block, iocs, text=""):
         "observed_hosts": observed_hosts[:MAX_VALUES_PER_LIST],
         "observed_ips": observed_ips[:MAX_VALUES_PER_LIST],
         "artifacts": artifacts[:20],
+        # 요청 경로(/api/v1/agent/)와 원문이 지목한 웹 요청 파일(admin777111777.php)을
+        # 같은 헌팅 쿼리로 본다 — 둘 다 "이 주소로의 요청"을 찾는 것이다.
+        "url_paths": list(dict.fromkeys(
+            [str(path).strip().strip("/") or str(path).strip()
+             for path in ((block.get("targets") or {}).get("url_paths") or []) if str(path).strip()]
+            + lure_hunter.web_files_from(block.get("targets"))))[:MAX_VALUES_PER_LIST],
         "provenance": provenance,
     }
 
@@ -273,23 +263,46 @@ def _kql_queries(values, primary):
             ]),
         })
 
+    if values.get("url_paths"):
+        # 원문이 "이 경로로의 요청을 보라"고 짚은 값(예: /api/v1/agent/). 호스트가 아니라
+        # 차단 목록에는 못 넣지만 헌팅에는 그대로 쓴다.
+        queries.append({
+            "name": "원문이 지목한 요청 경로·파일",
+            "durable": False,
+            "note": "원문에 나온 URL 경로를 찾습니다. HTTPS 통신은 MDE RemoteUrl에 경로가 남지 "
+                    "않을 수 있어 0건이어도 부재의 증거가 아닙니다 — 프록시·WAF 로그의 요청 "
+                    "경로와 함께 대조합니다.",
+            "query": "\n".join([
+                "let campaignPaths = {};".format(_kql_list(values["url_paths"])),
+                "DeviceNetworkEvents",
+                "| where Timestamp > ago({})".format(LOOKBACK),
+                "| where RemoteUrl has_any (campaignPaths)",
+                "| project Timestamp, DeviceName, InitiatingProcessFileName,",
+                "          InitiatingProcessCommandLine, RemoteUrl, RemoteIP, RemotePort",
+                "| order by Timestamp desc",
+            ]),
+        })
+
     if values["hashes"]:
+        hash_condition = " or ".join("{} in~ (campaignHashes)".format(column) for length, column in
+                                    ((32, "MD5"), (40, "SHA1"), (64, "SHA256"))
+                                    if any(len(value) == length for value in values["hashes"]))
         queries.append({
             "name": "캠페인 파일이 단말에 있었는지",
             "durable": False,
-            "note": "파일 생성·실행 양쪽을 본다. 변종이 나오면 해시가 바뀌므로 이 쿼리만 "
-                    "믿으면 안 된다.",
+            "note": "해시 알고리즘별로 조회합니다. 패키지 아카이브 해시는 압축 해제된 JS 파일의 "
+                    "해시와 다릅니다. 배포 객체·캐시를 대조하고, 파일 존재만으로 실행을 확정하지 않습니다.",
             "query": "\n".join([
                 "let campaignHashes = {};".format(_kql_list(values["hashes"])),
                 "union",
                 "  (DeviceFileEvents",
-                "   | where Timestamp > ago({}) | where SHA256 in~ (campaignHashes)".format(LOOKBACK),
+                "   | where Timestamp > ago({}) | where {}".format(LOOKBACK, hash_condition),
                 "   | project Timestamp, DeviceName, Action = ActionType, FileName, FolderPath,",
-                "             SHA256, InitiatingProcessFileName),",
+                "             SHA1, SHA256, InitiatingProcessFileName),",
                 "  (DeviceProcessEvents",
-                "   | where Timestamp > ago({}) | where SHA256 in~ (campaignHashes)".format(LOOKBACK),
+                "   | where Timestamp > ago({}) | where {}".format(LOOKBACK, hash_condition),
                 '   | project Timestamp, DeviceName, Action = "ProcessCreated", FileName, FolderPath,',
-                "             SHA256, InitiatingProcessFileName)",
+                "             SHA1, SHA256, InitiatingProcessFileName)",
                 "| order by Timestamp desc",
             ]),
         })
@@ -341,7 +354,7 @@ def _kql_queries(values, primary):
         })
 
     # 행위 기반 — 값이 바뀌어도 남는다. 사용자 행위 기반 사건에서 특히 중요하다.
-    if primary == "user_action" or values["domains"]:
+    if primary == "user_action":
         queries.append({
             "name": "브라우저에서 터미널로 이어지는 명령 실행 (행위 기반)",
             "durable": True,

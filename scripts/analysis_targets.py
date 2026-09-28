@@ -105,7 +105,14 @@ CVE:
   정말로 위 어휘가 이 건을 전부 덮는다고 판단할 때만 "없음"이라고 쓴다. 생각이 안 난다는
   이유로 "없음"을 쓰지 마라 — 그 둘은 다른 말이고, 우리는 앞의 것만 믿는다.
 확인질문: 목표를 달성하려면 조회로 답해야 할 질문 2~4개를 쉼표로 나눠 쓴다.
-  예) 이 CVE가 실제 악용 중인가, 사내에 해당 버전이 있는가, 유포지가 아직 살아 있는가
+  실행 조건·버전 차이·유포 경로·외부 전송 목적지·공통 행위를 공개 근거로 확인할 질문을
+  우선한다. 사내 설치 여부·교육 여부처럼 외부 조회로 답할 수 없는 질문만으로 채우지 마라.
+  기사나 1차 자료가 확인하지 않은 배포 방식은 질문에서도 전제하지 마라. 로컬에
+  주입된 브라우저 확장을 웹스토어 등록 확장으로 가정하지 말고, 등록 여부 자체가
+  미확인이면 로컬 설치 흔적·매니페스트·Native Messaging Host 연결을 질문하라.
+  샘플 해시 확보와 다른 목록의 동일 해시 대조처럼 서로 다른 검증 단계는 구분하라.
+  예) 어떤 버전·실행 조건에서 정보가 유출되는가, 원 연구 보고서가 공개한 샘플과 유출 주소는 무엇인가,
+      같은 캠페인이라는 근거가 있는 추가 샘플과 공통 행위는 무엇인가
 
 마지막으로 목표·성공기준·부족한것·확인질문 네 줄을 다 썼는지 확인하라. 하나라도 없으면
 이 섹션은 도구가 읽다 만 채로 버려진다.
@@ -119,6 +126,36 @@ import playbook
 # 우리 환경은 import 시점이 아니라 쓸 때 읽는다 — 인벤토리·PIR 파일이 바뀌면
 # 다음 분석부터 반영돼야 한다.
 SPEC_WITH_VOCAB = SPEC_TEMPLATE.replace("{VOCAB}", playbook.vocabulary_spec())
+
+INDICATOR_SPEC = """
+
+[조사 대상]
+이 섹션은 자동 조사 입력을 추출하기 위한 목록이다. 기사 본문에 실제로 나온 값만
+적고, 없으면 "없음"이라고 써라. 목표·질문·대응 판단은 이 단계에서 만들지 마라.
+종합 기사라면 사건구분에 사건 라벨을 쉼표로 나열하고, 아래 각 값 뒤에 소속 사건
+번호를 붙여라(예: a.example(1), b.example(2)). 한 사건이면 사건구분은 없음이다.
+사건구분:
+도메인:
+IP:
+해시:
+URL:
+CVE:
+제품: 제품명과 버전을 한 덩어리로 적어라. 버전을 모르면 제품명만 적어라.
+패키지: npm:이름 또는 pypi:이름 형태로 적어라.
+행위자:
+악성코드:
+파일:
+경로:
+레지스트리키:
+명령:
+조사가능: 위에 조회할 값이 하나라도 있으면 예, 없으면 아니오.
+조사불가사유: 아니오라면 이유 한 문장, 그 외에는 없음.
+"""
+
+
+def indicator_spec():
+    """Basic analysis extracts evidence; a later pass decides investigation goals."""
+    return INDICATOR_SPEC
 
 
 def spec():
@@ -217,6 +254,57 @@ def _locate(text):
     return start, end, text[start:end]
 
 
+def _split_hostless(found):
+    """호스트가 없는 값을 도메인·URL 칸에서 빼낸다.
+
+    모델이 URL 칸에 경로만("admin777111777.php", "/api/v1/agent/") 적거나 도메인 칸에
+    파일명("tracker.js")을 적는 경우가 있다. 그대로 두면 유포지 조사·차단 목록이 그
+    값을 호스트로 쓴다(실측 2026-09-26). 경로는 url_paths로 옮겨 헌팅 쿼리 재료로
+    남기고, 파일명은 files로 옮긴다 — 버리지 않는다.
+    """
+    urls, paths, files = [], [], list(found.get("files") or [])
+
+    def add_file(name):
+        if name and name not in files:
+            files.append(name)
+
+    for value in found.get("urls") or []:
+        plain = undefang(value)
+        if common_utils.host_from_indicator(plain):
+            urls.append(value)
+            # 호스트가 있는 URL이라도 끝 조각이 파일이면(…/admin777111777.php) 그 파일도
+            # 따로 남긴다 — 같은 파일을 요청하는 다른 사이트를 찾는 검색의 재료다.
+            add_file(_url_filename(plain))
+        elif FILENAME_ONLY_RE.match(plain.strip("/")):
+            # 슬래시 없이 이름.확장자만 있으면 경로가 아니라 파일이다(admin777111777.php).
+            add_file(plain.strip("/"))
+        else:
+            paths.append(value)
+    found["urls"] = urls
+    if paths:
+        found["url_paths"] = list(dict.fromkeys(paths))
+    domains = []
+    for value in found.get("domains") or []:
+        if common_utils.host_from_indicator(undefang(value)):
+            domains.append(value)
+        else:
+            add_file(value)
+    found["domains"] = domains
+    found["files"] = files
+
+
+FILENAME_ONLY_RE = re.compile(r"^[\w.-]+\.[A-Za-z0-9]{1,5}$")
+
+
+def _url_filename(url):
+    """URL 끝 조각이 파일(이름.확장자)이면 그 이름. 아니면 ""."""
+    path = re.sub(r"^[a-z]+://", "", url, flags=re.I).split("?", 1)[0].split("#", 1)[0]
+    if "/" not in path:
+        return ""
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    return name if FILENAME_ONLY_RE.match(name) else ""
+
+
 def _axis(value):
     # 어휘 밖의 값은 버린다. 여기서 거르지 않으면 "네트워크 침투" 같은
     # 자유 문장이 트랙 이름 자리에 들어와 조사 계획이 통째로 어긋난다.
@@ -303,6 +391,7 @@ def parse(text):
         else:
             found[key] = values
 
+    _split_hostless(found)
     found = {key: values for key, values in found.items() if values}
     if investigable is None:
         investigable = bool(found)

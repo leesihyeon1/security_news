@@ -26,6 +26,36 @@ def _patch_common(monkeypatch):
                         {"tracks": [], "reasons": {}, "skipped": [], "steps": []})
 
 
+def test_followup_results_keep_each_request_with_its_actual_lookup(monkeypatch):
+    monkeypatch.setattr(investigation.lure_hunter, "urlscan_search",
+                        lambda query, size, api_key: ([{"task": {"time": "2026-09-26T00:00:00Z"}}], 1))
+    block = {}
+    lines, _ = investigation._run_followups([
+        {"type": "ip", "value": "1.2.3.4", "question": "최근 관측은?"}], block=block)
+    assert block["followup_results"] == [{
+        "type": "ip", "value": "1.2.3.4", "question": "최근 관측은?",
+        "lookup": "urlscan", "status": "returned", "result": lines[0],
+    }]
+    assert "관측 1건" in lines[0]
+
+
+def test_failed_followup_does_not_borrow_the_next_result(monkeypatch):
+    def search(query, size, api_key):
+        if "1.2.3.4" in query:
+            raise RuntimeError("조회 불가")
+        return [], 0
+
+    monkeypatch.setattr(investigation.lure_hunter, "urlscan_search", search)
+    block = {}
+    lines, _ = investigation._run_followups([
+        {"type": "ip", "value": "1.2.3.4", "question": "첫 조회"},
+        {"type": "ip", "value": "5.6.7.8", "question": "둘째 조회"}], block=block)
+    assert len(lines) == 1
+    assert block["followup_results"][0]["status"] == "failed"
+    assert block["followup_results"][1]["value"] == "5.6.7.8"
+    assert block["followup_results"][1]["result"] == lines[0]
+
+
 # ---------------------------------------------------------------------------
 # _combine_incidents — pure function, no LLM/network involved
 # ---------------------------------------------------------------------------

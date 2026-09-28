@@ -51,7 +51,8 @@ SYSTEM_BINARIES = {
 }
 # 너무 흔해서 그 자체로는 탐지가 안 되는 이름 — 참고로만 남긴다.
 GENERIC_FILENAMES = {"1.bat", "a.exe", "setup.exe", "install.exe", "update.exe",
-                     "main.py", "client.py", "server.py", "test.exe", "temp.exe"}
+                     "main.py", "client.py", "server.py", "test.exe", "temp.exe",
+                     "index.js", "main.js", "app.js", "package.json"}
 
 # 문장으로만 서술된 행위를 탐지 쿼리로 바꾼다. (이름, 본문 패턴, KQL 본문, 설명)
 BEHAVIOUR_RULES = [
@@ -109,8 +110,7 @@ BEHAVIOUR_RULES = [
     ("브라우저 자격증명 파일 변경 후보",
      r"app-?bound|login\s*data|local\s*state|"
      r"브라우저.{0,20}(?:자격\s*증명|비밀번호|쿠키).{0,12}(?:탈취|수집|훔치|유출|접근)|"
-     r"(?:자격\s*증명|비밀번호|쿠키).{0,12}(?:탈취|수집|훔치|유출)|"
-     r"(?:steal|dump|exfiltrat)\w*\s+(?:browser\s+)?(?:credential|cookie|password)",
+     r"(?:steal|dump|exfiltrat)\w*\s+browser\s+(?:credential|cookie|password)",
      ["DeviceFileEvents",
       "| where Timestamp > ago(30d)",
       '| where FileName in~ ("Login Data", "Local State", "Cookies", "Web Data",',

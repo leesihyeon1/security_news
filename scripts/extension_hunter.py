@@ -103,6 +103,81 @@ def ids_from_text(*texts):
     return found[:MAX_EXTENSIONS]
 
 
+# 확장 ID가 기사에 나오는 이유는 둘이다 — 공격자가 만든 악성 확장이거나, 악성코드가
+# 데이터를 훔쳐 가는 정상 확장(지갑·비밀번호 관리자)이다. 형태는 똑같아서 앞뒤 문맥으로
+# 가른다.
+#
+# 실측(2026-09-26, Psychedelic Stealer): Arctic Wolf IOC 표의 "Wallet-Extension Target
+# IDs" 아래 MetaMask·Trust Wallet·OKX Wallet ID 6개가 있었다. 역할을 안 보고 전부 악성
+# 확장으로 받아 "스토어에 아직 게시 중 — 지금 막지 않으면 계속 설치된다", "GPO로 설치를
+# 막는다"를 냈다. 막아도 이 악성코드는 이미 깔린 지갑을 읽어 가므로 공격이 끊기지 않고,
+# 정상 지갑 사용만 막는다.
+TARGET_CONTEXT_RE = re.compile(
+    r"target(?:ed|s|ing)?\s+(?:wallet|extension|id)s?|wallet[-\s]*extension|"
+    r"(?:steal|stole|harvest|exfiltrat|collect|grab|target)\w*.{0,80}(?:wallets?|extensions?|password\s+managers?)|"
+    r"(?:wallets?|extensions?)\s+(?:it|the\s+(?:malware|stealer))\s+(?:targets|steals|harvests)|"
+    r"탈취\s*대상|수집\s*대상|노리는\s*(?:지갑|확장)|대상\s*(?:지갑|확장)|지갑\s*확장", re.I)
+MALICIOUS_CONTEXT_RE = re.compile(
+    r"malicious\s+(?:browser\s+)?extensions?|rogue\s+extensions?|fake\s+(?:browser\s+)?extensions?|"
+    # "installed extensions"(설치돼 있는 확장을 훑는다)는 스틸러 설명에 흔하다 — 공격자가
+    # 확장을 심는 동사만 받는다.
+    r"(?:installs|drops|side-?loads|deploys|pushes|forces)\s+(?:a|an|the|its|their)?\s*"
+    r"(?:own\s+|malicious\s+|rogue\s+|fake\s+)?(?:browser\s+)?extensions?|"
+    r"(?:compromised|hijacked|trojani[sz]ed)\s+(?:browser\s+)?extensions?|"
+    r"악성\s*확장|가짜\s*확장|확장\s*(?:을|를)?\s*(?:설치|배포|강제)", re.I)
+# ID 앞 문맥을 얼마나 볼지. IOC 표는 제목 한 줄 아래 ID가 줄지어 나오므로(ID·이름 한 쌍에
+# 50자 안팎), 목록 끝의 ID도 제목에 닿을 만큼 넉넉히 본다.
+ROLE_WINDOW_CHARS = 600
+# 스토어가 보여 주는 규모. 이만큼 깔린, 개발자가 밝혀진 확장은 문맥이 없을 때 악성으로
+# 단정하지 않는다 — 정상 확장 인수 후 악성 업데이트 사례가 있으니 "정상"으로 단정하지도
+# 않고 확인 대상으로 둔다.
+POPULAR_INSTALLS = 100000
+ID_LABEL_RE = re.compile(r"\s*\(([^()]{2,40})\)")
+
+
+def roles_from_text(*texts):
+    """{확장 ID: {"role": "target"|"malicious"|"unknown", "evidence": 문장}}.
+
+    각 등장 위치 앞 ROLE_WINDOW_CHARS자에서 가장 가까운 역할 표현을 쓴다(뒤에 나온 표현이
+    그 ID를 설명한다). 등장마다 판정이 갈리면 "unknown" — 강한 쪽으로 몰래 올리지 않는다.
+    """
+    seen, labels = {}, {}
+    for text in texts:
+        text = " ".join(str(text or "").split())
+        lowered = text.lower()
+        for match in EXTENSION_ID_RE.finditer(lowered):
+            window_start = max(0, match.start() - ROLE_WINDOW_CHARS)
+            window = text[window_start:match.start()]
+            hits = [(m.end(), "target", m.start()) for m in TARGET_CONTEXT_RE.finditer(window)]
+            hits += [(m.end(), "malicious", m.start()) for m in MALICIOUS_CONTEXT_RE.finditer(window)]
+            if hits:
+                _, role, hit_start = max(hits)
+                # 근거는 역할 표현부터 ID까지 — 표 제목이 멀리 있으면 가운데를 줄인다.
+                phrase = text[window_start + hit_start:match.start()]
+                if len(phrase) > 180:
+                    phrase = phrase[:90] + " … " + phrase[-60:]
+                evidence = phrase + text[match.start():match.end() + 40]
+            else:
+                role, evidence = "unknown", ""
+            seen.setdefault(match.group(0), []).append((role, evidence))
+            # IOC 표는 ID 뒤에 이름을 괄호로 적는다 — "…gknn (MetaMask)". 스토어가 이름을
+            # 못 줄 때(엣지 미게시) 화면에 ID만 남지 않게 받아 둔다.
+            named = ID_LABEL_RE.match(text, match.end())
+            if named and match.group(0) not in labels:
+                labels[match.group(0)] = named.group(1).strip()
+    out = {}
+    for extension_id, mentions in seen.items():
+        roles = {role for role, _ in mentions if role != "unknown"}
+        if len(roles) == 1:
+            role = roles.pop()
+            evidence = next(ev for r, ev in mentions if r == role)
+        else:
+            role, evidence = "unknown", ("역할 표현이 엇갈립니다" if roles else "")
+        out[extension_id] = {"role": role, "evidence": evidence[:240],
+                             "label": labels.get(extension_id, "")}
+    return out
+
+
 def lookup_chrome(extension_id):
     """크롬 웹 스토어에 아직 게시돼 있는가. (published, error)"""
     try:
@@ -174,13 +249,36 @@ def broad_permissions(permissions, matches):
     return risky
 
 
-def analyze(extension_ids, objective=""):
-    """확장 조회 트랙. 볼 ID가 없으면 None."""
+def _resolve_role(context_role, edge):
+    """문맥 역할 + 스토어 사실 -> "malicious" | "target" | "review" | "unknown".
+
+    문맥이 역할을 밝혔으면 그것을 따른다(악성 확장이 인기 확장을 인수한 경우도 원문이
+    "malicious"라고 쓴다). 문맥이 없을 때만 스토어 규모를 본다 — 많이 깔리고 개발자가
+    밝혀진 확장은 악성으로 단정하지 않고 확인 대상(review)으로 둔다.
+    """
+    if context_role in ("malicious", "target"):
+        return context_role
+    if (edge.get("found") and int(edge.get("installs") or 0) >= POPULAR_INSTALLS
+            and edge.get("developer")):
+        return "review"
+    return "unknown"
+
+
+def analyze(extension_ids, objective="", roles=None):
+    """확장 조회 트랙. 볼 ID가 없으면 None.
+
+    roles는 roles_from_text()의 결과. 차단 후보(live_ids·removed_ids)에는 원문이 악성
+    확장이라고 밝힌 것과, 역할 표현도 없고 대형 정상 확장으로도 안 보이는 것만 넣는다
+    (예전 동작). 원문이 탈취 대상이라고 밝힌 확장은 target_ids, 문맥 없이 대형 정상
+    확장으로 보이는 것은 review_ids로 따로 둔다 — 둘 다 차단 대상이 아니다.
+    """
     extension_ids = [e for e in (extension_ids or []) if EXTENSION_ID_RE.fullmatch(e or "")]
     if not extension_ids:
         return None
+    roles = roles or {}
 
     findings, steps, live, removed = [], [], [], []
+    targets, review = [], []
     steps.append("기사에서 확장 프로그램 ID {}개를 찾아 크롬·엣지 스토어에 직접 "
                  "조회했습니다 — 아직 게시 중인지, 무엇을 할 수 있는 물건인지 "
                  "보려는 것입니다.".format(len(extension_ids)))
@@ -191,8 +289,33 @@ def analyze(extension_ids, objective=""):
         edge = lookup_edge(extension_id)
         time.sleep(PAUSE_SECONDS)
         short = extension_id[:16] + "…"
-        name = edge.get("name") or ""
+        context = roles.get(extension_id) or {}
+        name = edge.get("name") or context.get("label") or ""
         label = "{}({})".format(name, short) if name else short
+        role = _resolve_role(context.get("role") or "unknown", edge)
+
+        if role in ("target", "review"):
+            entry = {"id": extension_id, "name": name, "developer": edge.get("developer") or "",
+                     "installs": int(edge.get("installs") or 0),
+                     "listed": bool(published) or bool(edge.get("found")),
+                     "evidence": context.get("evidence") or ""}
+            scale = "{}{}".format(
+                " · 개발자 " + entry["developer"] if entry["developer"] else "",
+                " · 설치 {:,}건".format(entry["installs"]) if entry["installs"] else "")
+            if role == "target":
+                targets.append(entry)
+                findings.append(
+                    "확장 {}는 악성 확장이 아니라 이 악성코드가 데이터를 노리는 대상입니다 — "
+                    "원문이 탈취 대상 목록에 올렸습니다{}. 차단할 대상이 아니라, 감염 단말에서 "
+                    "이 확장을 썼는지로 피해 범위를 가르는 값입니다.".format(label, scale))
+            else:
+                review.append(entry)
+                findings.append(
+                    "확장 {}는 원문이 역할을 밝히지 않았고 스토어상 대형 정상 확장입니다{} — "
+                    "악성으로 단정하지 않고 차단 목록에서 뺐습니다. 원문에서 이 확장이 왜 "
+                    "나오는지(탈취 대상인지, 인수 후 악성 업데이트인지) 확인이 필요합니다."
+                    .format(label, scale))
+            continue
 
         if error:
             steps.append("확장 {}를 크롬 스토어에 조회하지 못했습니다 — {}.".format(short, error))
@@ -239,11 +362,17 @@ def analyze(extension_ids, objective=""):
     if not findings:
         return None
     from datetime import datetime, timezone
+    if targets or review:
+        steps.append("확장 ID {}개 중 탈취 대상 {}개·확인 필요 {}개는 차단 후보에서 뺐습니다 — "
+                     "원문 문맥과 스토어 규모로 역할을 가렸습니다.".format(
+                         len(extension_ids), len(targets), len(review)))
     return {
         "findings": findings,
         "steps": steps,
         "live_ids": live,
         "removed_ids": removed,
+        "target_ids": targets,
+        "review_ids": review,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 
@@ -297,9 +426,47 @@ def response_material(block):
     block = block or {}
     live = block.get("live_ids") or []
     removed = block.get("removed_ids") or []
-    if not (live or removed):
+    targets = block.get("target_ids") or []
+    review = block.get("review_ids") or []
+    if not (live or removed or targets or review):
         return None
     actions, blocklists, queries = [], [], []
+
+    def names(entries):
+        return ", ".join(e.get("name") or e["id"][:16] + "…" for e in entries[:6])
+
+    if targets:
+        # 탈취 대상 확장은 막는 대상이 아니라 피해 범위를 가리는 값이다.
+        blocklists.append({
+            "label": "차단 금지 — 탈취 대상 확장(정상 확장)",
+            "note": "악성코드가 데이터를 훔쳐 가는 대상이다. 설치를 막아도 이미 깔린 확장의 "
+                    "데이터는 계속 읽히므로 공격이 끊기지 않는다 — 감염 단말의 피해 범위를 "
+                    "가르는 데 쓴다.",
+            "values": ["{} ({})".format(e["id"], e["name"]) if e.get("name") else e["id"]
+                       for e in targets],
+        })
+        actions.append(
+            "탈취 대상 확장 {}건({})은 차단하지 않는다. 감염이 확인된 단말에서 이 확장을 "
+            "썼다면 저장된 비밀값(지갑 시드·개인키·로그인 세션)이 노출된 것으로 보고, 깨끗한 "
+            "단말에서 새 지갑을 만들어 자산을 옮기고 연결된 계정 세션을 재발급한다."
+            .format(len(targets), names(targets)))
+        queries.append({
+            "name": "탈취 대상 확장을 쓰는 단말 {}건(피해 범위 산정)".format(len(targets)),
+            "platform": "mde_kql",
+            "query": KQL_TEMPLATE.format(", ".join('"{}"'.format(e["id"]) for e in targets)),
+            "what": "악성 확장 탐지가 아니다. 감염 단말 목록과 겹치는 단말이 지갑·세션 "
+                    "교체 대상이다 — 겹치지 않는 단말은 이 확장만으로 조치할 필요가 없다.",
+        })
+    if review:
+        blocklists.append({
+            "label": "검토 결과 — 역할 미확인 대형 확장(차단 보류)",
+            "note": "원문이 역할을 밝히지 않았고 스토어상 대형 정상 확장이다. 탈취 대상인지, "
+                    "인수 후 악성 업데이트인지 원문을 확인한 뒤 판단한다.",
+            "values": ["{} ({})".format(e["id"], e["name"]) if e.get("name") else e["id"]
+                       for e in review],
+        })
+    if not (live or removed):
+        return {"actions": actions, "blocklists": blocklists, "kql": queries, "commands": []}
 
     if live:
         blocklists.append({

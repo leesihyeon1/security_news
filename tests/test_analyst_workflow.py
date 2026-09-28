@@ -214,3 +214,21 @@ def test_prepared_update_preserves_cache_metadata_and_other_records():
     with pytest.raises(ValueError, match="changed since preparation"):
         refresh_analysis_workflow.apply_prepared(client, artifact)
     pipe.multi.assert_not_called()
+
+
+def test_historical_question_paths_require_real_lookup_and_exact_question(monkeypatch):
+    monkeypatch.setattr(refresh_analysis_workflow.dashboard_text,
+                        "redact_private_environment", lambda block, terms: block)
+    monkeypatch.setattr(refresh_analysis_workflow.common_utils,
+                        "inventory_product_terms", lambda: [])
+    record = {"ref": "one", "targets": {"questions": ["확인할 질문"]},
+              "investigation": {"quality": {}, "lookup_status": [
+                  {"key": "malware", "status": "returned"}]}}
+    mapping = {"ref": "one", "question_lookups": [{
+        "question": "확인할 질문", "lookups": [{"key": "malware", "why": "동적 행위 확인"}]}]}
+    updated = refresh_analysis_workflow.attach_question_paths(record, deepcopy(mapping))
+    assert updated["investigation"]["question_lookups"][0]["source"] == "historical"
+    assert "question_lookups" not in record["investigation"]
+    mapping["question_lookups"][0]["lookups"][0]["key"] = "web"
+    with pytest.raises(ValueError, match="not executed"):
+        refresh_analysis_workflow.attach_question_paths(record, mapping)
