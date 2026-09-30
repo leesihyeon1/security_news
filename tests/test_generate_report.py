@@ -271,3 +271,52 @@ def test_pick_trend_reads_explore_slot_ignores_personalization(monkeypatch):
     ])
     result = gr.pick_trend_reads(events, exclude_ids=set(), max_items=1)
     assert [e["id"] for e in result] == ["asec:2"]
+
+
+def test_merge_same_story_does_not_join_products_from_one_roundup():
+    roundup = {"id": "news:roundup", "source": "news", "cves": ["CVE-2026-88771", "CVE-2026-93616"]}
+    citrix = {"id": "news:citrix", "source": "news", "cves": ["CVE-2026-88771"]}
+    checkpoint = {"id": "news:checkpoint", "source": "news", "cves": ["CVE-2026-93616"]}
+    clusters = [
+        {"cves": ["CVE-2026-88771"], "group": [roundup, citrix], "sources": ["news"]},
+        {"cves": ["CVE-2026-93616"], "group": [roundup, checkpoint], "sources": ["news"]},
+    ]
+    assert len(gr.merge_same_story(clusters)) == 2
+
+
+def test_merge_same_story_keeps_independently_corrobated_chain_together():
+    shared = [{"id": "news:a", "source": "news"}, {"id": "news:b", "source": "news"}]
+    clusters = [
+        {"cves": ["CVE-2026-10001"], "group": shared + [{"id": "nvd:one", "source": "nvd"}], "sources": ["news", "nvd"]},
+        {"cves": ["CVE-2026-10002"], "group": shared + [{"id": "nvd:two", "source": "nvd"}], "sources": ["news", "nvd"]},
+    ]
+    assert gr.merge_same_story(clusters)[0]["cves"] == ["CVE-2026-10001", "CVE-2026-10002"]
+
+
+def test_public_narrative_retries_generic_action(monkeypatch):
+    base = "[총평]\n노출된 Docker API가 악용되고 있습니다.\n[핵심 위협 TOP 3]\n1. Carbonato가 Docker 호스트를 침해합니다.\n[권고 조치]\n1. {}"
+    responses = iter([base.format("공식 권고 확인을 권합니다."),
+                      base.format("Docker API 2375의 외부 노출을 차단하고 특권 컨테이너를 점검해야 합니다.")])
+    calls = []
+    def generate(prompt, **kwargs):
+        calls.append(prompt)
+        return next(responses)
+    monkeypatch.setattr(common_utils, "llm_generate", generate)
+    cards = [{"cve": "Carbonato", "summary": "Docker API 2375가 노출돼 있습니다."}]
+    narrative = gr.ai_public_narrative("오늘", {"total": 1}, cards)
+    assert "외부 노출을 차단" in narrative
+    assert "공식 권고 확인" not in narrative
+    assert len(calls) == 2
+    assert "수집된 기사·취약점 레코드 건수" in calls[0]
+
+
+def test_public_narrative_rejects_repeated_generic_action(monkeypatch):
+    response = "[총평]\n위협이 있습니다.\n[핵심 위협 TOP 3]\n1. 악용 중입니다.\n[권고 조치]\n1. 공식 권고 확인을 권합니다."
+    monkeypatch.setattr(common_utils, "llm_generate", lambda *args, **kwargs: response)
+    with pytest.raises(RuntimeError, match="quality checks"):
+        gr.ai_public_narrative("오늘", {"total": 1}, [{"cve": "위협"}])
+
+
+def test_public_narrative_distinguishes_collected_records_from_incidents():
+    narrative = "[총평]\n전체 370건의 이슈가 확인됐습니다.\n[핵심 위협 TOP 3]\n1. 취약점이 악용되고 있습니다.\n[권고 조치]\n1. 영향 자산의 패치를 적용해야 합니다."
+    assert "수집 건수" in gr._public_narrative_problem(narrative, 1)

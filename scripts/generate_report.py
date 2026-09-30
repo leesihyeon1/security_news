@@ -1166,10 +1166,8 @@ def build_cve_card(cve_label, cve_ids, group, sources):
 #
 # 그래서 "어느 기사들이 함께 다뤘는가"로 다시 본다. NVD·KEV 같은 기계 피드는 CVE
 # 단위로 항상 갈라지므로 세지 않고, 사람이 쓴 기사만 센다. 두 묶음이 공유하는
-# 기사가 작은 쪽의 이 비율을 넘으면 같은 사건으로 본다.
+# 기사가 둘 이상 겹치고 작은 쪽의 이 비율을 넘으면 같은 사건으로 본다.
 STORY_MERGE_OVERLAP = 0.6
-# 기사 한 건이 이만큼 CVE를 달고 있으면 릴리스 정리 기사로 본다.
-ROUNDUP_MIN_CVES = 5
 
 
 def _news_event_ids(group):
@@ -1178,37 +1176,15 @@ def _news_event_ids(group):
             if event.get("source") not in common_utils.NON_NEWS_SOURCES}
 
 
-def _roundup_event_ids(group):
-    """묶음 안에서 "한 릴리스를 통째로 정리한 기사"의 id.
-
-    실측 분포(2026-09-08~09-10): 뉴스 기사 204건 중 162건이 CVE를 하나도 안 달고,
-    다는 것은 보통 1~4개다. 그보다 많이 다는 기사는 벤더 한 곳의 패치 묶음을 정리한
-    것이다(Talos 112개, KISA 83개, CrowdStrike 36개 — 전부 9월 패치 화요일 정리).
-    그런 기사 하나가 걸친 CVE들은 같은 사건이다.
-    """
-    return {event.get("id") for event in group
-            if event.get("source") not in common_utils.NON_NEWS_SOURCES
-            and len(event.get("cves") or []) >= ROUNDUP_MIN_CVES}
-
-
 def merge_same_story(clusters):
     """같은 사건을 다룬 CVE 묶음끼리 하나로 합친다.
 
-    두 가지 신호를 쓴다.
-      (1) 같은 정리 기사에 함께 실렸다 — 한 기사가 CVE를 여러 개 달고 있으면 그건
-          벤더 한 곳의 패치 묶음이고, 거기 걸린 CVE들은 한 사건이다.
-      (2) 보도한 기사 목록이 대부분 겹친다 — 정리 기사가 없어도, 같은 기사들이 같이
-          다뤘으면 같은 사건으로 본다.
-
-    합치는 쪽이 안전한 이유: 갈라두면 TOP 3 자리를 한 사건이 두세 개 먹어서 다른
-    위협이 밀려난다(실측 2026-09-08: 상위 4장 중 3장이 전부 9월 패치 화요일이었다).
-    반대 방향의 위험(무관한 CVE가 한 카드에 섞임)은 기계 피드(NVD·KEV)를 신호에서
-    빼고 사람이 쓴 기사만 보기 때문에 크지 않다 — NVD는 CVE마다 항목이 따로라
-    어떤 묶음과도 겹치지 않는다.
+    CVE가 함께 등장한 기사 하나만으로 합치지 않는다. 여러 제품을 다루는 일일
+    동향 기사 한 건이 Citrix·Check Point·F5의 CVE를 하나로 잇는 사례가 있었다.
+    동일 기사 집합인 CVE는 correlate_by_cve()에서 이미 한 묶음이 된다.
     """
     items = [dict(cluster,
-                  news=_news_event_ids(cluster["group"]),
-                  roundups=_roundup_event_ids(cluster["group"]))
+                  news=_news_event_ids(cluster["group"]))
              for cluster in clusters]
 
     parent = list(range(len(items)))
@@ -1224,22 +1200,13 @@ def merge_same_story(clusters):
         if ra != rb:
             parent[max(ra, rb)] = min(ra, rb)   # 앞선 묶음이 대표가 되게 해 순서를 지킨다
 
-    # (1) 정리 기사 하나가 걸친 묶음은 전부 한 사건
-    by_roundup = {}
-    for index, item in enumerate(items):
-        for event_id in item["roundups"]:
-            by_roundup.setdefault(event_id, []).append(index)
-    for indexes in by_roundup.values():
-        for other in indexes[1:]:
-            union(indexes[0], other)
-
-    # (2) 보도 기사 목록이 대부분 겹치면 한 사건
+    # 독립된 기사 둘 이상이 공통으로 다뤄야 같은 사건으로 본다.
     for i in range(len(items)):
         for j in range(i + 1, len(items)):
             if find(i) == find(j):
                 continue
             shared = items[i]["news"] & items[j]["news"]
-            if not shared:
+            if len(shared) < 2:
                 continue
             smaller = min(len(items[i]["news"]), len(items[j]["news"]))
             if smaller and len(shared) / smaller >= STORY_MERGE_OVERLAP:
@@ -2634,6 +2601,25 @@ def dashboard_trend_bits(event):
     return bits
 
 
+def _public_narrative_problem(narrative, issue_count):
+    if "한국어 요약을 준비하지 못했습니다" in narrative:
+        return "필수 섹션이 비어 있습니다"
+    if re.search(r"(?:전체|총)\s*\d+\s*건의?\s*(?:이슈|사고)", narrative):
+        return "수집 건수를 고유 이슈 수로 표현했습니다"
+    sections = dict(re.findall(r"(?ms)^\[([^\]\n]+)\]\s*\n(.*?)(?=^\[|\Z)", narrative))
+    threats = re.findall(r"(?m)^\d+\.\s+(.+)$", sections.get("핵심 위협 TOP 3", ""))
+    actions = re.findall(r"(?m)^\d+\.\s+(.+)$", sections.get("권고 조치", ""))
+    if issue_count and (len(threats) != issue_count or len(actions) != issue_count):
+        return "핵심 위협과 권고 조치가 1:1로 대응하지 않습니다"
+    for action in actions:
+        if re.search(r"공식\s*(?:보안\s*)?(?:권고|공지|자료).*?(?:확인|참조|검토)", action):
+            if not re.search(r"패치|업데이트|차단|격리|비활성화|삭제|점검|탐지|교체|제한", action):
+                return "공식 권고 확인만 요구하는 조치가 있습니다"
+        if re.search(r"적절한 조치|필요한 조치|보안 대책 수립|모니터링을 강화", action):
+            return "구체적인 행동이 없는 조치가 있습니다"
+    return ""
+
+
 def ai_public_narrative(period_label, stats, cards):
     facts = {"period": period_label, "total": stats["total"], "issues": [
         {"issue": card["cve"], "summary": public_text(card.get("summary") or ""),
@@ -2643,20 +2629,28 @@ def ai_public_narrative(period_label, stats, cards):
     prompt = """공개 보안 대시보드의 AI 요약을 한국어 존댓말로 작성하세요.
 아래 자료에 있는 사실만 사용하고 조직의 보유 자산이나 내부 시스템을 추측하지 마세요.
 제품명·CVE·공격자 이름 외에는 영문 문장을 쓰지 마세요. 다음 형식을 정확히 지키세요.
+total은 수집된 기사·취약점 레코드 건수이지 서로 다른 사고·이슈 수가 아닙니다. 수치를 언급할 때는 "수집 건수"로만 표현하세요.
 [총평]
-전체 상황을 한국어 두 문장 이내로 설명합니다.
+우선 대응할 노출면과 공통 대응 방향을 한국어 두 문장 이내로 설명합니다. 아래 TOP 3의 세부 내용을 그대로 반복하지 마세요.
 [핵심 위협 TOP 3]
 자료의 issues를 순서대로 최대 3개 설명합니다. 각 항목은 '1. 한국어 설명' 형식입니다.
+여러 취약점 중 일부에만 적용되는 점수·악용 상태·영향을 전체 취약점의 특성처럼 쓰지 마세요. "8건 중 2건"처럼 범위를 명확히 구분하세요.
 [권고 조치]
-같은 순서로 각 위협의 조치를 번호 목록으로 작성합니다. 구체적 조치가 자료에 없으면 공식 권고 확인을 권합니다.
+같은 순서로 각 위협의 조치를 번호 목록으로 작성합니다. 각 항목에 노출 경로 차단, 영향 자산 점검, 패치·격리 등 자료의 공격 방식에서 직접 도출되는 구체적 행동을 한 문장으로 씁니다.
+remediation이 비어 있어도 summary에 명시된 침투 경로와 지속성·탈취 행위를 바탕으로 최소한의 확인·차단 조치를 제시합니다. 자료에 없는 제품 버전, IOC, 공격 사실은 만들어내지 마세요.
+"공식 권고 확인", "모니터링 강화", "적절한 조치"처럼 대상과 행동이 빠진 일반론은 쓰지 마세요.
 어떤 섹션도 비우지 마세요. 섹션 제목이나 지시문을 항목 내용으로 복사하지 마세요.
 자료:
 """ + json.dumps(facts, ensure_ascii=False)
-    result = common_utils.llm_generate(prompt, timeout=180, nvidia_max_attempts=1) or ""
-    cleaned = public_narrative(result)
-    if "한국어 요약을 준비하지 못했습니다" in cleaned:
-        raise RuntimeError("Public Korean AI narrative has missing sections")
-    return cleaned
+    for attempt in range(2):
+        retry_hint = ("\n이전 답은 위협별 구체 조치가 부족했습니다. 각 위협의 summary를 다시 읽고 "
+                      "공격 경로와 직접 연결되는 확인·차단 조치를 빠짐없이 작성하세요.\n") if attempt else ""
+        result = common_utils.llm_generate(prompt + retry_hint, timeout=180, nvidia_max_attempts=1) or ""
+        cleaned = public_narrative(result)
+        problem = _public_narrative_problem(cleaned, min(len(cards), 3))
+        if not problem:
+            return cleaned
+    raise RuntimeError("Public Korean AI narrative failed quality checks: " + problem)
 
 
 def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads,
