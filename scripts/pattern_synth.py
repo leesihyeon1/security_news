@@ -343,8 +343,13 @@ TASK_SPEC = """
 프로세스 부모-자식 관계, 특이한 포트·프로토콜 조합, 명령줄 인자 조합.
 
 지켜야 할 것:
-  - 쿼리에 넣는 문자열은 기사에 실제로 적힌 것이어야 한다. 없는 도메인·파일명·해시를
-    지어내면 그 항목은 버려진다.
+  - 쿼리에 넣는 문자열은 기사 또는 아래 조회 관측값에 실제로 있어야 한다. 없는 도메인·
+    파일명·해시를 지어내면 그 항목은 버려진다.
+  - 웹 유포 패턴은 원문 시드, 과거 스캔, 연결 사이트의 요청을 구분해 비교하라.
+    연결 사이트 하나에서만 나온 경로는 캠페인 공통 지문으로 단정하지 말고 검토 후보로 둬라.
+    urlscan filename은 관측된 파일명과 첫 질의 키까지만 써라(값은 넣지 마라).
+  - Google 검색 연산자는 공개 색인될 수 있는 흔적에만 쓰고, 비색인 네트워크 요청은
+    urlscan으로 조사하라. 근거가 없으면 해당 플랫폼 쿼리를 생략하라.
   - 같은 것을 잡는 쿼리를 여러 개로 쪼개지 마라. 3~6개만, 서로 다른 층을 잡는 것으로.
   - 정상 활동도 같이 잡히는 쿼리라면 confidence를 low로 적고, reading에 무엇을 보고
     걸러야 하는지 쓰라.
@@ -352,7 +357,7 @@ TASK_SPEC = """
 [출력 형식 — JSON 배열 하나만. 설명 문장을 앞뒤에 붙이지 마라]
 [
   {
-    "platform": "mde_kql | urlscan | virustotal",
+    "platform": "mde_kql | urlscan | virustotal | google_dork",
     "label": "패턴 이름(우리말 12자 내외)",
     "query": "쿼리 본문",
     "literals": ["쿼리에 넣은 문자열 중 기사에서 가져온 것들"],
@@ -396,12 +401,26 @@ def _web_evidence_text(web_evidence):
         rows.append("시드 {}: DOM={}, 복사 명령={}, 스캔={}".format(
             seed.get("domain") or "", seed.get("dom_status") or "미확인",
             seed.get("copied_command") or "미확인", seed.get("urlscan") or ""))
-        for request in (seed.get("http") or [])[:12]:
-            rows.append("HTTP {} {}{} 상태={} MIME={} 본문해시={} 1차호스트={}".format(
-                request.get("method") or "GET", request.get("host") or "",
-                request.get("path") or "/", request.get("status"),
-                request.get("mime") or "", request.get("body_hash") or "",
-                bool(request.get("first_party"))))
+        scans = [("연결 사이트 " + (item.get("domain") or ""), item.get("http") or [])
+                 for item in (seed.get("related_site_scans") or [])[:2]]
+        scans.extend(((item.get("scanned_at") or "과거")[:10], item.get("http") or [])
+                     for item in (seed.get("historical_scans") or [])[:2])
+        scans.append(("현재", seed.get("http") or []))
+        for scan_label, requests in scans:
+            ranked = sorted(requests, key=lambda item: (
+                not bool(item.get("query_keys")),
+                not bool(item.get("filename")),
+                not bool(item.get("initiator", {}).get("path")),
+            ))
+            for request in ranked[:20]:
+                initiator = request.get("initiator") or {}
+                rows.append("HTTP[{}] {} {}{} 키={} 파일명={} 상태={} MIME={} 본문해시={} 1차호스트={} 시작점={}{}".format(
+                    scan_label, request.get("method") or "GET", request.get("host") or "",
+                    request.get("path") or "/", ",".join(request.get("query_keys") or []),
+                    request.get("filename") or "", request.get("status"),
+                    request.get("mime") or "", request.get("body_hash") or "",
+                    bool(request.get("first_party")), initiator.get("host") or "",
+                    initiator.get("path") or ""))
     for result in ((web_evidence or {}).get("browser_research") or {}).get("results") or []:
         if result.get("source") != "isolated_browser" or result.get("status") != "observed":
             continue
@@ -417,19 +436,30 @@ def _web_evidence_text(web_evidence):
                 bool(command.get("encoded")),
                 ",".join("{}{}".format(url.get("host") or "", url.get("path") or "")
                          for url in command.get("destinations") or [])))
-        for response in (observed.get("responses") or [])[:10]:
-            rows.append("브라우저 응답 단계={} {}{} 상태={} MIME={} SHA256={} 표식={}".format(
+        ranked_responses = sorted(observed.get("responses") or [],
+                                  key=lambda item: (not bool(item.get("query_keys")),
+                                                    not bool(item.get("signals"))))
+        for response in ranked_responses[:16]:
+            rows.append("브라우저 응답 단계={} {}{} 키={} 상태={} MIME={} SHA256={} 표식={} 시작점={}".format(
                 response.get("phase") or "",
                 response.get("host") or "", response.get("path") or "/",
+                ",".join(response.get("query_keys") or []),
                 response.get("status"), response.get("mime") or "",
-                response.get("body_sha256") or "", ",".join(response.get("signals") or [])))
+                response.get("body_sha256") or "", ",".join(response.get("signals") or []),
+                (response.get("initiator") or {}).get("path") or ""))
+        for request in (observed.get("requests") or [])[:60]:
+            if request.get("query_keys"):
+                rows.append("브라우저 요청 단계={} {}{} 키={} 메서드={}".format(
+                    request.get("phase") or "", request.get("host") or "",
+                    request.get("path") or "/", ",".join(request["query_keys"]),
+                    request.get("method") or "GET"))
     for sample in ((web_evidence or {}).get("malware") or {}).get("files") or []:
         for request in ((sample.get("behaviour") or {}).get("http_details") or [])[:5]:
             rows.append("샌드박스 HTTP {} {}{} 상태={} 응답형식={}".format(
                 request.get("method") or "", request.get("host") or "",
                 request.get("path") or "/", request.get("status"),
                 request.get("response_body_type") or ""))
-    return "\n".join(rows)[:5000]
+    return "\n".join(rows)[:9000]
 
 
 def build_prompt(title, analysis, body, iocs, targets=None, web_evidence=None):
@@ -619,9 +649,9 @@ def query_literals(query):
 def grounded(candidate, corpus_norm):
     """쿼리가 기사 근거 위에 서 있는지 본다.
 
-    (1) 기사에 없는 문자열 중 위험한 종류(도메인·IP·해시·고유 파일명)가 있으면 폐기 —
+    (1) 기사·조회 관측값에 없는 문자열 중 위험한 종류(도메인·IP·해시·고유 파일명)가 있으면 폐기 —
         지어낸 C2가 차단 목록에 실리는 것을 막는다.
-    (2) 기사에 걸린 데가 한 군데도 없으면 폐기 — 리터럴이든 앵커든 하나는 기사에
+    (2) 기사·조회 관측값에 걸린 데가 한 군데도 없으면 폐기 — 리터럴이든 앵커든 하나는
         있어야 이 기사의 대응이다. 앵커까지 보는 이유는 값 대신 생성 규칙으로 만든
         쿼리(정규식 구조 패턴)가 가장 쓸모 있는데, 그런 쿼리에는 확인할 값이 없기
         때문이다 — "ProgramData 아래 16자 hex"는 값이 아니라 규칙이다.
@@ -638,12 +668,12 @@ def grounded(candidate, corpus_norm):
     missing = [value for value in literals if not present(value)]
     invented = [value for value in missing if _risky(value)]
     if invented:
-        return False, "기사에 없는 지표를 지어냄: " + ", ".join(invented[:3])
+        return False, "기사·조회 근거에 없는 지표를 지어냄: " + ", ".join(invented[:3])
 
     hit_literals = [value for value in literals if present(value)]
     hit_anchors = [value for value in anchors if present(value)]
     if not hit_literals and not hit_anchors:
-        return False, "기사에 걸린 값이 하나도 없음(일반 지식으로만 만든 쿼리)"
+        return False, "기사·조회 근거에 걸린 값이 하나도 없음(일반 지식으로만 만든 쿼리)"
     note = ""
     if missing:
         note = "일반 지식으로 보탠 값: " + ", ".join(missing[:3])
@@ -702,10 +732,11 @@ def validate_urlscan(candidate, api_key=None, positive_hosts=()):
                                         "못했습니다({})".format(error[:60])}
     if total < URLSCAN_MIN_HITS:
         return False, "urlscan 0건 — 실재하지 않는 패턴", {"hits": 0}
-    if total >= URLSCAN_TOTAL_CAP:
+    structural = bool(re.search(r'\bfilename:"[^"\s?]{4,}\?[A-Za-z0-9_-]+=.*"', query))
+    if total >= URLSCAN_TOTAL_CAP and not structural:
         return False, "urlscan {:,}건 이상 — 캠페인 지문이 아니라 웹 전체".format(
             URLSCAN_TOTAL_CAP), {"hits": total}
-    if total > URLSCAN_TOO_BROAD:
+    if total > URLSCAN_TOO_BROAD and not structural:
         return False, "urlscan {:,}건 — 훑을 수 있는 양이 아니라 지문 구실을 못 한다".format(
             total), {"hits": total}
     hosts = []
@@ -716,7 +747,9 @@ def validate_urlscan(candidate, api_key=None, positive_hosts=()):
     positives = {str(host).lower() for host in positive_hosts if host}
     matched = sorted(positives.intersection(host.lower() for host in hosts))
     facts = {"hits": total, "hosts": hosts[:4], "matched_seeds": matched}
-    if not positives:
+    if total > URLSCAN_TOO_BROAD:
+        facts["unverified"] = "구조적 요청 패턴이나 검색 결과가 {:,}건입니다. 시기·응답·호스트를 표본 검토하기 전에는 탐지 룰로 적용하지 마세요".format(total)
+    elif not positives:
         facts["unverified"] = "DOM으로 확인된 유포지 시드가 없어 검색 정밀도를 검증하지 못했습니다"
     elif not matched:
         facts["unverified"] = "검색 상위 결과에 확인된 시드가 없어 탐지 유효성을 검증하지 못했습니다"

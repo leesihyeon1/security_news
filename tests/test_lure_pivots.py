@@ -83,9 +83,71 @@ def test_run_pivots_respects_the_shared_budget(monkeypatch):
     assert ran == lh.MAX_PIVOT_RUNS
 
 
+def test_infected_site_request_can_propose_structural_filename(monkeypatch):
+    candidate = {"domain": "compromised.example", "uuid": "linked-uuid",
+                 "urlscan": "https://urlscan.io/result/linked-uuid/",
+                 "reasons": [lh.INFECTED_SITE_PIVOT], "dom_confirmed": False}
+    monkeypatch.setattr(lh, "run_pivots", lambda *args: (1, [candidate]))
+    monkeypatch.setattr(lh, "resource_facts", lambda uuid, host, key: {
+        "filenames": {"jsrepo?rnd=": {"host": "tds.example", "count": 1}},
+        "http": [{"host": "tds.example", "path": "/jsrepo", "query_keys": ["rnd"],
+                  "filename": "jsrepo?rnd="}],
+    })
+    seed = {"domain": "lure.example", "queries": [lh._query_row("연결", "q")]}
+    lh._run_seed_pivots([(seed, FACTS, [(lh.INFECTED_SITE_PIVOT, "q", 5)])],
+                        "key", [], [])
+    assert 'filename:"jsrepo?rnd="' in [item["query"] for item in seed["queries"]]
+    assert seed["related_site_scans"][0]["domain"] == "compromised.example"
+    assert seed["queries"][-1]["review_needed"]
+
+
+def test_common_tracking_key_does_not_become_a_structural_pivot():
+    facts = {"filenames": {"track?utm_source=": {"host": "site.example", "count": 1},
+                           "jsrepo?rnd=": {"host": "tds.example", "count": 1}},
+             "third_party": {}, "script_hashes": {}}
+    queries = [query for _, query, _ in lh.resource_pivots(facts)]
+    assert queries == ['filename:"jsrepo?rnd="']
+
+
+def test_seed_facts_looks_up_scans_near_article_date(monkeypatch):
+    seen = []
+
+    def search(query, size=10, api_key=None):
+        seen.append(query)
+        if "date:[" in query:
+            return ([_result("lure.example", "report-era")], 1)
+        return ([_result("lure.example", "latest")], 1)
+
+    monkeypatch.setattr(lh, "urlscan_search", search)
+    facts = lh.seed_facts("lure.example", api_key="key",
+                          article_url="https://publisher.example/2026/08/28/story/")
+    assert any("date:[2026-08-21 TO 2026-09-04]" in query for query in seen)
+    assert facts["scan_history"][0]["uuid"] == "report-era"
+
+
+def test_investigation_retains_historical_request_and_query(monkeypatch):
+    facts = dict(FACTS, scan_history=[{"uuid": "old", "scanned_at": "2026-08-28",
+                                      "url": "https://uasputnik.com/", "near_report": True}])
+    monkeypatch.setattr(lh, "seed_facts", lambda *args, **kwargs: facts)
+    monkeypatch.setattr(lh, "resource_facts", lambda uuid, host, key: {
+        "request_count": 1, "third_party": {}, "empty_response_hosts": [],
+        "filenames": {"jsrepo?rnd=": {"host": host, "count": 1}} if uuid == "old" else {},
+        "script_hashes": {},
+        "http": [{"host": host, "path": "/jsrepo", "query_keys": ["rnd"],
+                  "filename": "jsrepo?rnd="}] if uuid == "old" else [],
+    })
+    monkeypatch.setattr(lh, "verify_dom", lambda *args: {})
+    monkeypatch.setattr(lh, "_run_seed_pivots", lambda *args: None)
+    block = lh.investigation_for_iocs([{"type": "domain", "value": "uasputnik.com"}],
+                                      api_key="key", primary="user_action")
+    seed = block["seeds"][0]
+    assert seed["historical_scans"][0]["scanned_at"] == "2026-08-28"
+    assert 'filename:"jsrepo?rnd="' in [item["query"] for item in seed["queries"]]
+
+
 def test_investigation_reports_pivot_results_in_findings(monkeypatch):
     monkeypatch.setattr(lh, "REQUEST_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(lh, "seed_facts", lambda domain, api_key=None: dict(FACTS))
+    monkeypatch.setattr(lh, "seed_facts", lambda domain, api_key=None, article_url="": dict(FACTS))
     monkeypatch.setattr(lh, "resource_facts", lambda uuid, host, api_key: None)
     monkeypatch.setattr(lh, "verify_dom", lambda uuid, api_key: {"confirmed": False, "markers": {}})
     monkeypatch.setattr(lh, "urlscan_search", lambda query, size=100, api_key=None: (

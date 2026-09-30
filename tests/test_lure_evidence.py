@@ -62,6 +62,27 @@ def test_urlscan_hit_count_does_not_mean_validated(monkeypatch):
     assert facts["unverified"]
 
 
+def test_structural_filename_survives_large_hit_count_as_review_candidate(monkeypatch):
+    monkeypatch.setattr(ps, "_search_urlscan", lambda query, api_key=None: (
+        [{"page": {"domain": "unknown.example"}}], 9826, ""))
+    ok, _, facts = ps.validate_urlscan({"query": 'filename:"jsrepo?rnd="'},
+                                        positive_hosts=["lure.example"])
+    assert ok is True
+    assert facts["hits"] == 9826
+    assert "검토" in facts["unverified"]
+
+
+def test_historical_http_path_and_query_key_reach_pattern_prompt():
+    block = {"seeds": [{"in_urlscan": True, "domain": "lure.example", "http": [],
+                        "historical_scans": [{"scanned_at": "2026-08-28", "http": [
+                            {"host": "tds.example", "path": "/jsrepo", "query_keys": ["rnd"],
+                             "filename": "jsrepo?rnd=", "initiator": {"host": "lure.example",
+                                                                     "path": "/script.js"}}]}]}]}
+    evidence = ps._web_evidence_text(block)
+    assert "jsrepo?rnd=" in evidence
+    assert "시작점=lure.example/script.js" in evidence
+
+
 def test_pattern_prompt_receives_http_and_dom_evidence():
     block = {"seeds": [{"domain": "lure.example", "in_urlscan": True,
                          "dom_status": "confirmed", "copied_command": "cmd /c echo demo",

@@ -26,6 +26,8 @@ def test_clickfix_question_is_investigated_even_for_malware_primary(monkeypatch)
     assert result["questions"] == [target["questions"][0]]
     assert result["results"][0]["evidence"]["evidence_id"].startswith("urlscan:")
     assert result["results"][1]["status"] == "deferred"
+    assert result["results"][1]["target"] == {"host": "lure.example", "path": "/verify",
+                                               "query_keys": []}
     assert "비활성화" in result["results"][1]["reason"]
 
 
@@ -53,6 +55,22 @@ def test_browser_without_observed_url_records_the_missing_evidence(monkeypatch):
         {"questions": ["유포지 페이지는?"]}, {"seeds": [seed]}, {"primary": "user_action"})
     assert result["results"][-1]["status"] == "deferred"
     assert "스캔 URL" in result["results"][-1]["reason"]
+
+
+def test_browser_uses_scan_url_without_dom_marker_but_ignores_internal_log_question(monkeypatch):
+    monkeypatch.setattr(browser_research, "enabled", lambda: False)
+    result = browser_research.investigate(
+        {"questions": ["사내 프록시 로그에서 URL 접속 이력 확인", "ClickFix 유포지의 HTTP 요청은?"]},
+        {"seeds": [dict(SEED, dom_markers={}, dom_status="unobserved")]},
+        {"primary": "malware"})
+    assert result["questions"] == ["ClickFix 유포지의 HTTP 요청은?"]
+    assert result["results"][-1]["target"]["host"] == "lure.example"
+
+
+def test_cdp_initiator_keeps_script_origin_without_query_values():
+    fact = browser_research._initiator_fact({"initiator": {"type": "script", "stack": {
+        "callFrames": [{"url": "https://source.example/inject.js?secret=private-value"}]}}})
+    assert fact == {"type": "script", "host": "source.example", "path": "/inject.js"}
 
 
 def test_vt_http_context_survives_without_query_secret(monkeypatch):

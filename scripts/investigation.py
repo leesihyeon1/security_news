@@ -570,7 +570,8 @@ def _run_url(ctx):
     return lure_hunter.investigation_for_iocs(
         ctx["iocs"], api_key=ctx["urlscan_key"], text=ctx["text"],
         web_files=lure_hunter.web_files_from(ctx["targets"]),
-        primary=(ctx.get("route") or {}).get("primary") or "")
+        primary=(ctx.get("route") or {}).get("primary") or "",
+        article_url=ctx.get("article_url") or "")
 
 
 def _merge_url(block, track):
@@ -996,7 +997,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                               for source in primary["sources"]]}
     run_lookups({"iocs": iocs, "text": text, "title": title, "route": route,
                  "urlscan_key": urlscan_key, "vt_key": vt_key, "targets": targets,
-                 "body": body, "primary_text": primary_text, "block": block},
+                 "body": body, "primary_text": primary_text, "block": block,
+                 "article_url": article_url},
                 block, steps)
     _corroborate_roles(block, steps)
 
@@ -1030,10 +1032,6 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 rows.append(row)
             row.setdefault("lookups", []).append({
                 "key": "브라우저 조사", "why": "저장 스캔과 실제 페이지의 클릭 전후 DOM·HTTP를 대조"})
-            block.setdefault("followup_results", []).append({
-                "type": "browser", "value": archived[0]["domain"] if archived else "",
-                "question": question, "lookup": "브라우저 조사", "status": state,
-                "result": summary})
             steps.append({"track": "브라우저 조사", "text": "{} — {}".format(question, summary)})
 
     block.setdefault("patterns", [])

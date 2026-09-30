@@ -39,6 +39,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import date, timedelta
 from html.parser import HTMLParser
 
 import common_utils
@@ -180,7 +181,18 @@ def urlscan_search(query, size=MAX_RESULTS_PER_PIVOT, api_key=None):
     return data.get("results") or [], data.get("total") or 0
 
 
-def seed_facts(seed, api_key=None):
+def _article_date(url):
+    match = re.search(r"/(20\d{2})[/-](\d{2})[/-](\d{2})(?:/|$)",
+                      urllib.parse.urlsplit(url or "").path)
+    if not match:
+        return None
+    try:
+        return date.fromisoformat("-".join(match.groups()))
+    except ValueError:
+        return None
+
+
+def seed_facts(seed, api_key=None, article_url=""):
     """시드(도메인 또는 URL)의 urlscan 스캔에서 인프라 지문을 뽑는다."""
     domain = seed.strip()
     if "://" in domain:
@@ -198,6 +210,34 @@ def seed_facts(seed, api_key=None):
     latest = max(results, key=lambda r: (r.get("task") or {}).get("time") or "")
     page = latest.get("page") or {}
     task = latest.get("task") or {}
+    history_by_uuid = {}
+    for item in results:
+        if item.get("_id"):
+            history_by_uuid[item["_id"]] = {
+                "uuid": item["_id"],
+                "scanned_at": ((item.get("task") or {}).get("time") or "")[:19],
+                "url": (item.get("task") or {}).get("url") or "",
+                "near_report": False,
+            }
+    published = _article_date(article_url)
+    if api_key and published:
+        start, end = published - timedelta(days=7), published + timedelta(days=7)
+        try:
+            historical, _ = urlscan_search(
+                'page.domain:"{}" AND date:[{} TO {}]'.format(domain, start, end),
+                size=10, api_key=api_key)
+        except Exception:
+            historical = []
+        for item in historical:
+            if item.get("_id"):
+                history_by_uuid[item["_id"]] = {
+                    "uuid": item["_id"],
+                    "scanned_at": ((item.get("task") or {}).get("time") or "")[:19],
+                    "url": (item.get("task") or {}).get("url") or "",
+                    "near_report": True,
+                }
+    history = sorted(history_by_uuid.values(),
+                     key=lambda item: (item["near_report"], item["scanned_at"]), reverse=True)
     return {
         "domain": domain,
         "scan_count": total,
@@ -213,6 +253,7 @@ def seed_facts(seed, api_key=None):
         "country": page.get("country") or "",
         "domain_age_days": page.get("domainAgeDays"),
         "requests": (latest.get("stats") or {}).get("requests"),
+        "scan_history": history,
     }
 
 
@@ -236,6 +277,7 @@ NOISE_RESOURCE_APEXES = {
     "adobe.com", "bing.com", "yandex.ru", "naver.com", "naver.net", "kakao.com",
     "daum.net", "pstatic.net", "jsdelivr.com", "bootstrapcdn.net",
     "demdex.net", "tealiumiq.com", "tealium.com", "adobedtm.com", "omtrdc.net",
+    "ahrefs.com",
     "2o7.net", "trustindex.io", "usercentrics.eu", "cookielaw.org", "onetrust.com",
 }
 
@@ -247,6 +289,14 @@ COMMON_FILENAMES = {
     "main.min.js", "app.min.js", "jquery.min.js", "bundle.min.js", "vendor.js",
     "utag.js", "loader.js", "common.js", "runtime.js", "polyfills.js", "chunk.js",
 }
+COMMON_QUERY_KEYS = {"v", "ver", "version", "utm_source", "utm_medium",
+                     "utm_campaign", "gclid", "fbclid", "wbraid", "_ga"}
+
+
+def _distinctive_filename(name):
+    if "?" not in name or not name.endswith("="):
+        return False
+    return name.rsplit("?", 1)[-1][:-1].lower() not in COMMON_QUERY_KEYS
 
 
 def _apex(host):
@@ -294,7 +344,8 @@ def resource_facts(uuid, page_host, api_key):
     third_party, filenames, hashes, empty_hosts, http = {}, {}, {}, [], []
     requests = (data.get("data") or {}).get("requests") or []
     for entry in requests:
-        request = (entry.get("request") or {}).get("request") or {}
+        request_container = entry.get("request") or {}
+        request = request_container.get("request") or {}
         url = request.get("url") or ""
         if not url.startswith("http"):
             continue
@@ -305,26 +356,40 @@ def resource_facts(uuid, page_host, api_key):
 
         response = (entry.get("response") or {}).get("response") or {}
         body_hash = (entry.get("response") or {}).get("hash") or ""
-        if len(http) < 30:
+        initiator = request_container.get("initiator") or {}
+        frames = (initiator.get("stack") or {}).get("callFrames") or []
+        source_url = initiator.get("url") or (frames[0].get("url") if frames else "")
+        try:
+            source = urllib.parse.urlsplit(source_url) if source_url.startswith("http") else None
+        except ValueError:
+            source = None
+        name = _urlscan_filename(url)
+        if len(http) < 120:
             http.append({"host": host, "path": (parsed.path or "/")[:160],
-                         "query_keys": sorted(urllib.parse.parse_qs(parsed.query))[:8],
+                         "query_keys": list(dict.fromkeys(
+                             key for key, _ in urllib.parse.parse_qsl(
+                                 parsed.query, keep_blank_values=True)))[:8],
+                         "filename": name,
                          "method": request.get("method") or "GET",
                          "status": response.get("status"),
                          "mime": (response.get("mimeType") or "")[:80],
                          "body_hash": body_hash[:64],
-                         "first_party": _apex(host) == page_apex})
-        if _apex(host) == page_apex or _apex(host) in NOISE_RESOURCE_APEXES:
+                         "first_party": _apex(host) == page_apex,
+                         "initiator": {"type": initiator.get("type") or "",
+                                       "host": (source.hostname or "").lower() if source else "",
+                                       "path": (source.path or "/")[:160] if source else ""}})
+        if _apex(host) in NOISE_RESOURCE_APEXES:
             continue
-        info = third_party.setdefault(host, {"count": 0, "types": set(), "empty": 0})
-        info["count"] += 1
-        if response.get("mimeType"):
-            info["types"].add(response["mimeType"])
-        if body_hash == EMPTY_BODY_SHA256:
-            info["empty"] += 1
-            if host not in empty_hosts:
-                empty_hosts.append(host)
+        if _apex(host) != page_apex:
+            info = third_party.setdefault(host, {"count": 0, "types": set(), "empty": 0})
+            info["count"] += 1
+            if response.get("mimeType"):
+                info["types"].add(response["mimeType"])
+            if body_hash == EMPTY_BODY_SHA256:
+                info["empty"] += 1
+                if host not in empty_hosts:
+                    empty_hosts.append(host)
 
-        name = _urlscan_filename(url)
         if name:
             filenames.setdefault(name, {"host": host, "count": 0})
             filenames[name]["count"] += 1
@@ -357,10 +422,10 @@ def resource_pivots(resources):
         return -info["count"]
 
     for name, info in sorted(resources["filenames"].items(), key=filename_rank):
-        usable = "?" in name and name.endswith("=")
+        usable = _distinctive_filename(name)
         if not usable:
             continue
-        pivots.append(("같은 파일을 불러오는 사이트 전체", 'filename:"{}"'.format(name), 3))
+        pivots.append(("같은 경로·질의 키로 요청하는 사이트", 'filename:"{}"'.format(name), 5))
         if len(pivots) >= 2:
             break
 
@@ -372,7 +437,7 @@ def resource_pivots(resources):
         pivots.append(("이 호스트를 불러오는 사이트 전체", 'domain:"{}"'.format(host), 3))
 
     for body_hash, host in list(resources["script_hashes"].items())[:1]:
-        pivots.append(("똑같은 스크립트 파일이 있는 사이트", "hash:{}".format(body_hash), 3))
+        pivots.append(("똑같은 스크립트 파일이 있는 사이트", "hash:{}".format(body_hash), 4))
     return pivots
 
 
@@ -524,7 +589,7 @@ def technique_pivots(domain, facts, dom, web_files=()):
     pivots = []
     if facts:
         pivots.append((INFECTED_SITE_PIVOT,
-                       'domain:"{0}" AND NOT page.domain:"{0}"'.format(domain), 3))
+                       'domain:"{0}" AND NOT page.domain:"{0}"'.format(domain), 5))
     for name in list(web_files)[:2]:
         pivots.append(("같은 공격 파일({})을 요청하는 페이지".format(name),
                        'filename:"{}"'.format(name), 3))
@@ -571,11 +636,12 @@ def run_pivots(domain, facts, queries, pivots, api_key, state):
         ran += 1
         if query in by_query:
             by_query[query]["total"] = total
-        # 수천 건이 걸리는 질의는 가르지 못한다 — 앞쪽 20건은 그 캠페인과 무관한 표본이다
-        # (실측: 동일 ASN + 신규 도메인 10,000건). 건수만 남기고 후보는 받지 않는다.
+        # 대량 적중은 성공 판정이 아니다. 구조적 파일명도 표본의 악성 여부를 검토해야 한다.
         if total > MAX_USEFUL_HITS:
             if query in by_query:
                 by_query[query]["too_broad"] = True
+                if query.startswith('filename:"') and "?" in query:
+                    by_query[query]["review_needed"] = "요청 형태는 관측됐지만 검색 결과가 많아 캠페인 특이성과 오탐을 수동 검토해야 합니다"
         else:
             _add_candidates(candidates, results, name, weight, domain)
         time.sleep(REQUEST_PAUSE_SECONDS)
@@ -597,6 +663,7 @@ def run_pivots(domain, facts, queries, pivots, api_key, state):
         ranked.sort(key=lambda c: -c["score"])
     return ran, [{
         "domain": c["domain"], "score": c["score"], "reasons": c["reasons"][:4],
+        "uuid": c.get("uuid") or "",
         "scanned_at": c["scanned_at"], "domain_age_days": c.get("domain_age_days"),
         "dom_confirmed": bool(c.get("dom_confirmed")),
         "urlscan": "https://urlscan.io/result/{}/".format(c["uuid"]) if c.get("uuid") else "",
@@ -934,7 +1001,7 @@ def _dedupe_seed_queries(seeds):
 
 
 def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS, text="",
-                           web_files=(), primary=""):
+                           web_files=(), primary="", article_url=""):
     """IOC 도메인을 시드로 "조사&대응" 블록을 만든다(심층분석 결과에 붙는다).
 
     확인내용은 urlscan의 공개 관측치에서 나온 사실만, 사람이 읽는 문장으로 적는다 —
@@ -991,7 +1058,7 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
                 int(INVESTIGATION_BUDGET_SECONDS)))
             break
         try:
-            facts = seed_facts(domain, api_key=api_key)
+            facts = seed_facts(domain, api_key=api_key, article_url=article_url)
         except Exception as error:
             findings.append("{} — urlscan 조회에 실패했습니다({}).".format(domain, str(error)[:70]))
             steps.append("{} — urlscan 검색이 실패했습니다({}).".format(domain, str(error)[:60]))
@@ -1035,6 +1102,30 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
                          "못했습니다(검색 API만 키 없이 됩니다).".format(domain))
 
         dom = verify_dom(facts["uuid"], api_key) if (api_key and facts.get("uuid")) else {}
+        historical_scans = []
+        if api_key and primary in {"user_action", "web_delivery", "malware"}:
+            for earlier in (facts.get("scan_history") or []):
+                if len(historical_scans) >= 2 or time.time() - started > INVESTIGATION_BUDGET_SECONDS:
+                    break
+                if not earlier.get("uuid") or earlier["uuid"] == facts.get("uuid"):
+                    continue
+                older_http = resource_facts(earlier["uuid"], domain, api_key)
+                older_dom = verify_dom(earlier["uuid"], api_key)
+                historical_scans.append({
+                    "scanned_at": earlier.get("scanned_at") or "",
+                    "urlscan": "https://urlscan.io/result/{}/".format(earlier["uuid"]),
+                    "dom_status": older_dom.get("status") or "unobserved",
+                    "dom_confirmed": bool(older_dom.get("confirmed")),
+                    "http": (older_http or {}).get("http") or [],
+                    "resource_facts": older_http or {},
+                })
+                if older_dom.get("confirmed"):
+                    findings.append("· {}의 {} 스캔 DOM에서 붙여넣기 유도 표식이 확인됐습니다. 현재 페이지에도 남아 있는지는 별도 확인이 필요합니다.".format(
+                        domain, (earlier.get("scanned_at") or "-")[:10]))
+                steps.append("{} — 과거 스캔 {}의 DOM·HTTP 요청을 재확인했습니다. 요청 {}건, DOM 상태 {}.".format(
+                    domain, (earlier.get("scanned_at") or "-")[:10],
+                    (older_http or {}).get("request_count") or 0,
+                    older_dom.get("status") or "unobserved"))
         if dom.get("dom_bytes"):
             steps.append("{} — 저장된 페이지 코드 {:,}자를 받아 붙여넣기 유도 표식을 대조했습니다"
                          "(클립보드 쓰기 / 터미널 안내 문구 / 실행 명령 / 가짜 CAPTCHA 4갈래, "
@@ -1117,6 +1208,11 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
         tech_pivots = technique_pivots(domain, facts, dom, web_files)
         page_pivots = build_pivots(facts)
         res_pivots = resource_pivots(resources) if resources else []
+        for older in historical_scans:
+            if older["resource_facts"]:
+                res_pivots.extend(resource_pivots(older["resource_facts"]))
+            older.pop("resource_facts", None)
+        res_pivots = list({query: (name, query, weight) for name, query, weight in res_pivots}.values())
         for name, query, _weight in tech_pivots + page_pivots + res_pivots:
             queries.append(_query_row(name, query))
         steps.append("{} — 검색 쿼리 {}개를 만들었습니다: 이 도메인 관측 이력 1개 + 수법 기반 {}개"
@@ -1135,6 +1231,7 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
             "copied_command": dom.get("copied_command") or "",
             "empty_response_hosts": (resources or {}).get("empty_response_hosts") or [],
             "http": (resources or {}).get("http") or [],
+            "historical_scans": historical_scans,
             "scanned_at": facts.get("scanned_at") or "",
             "scan_url": facts.get("url") or "",
             "title": facts.get("title") or "",
@@ -1223,6 +1320,35 @@ def _run_seed_pivots(to_run, api_key, findings, steps):
         # 유포지 페이지에 있으므로 이 사이트들의 DOM에서는 안 나오는 것이 정상이다.
         infected = [c for c in candidates if INFECTED_SITE_PIVOT in " ".join(c["reasons"])]
         others = [c for c in candidates if c not in infected]
+        if infected and api_key:
+            linked_scans = []
+            structural = {}
+            for candidate in infected[:2]:
+                if time.time() > state["deadline"] or not candidate.get("uuid"):
+                    break
+                observed = resource_facts(candidate["uuid"], candidate["domain"], api_key)
+                if not observed:
+                    continue
+                linked_scans.append({"domain": candidate["domain"],
+                                     "urlscan": candidate["urlscan"],
+                                     "http": observed["http"]})
+                for filename in observed["filenames"]:
+                    if _distinctive_filename(filename):
+                        structural.setdefault(filename, set()).add(candidate["domain"])
+            if linked_scans:
+                seed["related_site_scans"] = linked_scans
+                steps.append("{} — 이 도메인을 불러온 사이트 {}곳의 스캔 요청을 추적해 경로·질의 키를 비교했습니다.".format(
+                    seed["domain"], len(linked_scans)))
+            for filename, hosts in sorted(structural.items(), key=lambda item: (-len(item[1]), item[0]))[:2]:
+                query = 'filename:"{}"'.format(filename)
+                if any(item["query"] == query for item in seed["queries"]):
+                    continue
+                row = _query_row("연결 사이트에서 관측한 요청 형태", query)
+                row["observed_hosts"] = sorted(hosts)
+                row["review_needed"] = "{}개 연결 사이트에서 관측. 원인 스크립트·캠페인 연관성과 오탐을 확인해야 합니다".format(len(hosts))
+                seed["queries"].append(row)
+                steps.append("{} — 연결 사이트 요청에서 {}를 발견했습니다(관측 {}곳). 정밀도는 아직 검증되지 않았습니다.".format(
+                    seed["domain"], query, len(hosts)))
         if infected:
             findings.append("· {}를 불러오는 다른 사이트 {}곳: {}. 공격자 소유가 아니라 숨긴 "
                             "iframe·스크립트가 심긴 감염 사이트 후보입니다 — 차단 대상이 아니라, "

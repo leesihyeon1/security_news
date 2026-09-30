@@ -7,20 +7,21 @@ therefore requires an explicitly isolated worker with network egress controls.
 import hashlib
 import os
 import re
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import network_safety
 
 QUESTION_RE = re.compile(
     r"clickfix|붙여넣|클립보드|유포지|피싱|가짜.{0,5}(?:인증|캡차)|"
-    r"페이지|스크립트|브라우저|리다이렉트|redirect|dom|http|url",
+    r"페이지|스크립트|브라우저|리다이렉트|redirect|dom|http|웹 요청|유입 경로",
     re.I,
 )
+INTERNAL_QUESTION_RE = re.compile(r"(?:사내|내부|우리.{0,3}조직).{0,16}(?:로그|EDR|프록시|이력)", re.I)
 ACTION_RE = re.compile(r"verify|human|captcha|copy|continue|확인|인증|복사|계속", re.I)
 SIGNAL_RE = re.compile(r"clipboard|writeText|execCommand|powershell|mshta|"
                        r"Win\s*\+\s*R|Ctrl\s*\+\s*V|붙여넣|captcha", re.I)
-MAX_REQUESTS = 40
-MAX_RESPONSES = 12
+MAX_REQUESTS = 100
+MAX_RESPONSES = 60
 MAX_DOM_BYTES = 512_000
 
 
@@ -40,7 +41,8 @@ def _url_fact(url):
     try:
         parsed = urlsplit(str(url))
         return {"host": (parsed.hostname or "").lower(), "path": (parsed.path or "/")[:160],
-                "query_keys": sorted(parse_qs(parsed.query))[:8]}
+                "query_keys": list(dict.fromkeys(key for key, _ in parse_qsl(
+                    parsed.query, keep_blank_values=True)))[:8]}
     except ValueError:
         return {"host": "", "path": "", "query_keys": []}
 
@@ -57,6 +59,14 @@ def _command_fact(command):
             "executable": executable.group(0).lower() if executable else "",
             "destinations": destinations[:4],
             "encoded": bool(re.search(r"-enc(?:odedcommand)?\b|FromBase64String", command, re.I))}
+
+
+def _initiator_fact(event):
+    initiator = event.get("initiator") or {}
+    frames = (initiator.get("stack") or {}).get("callFrames") or []
+    source = initiator.get("url") or (frames[0].get("url") if frames else "")
+    fact = _url_fact(source)
+    return {"type": initiator.get("type") or "", "host": fact["host"], "path": fact["path"]}
 
 
 def _snapshot(page):
@@ -76,6 +86,7 @@ def capture(url):
     from playwright.sync_api import sync_playwright
 
     requests, responses, clipboard = [], [], []
+    initiators = {}
     phase = "before"
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -114,10 +125,15 @@ def capture(url):
             context.route("**/*", guard)
             page = context.new_page()
             page.on("dialog", lambda dialog: dialog.dismiss())
+            cdp = context.new_cdp_session(page)
+            cdp.on("Network.requestWillBeSent", lambda event: initiators.setdefault(
+                (event.get("request") or {}).get("url") or "", _initiator_fact(event)))
+            cdp.send("Network.enable")
 
             def on_request(request):
                 if len(requests) < MAX_REQUESTS:
                     requests.append({"phase": phase, "method": request.method,
+                                     "_raw_url": request.url,
                                      **_url_fact(request.url)})
 
             page.on("request", on_request)
@@ -127,8 +143,13 @@ def capture(url):
             page.wait_for_timeout(800)
             before = _snapshot(page)
             action = "none"
+            action_label = ""
             buttons = page.locator("button, [role='button']").filter(has_text=ACTION_RE)
             if buttons.count():
+                try:
+                    action_label = " ".join(buttons.first.inner_text(timeout=1000).split())[:80]
+                except Exception:
+                    pass
                 phase = "after"
                 try:
                     buttons.first.click(timeout=4000, no_wait_after=True)
@@ -144,6 +165,7 @@ def capture(url):
             http = []
             for response, response_phase in responses:
                 row = {"phase": response_phase, **_url_fact(response.url), "status": response.status,
+                       "initiator": initiators.get(response.url) or {},
                        "mime": response.headers.get("content-type", "")[:80]}
                 if "javascript" in row["mime"] or "text/html" in row["mime"]:
                     try:
@@ -159,7 +181,10 @@ def capture(url):
                     except Exception:
                         pass
                 http.append(row)
-            return {"url": _url_fact(url), "action": action, "before": before, "after": after,
+            for row in requests:
+                row["initiator"] = initiators.get(row.pop("_raw_url")) or {}
+            return {"url": _url_fact(url), "action": action, "action_label": action_label,
+                    "before": before, "after": after,
                     "requests": requests, "responses": http,
                     "clipboard": [_command_fact(value) for value in clipboard]}
         finally:
@@ -180,7 +205,8 @@ def disabled_reason():
 
 def investigate(targets, block, route):
     """Give each relevant question an evidence trail and a bounded browser attempt."""
-    questions = [q for q in (targets or {}).get("questions") or [] if QUESTION_RE.search(q)]
+    questions = [q for q in (targets or {}).get("questions") or []
+                 if QUESTION_RE.search(q) and not INTERNAL_QUESTION_RE.search(q)]
     seeds = (block or {}).get("seeds") or []
     if not questions or not seeds:
         return None
@@ -197,20 +223,23 @@ def investigate(targets, block, route):
 
     candidate = next((seed for seed in seeds if seed.get("scan_url") and
                       (seed.get("dom_markers") or seed.get("dom_confirmed"))), None)
+    if not candidate:
+        candidate = next((seed for seed in seeds if seed.get("scan_url")), None)
     if candidate:
+        target = _url_fact(candidate["scan_url"])
         if enabled():
             try:
                 captured = capture(candidate["scan_url"])
                 captured["evidence_id"] = "browser:" + captured["after"]["dom_sha256"][:16]
                 results.append({"source": "isolated_browser", "status": "observed", "evidence": captured})
             except Exception as error:
-                results.append({"source": "isolated_browser", "status": "failed",
+                results.append({"source": "isolated_browser", "status": "failed", "target": target,
                                 "reason": type(error).__name__})
         else:
-            results.append({"source": "isolated_browser", "status": "deferred",
+            results.append({"source": "isolated_browser", "status": "deferred", "target": target,
                             "reason": "격리 브라우저 조사 워커가 비활성화되었습니다: {}".format(
                                 disabled_reason())})
     else:
         results.append({"source": "isolated_browser", "status": "deferred",
-                        "reason": "페이지 행동을 확인할 스캔 URL·DOM 단서가 없습니다"})
+                         "reason": "페이지 행동을 확인할 스캔 URL이 없습니다"})
     return {"questions": questions[:6], "results": results}

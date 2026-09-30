@@ -114,7 +114,7 @@ def test_summarize_reports_outcomes_not_just_counts():
 
 def test_clickfix_boilerplate_only_for_lure_cases(monkeypatch):
     monkeypatch.setattr(lure_hunter, "REQUEST_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(lure_hunter, "seed_facts", lambda domain, api_key=None: None)
+    monkeypatch.setattr(lure_hunter, "seed_facts", lambda domain, api_key=None, article_url="": None)
     monkeypatch.setattr(lure_hunter, "urlscan_search", lambda query, size=100, api_key=None: ([], 0))
     iocs = [{"type": "domain", "value": "panel.example"}]
     boiler = "이 캠페인 유형은 화면을 정상 사이트처럼"
@@ -126,7 +126,7 @@ def test_clickfix_boilerplate_only_for_lure_cases(monkeypatch):
 
 def test_role_confirmed_domains_take_the_seed_slots_first(monkeypatch):
     monkeypatch.setattr(lure_hunter, "REQUEST_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(lure_hunter, "seed_facts", lambda domain, api_key=None: None)
+    monkeypatch.setattr(lure_hunter, "seed_facts", lambda domain, api_key=None, article_url="": None)
     monkeypatch.setattr(lure_hunter, "urlscan_search", lambda query, size=100, api_key=None: ([], 0))
     iocs = [{"type": "domain", "value": "a-unknown.example", "role": "unknown", "actionable": False},
             {"type": "domain", "value": "b-unknown.example", "role": "unknown", "actionable": False},
