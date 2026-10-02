@@ -35,6 +35,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import analysis_targets
+import analysis_flow
 import article_kind
 import issue_decision
 import common_utils
@@ -414,6 +415,7 @@ def build_prompt(title, body, category_hint):
             + sections
             + '[선수 정보]\n- 용어명1: 이 용어를 모르면 위 분석을 이해할 수 없는 실무자를 위한 1문장 해설\n- 용어명2: 용어명1과 동일한 형태의 해설\n\n섹션 누락 금지: 위 출력 형식의 섹션을 맨 끝의 [조사 대상]까지 하나도 빠짐없이 순서대로 써라 — [권장 대응]이나 [선수 정보]에서 끝내지 마라. [조사 대상]은 도구가 읽는 마지막 섹션이라 빠지면 자동 조사가 통째로 돌지 않는다.\n\n번호 목록 작성 규칙: 번호(예: "1.")만 쓰고 뒤에 설명 문장을 비워두지 마라 — 쓰기로 한 항목은 반드시 같은 줄에 실질적인 문장으로 채우고, 번호는 1부터 순서대로 매겨라.\n\n강조 규칙: 각 섹션에서 가장 핵심적인 용어·수치·행위만 **이렇게** 볼드로 표시하라. 섹션당 2~4개로 제한하고, 문장 전체를 통째로 볼드 처리하지 마라.\n\n선수 정보 작성 규칙: 독자는 보안 실무자다. "이 단어를 모르면 위 분석을 못 읽는가"만 기준으로 삼아라.\n' + glossary_rules + '- 해설에 용어를 그대로 되풀이하지 마라. 그 용어가 무엇을 하는지, 이 기사에서 왜 중요한지를 써라.\n- 용어명은 본문에 나온 표기 그대로 쓰고 볼드(**)나 번호를 붙이지 마라.\n\n주의: 본문에 없는 사실을 지어내지 마라. 본문이 부실하면 그 사실을 그대로 밝혀라. 모든 출력은 한국어로만 쓰고 한자·중국어를 섞지 마라.'
             + '\n\n근거 규칙: 제목의 주된 사건을 중심으로 분석하라. 본문 끝에 관련 동향으로 병기된 별도 캠페인은 주된 사건의 공격 단계·IOC·조사 목표에 합치지 마라. 여러 독립 사건을 주제로 다룬 종합 기사라면 기존 섹션 안에서 사건별로 나누어 쓰고, 하나의 침투·실행·지속화·확산 체인으로 합치지 마라. 원문에 없는 단계는 "원문 미기재"로 남기고 다른 사건의 C2·파일·기법을 옮겨 붙이지 마라. 기사 출처·참고 문서 URL은 IOC나 조사 대상 URL로 넣지 마라. ATT&CK ID와 이름 및 실제 행위가 모두 맞는 경우만 쓰고, 추정 매핑은 생략하라. OAuth 정상 인증 흐름 악용을 비밀번호 탈취나 MFA 직접 우회로 바꾸어 쓰지 마라. 패치 버전·설정·기한을 임의로 보충하지 마라.'
+            + analysis_flow.SPEC
             + analysis_targets.indicator_spec()
             + "\n\n본문:\n" + (body or "(본문을 가져오지 못해 제목만으로 분석합니다.)"))
 
@@ -757,6 +759,7 @@ def analyze_one(job):
     log("    LLM {:.1f}초 / {:,}자".format(time.time() - started, len(raw)))
 
     category, analysis = extract_category(raw)
+    analysis, flow_candidate = analysis_flow.split(analysis)
     # 기계용 목록을 먼저 떼어낸다. 남겨 두면 화면에 "도메인: 없음" 같은 줄이 그대로
     # 보이고, 뒤따르는 섹션 파서들도 이 섹션을 본문으로 오인한다.
     targets = analysis_targets.parse(analysis)
@@ -790,6 +793,9 @@ def analyze_one(job):
     targets["article_subtype"] = kind["subtype"]
     targets["article_kind_reason"] = kind["reason"]
     log("    기사 유형: {} ({})".format(kind["kind"], kind["reason"]))
+    flow = analysis_flow.validate(flow_candidate, analysis_body,
+                                  category or job.get("category") or "", targets,
+                                  fallback_url or url)
 
     # The article analysis is complete here. Decide which of its issues warrant
     # investigation before choosing external lookups.
@@ -854,6 +860,7 @@ def analyze_one(job):
         "source_label": job.get("source_label") or "",
         "source_fallback_url": fallback_url,
         "analysis": analysis,
+        "analysis_flow": flow,
         "links": links,
         "iocs": source_evidence.display_iocs(iocs),
         "category": category,
@@ -893,13 +900,16 @@ def store_result(client, record):
     if record.get("targets") is not None:
         record["targets"] = dashboard_text.redact_private_environment(
             record["targets"], product_names)
+    if record.get("analysis_flow") is not None:
+        record["analysis_flow"] = dashboard_text.redact_private_environment(
+            record["analysis_flow"], product_names)
 
     # 없는 키는 비워 둔다. 수집 실패 기록처럼 일부 필드가 아예 없는 경우가 있어,
     # 인덱싱으로 꺼내면 저장이 통째로 실패한다(실측: 'targets' KeyError로 기록이
     # 저장되지 않았다).
     cached = {key: record.get(key) for key in
               ("analysis", "links", "iocs", "category", "attack_techniques", "glossary",
-               "attack_grouped", "investigation", "targets")}
+               "attack_grouped", "investigation", "targets", "analysis_flow")}
     if record.get("collection_failed"):
         # 원문 접근 실패는 일시적일 수 있다. 실패 문구를 90일 캐시하면 사이트가
         # 복구되어도 같은 기사가 계속 실패 상태로 남으므로, 이력에만 남기고 다음
