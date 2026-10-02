@@ -2752,28 +2752,7 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         }
 
     def serialize_campaign(row):
-        # campaign_radar는 판정 근거로 pirs·assets를 함께 담아 주지만(내부 CLI·로그용)
-        # 대시보드에는 넘기지 않는다 — 자산매칭·PIR을 빼는 것과 같은 원칙. 캠페인 카드는
-        # 근거 대신 "얼마나 여러 곳에서 다뤄졌는지"(소스 수·신규 보도 수)로 신뢰도를 보여준다.
-        return {
-            "names": row.get("names") or [],
-            "first_seen": row.get("first_seen") or "",
-            "level": row.get("level") or "",
-            "sources": row.get("sources") or [],
-            "categories": row.get("categories") or [],
-            "techniques": row.get("techniques") or [],
-            "ioc_count": row.get("ioc_count") or 0,
-            "novelty_new": row.get("novelty_new") or 0,
-            "summary": public_text(row.get("summary") or ""),
-            # 우리 수집 로그가 언제 시작됐는지. 이게 없으면 "최초 확인 2026-09-09"가
-            # 세계 최초로 읽힌다 — 실제로는 우리가 처음 본 날이고, 코퍼스가 두 달
-            # 남짓이라 그 전부터 알려진 그룹도 신규로 올라온다(실측: Rhysida·APT37).
-            # 화면에는 이미 "· {날짜} 수집 시작 기준"을 붙일 자리가 있는데 이 필드가
-            # 빠져 있어 한 번도 표시된 적이 없었다. 자산·PIR과 달리 조직 정보가
-            # 아니라 공개해도 되는 값이다.
-            "corpus_start": row.get("corpus_start") or "",
-            "items": row.get("items") or [],
-        }
+        return campaign_radar.public_row(row)
 
     # PIR(우선 정보 요구사항) 구분·문항은 대시보드에서 뺀다 — 조직이 무엇을 우선순위로
     # 보는지(예: 특정 산업 표적 위협) 노출되면 자산매칭과 같은 종류의 정보 유출이라
@@ -2806,6 +2785,10 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
             "info_by_category": dict(
                 (c, n) for c, n in stats["info_by_category"].most_common() if c != "미분류"
             ),
+            # 메인 화면의 "분류 보기"는 P1/P2를 제외하지 않은 전체 이벤트 모수를 사용한다.
+            # info_by_category를 재사용하면 긴급·주의 항목이 분류에서 빠져 합계가 436건과
+            # 맞지 않으므로 별도 필드로 공개한다.
+            "category_counts": dict((stats.get("by_category") or Counter()).most_common()),
             # 대시보드 상단 타일은 이 값을 우선 쓴다(없는 옛 파일은 info_by_category로 폴백).
             # P1/P2 타일과 중복 계산되지 않도록 info_by_category와 같은 모수를 쓴다.
             "actionable": len(stats.get("actionable") or []),

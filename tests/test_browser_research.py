@@ -67,10 +67,62 @@ def test_browser_uses_scan_url_without_dom_marker_but_ignores_internal_log_quest
     assert result["results"][-1]["target"]["host"] == "lure.example"
 
 
+def test_browser_keeps_custom_gpt_content_url_and_does_not_click_shared_platform(monkeypatch):
+    monkeypatch.setattr(browser_research, "enabled", lambda: False)
+    result = browser_research.investigate(
+        {"urls": ["https://chatgpt.com/g/g-123/custom"],
+         "questions": ["Custom GPT가 외부 유포지로 연결되는가"]},
+        {"seeds": []}, {"primary": "user_action"})
+    assert result["results"][-1]["status"] == "deferred"
+    assert result["results"][-1]["target"]["path"] == "/g/g-123/custom"
+
+
 def test_cdp_initiator_keeps_script_origin_without_query_values():
     fact = browser_research._initiator_fact({"initiator": {"type": "script", "stack": {
         "callFrames": [{"url": "https://source.example/inject.js?secret=private-value"}]}}})
     assert fact == {"type": "script", "host": "source.example", "path": "/inject.js"}
+
+
+def test_script_features_record_behaviour_without_command_or_secret():
+    script = "navigator.clipboard.writeText('powershell -enc secret'); fetch('/jsrepo?token=private')"
+    features = browser_research._script_features(script)
+    assert features == ["clipboard_write", "network_call", "command_lure"]
+    assert "private" not in str(features)
+    assert "secret" not in str(features)
+
+
+def test_browser_http_evidence_precedes_bulk_iocs_in_synthesis_material():
+    response = {"phase": "after", "host": "lure.example", "path": "/jsrepo",
+                "query_keys": ["rnd"], "status": 200, "features": ["clipboard_write"],
+                "body_sha256": "d" * 64}
+    block = {"indicator_assessments": [
+        {"value": "hash" + str(i), "role": "malware_hash", "evidence": "x" * 300}
+        for i in range(80)],
+        "browser_research": {"questions": ["ClickFix 유포지 패턴은?"], "results": [{
+            "source": "isolated_browser", "status": "observed", "evidence": {
+                "action": "clicked_lure_control", "before": {"dom_sha256": "a"},
+                "after": {"dom_sha256": "b"}, "responses": [response], "clipboard": []}}]}}
+    material = response_synth._material(block, {})
+    assert "[페이지 조사 목표]" in material
+    assert "[페이지 HTTP] after lure.example/jsrepo" in material
+    assert "clipboard_write" in pattern_synth._web_evidence_text(block)
+    assert "private" not in material
+
+
+def test_browser_evidence_precedes_long_seed_history_in_pattern_prompt():
+    block = {"seeds": [{"in_urlscan": True, "domain": "lure.example",
+                        "http": [{"host": "lure.example", "path": "/asset" + str(i),
+                                  "query_keys": ["rnd"]} for i in range(100)]}],
+             "browser_research": {"results": [{"source": "isolated_browser",
+                 "status": "observed", "evidence": {"action": "clicked_lure_control",
+                 "before": {"dom_sha256": "a"}, "after": {"dom_sha256": "b"},
+                 "clipboard": [], "responses": [{"phase": "after", "host": "lure.example",
+                 "path": "/jsrepo", "query_keys": ["rnd"],
+                 "features": ["clipboard_write"]}]}}]}}
+    material = pattern_synth._web_evidence_text(block)
+    assert material.startswith("격리 브라우저")
+    assert "lure.example/jsrepo" in material
+    assert "clipboard_write" in material
 
 
 def test_vt_http_context_survives_without_query_secret(monkeypatch):

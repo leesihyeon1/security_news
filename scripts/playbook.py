@@ -84,8 +84,12 @@ ARTIFACTS = {
         lambda b: _patterns(b, "virustotal")),
     "hunting_query": (
         "사내 실행 전 검토할 헌팅 쿼리(MDE KQL)",
-        lambda b: any(q.get("query") and (q.get("validation") or {}).get("syntax") == "basic_checks_passed"
-                      for q in (b.get("response") or {}).get("kql") or [])),
+        # pattern_synth가 만든 MDE KQL은 response가 아니라 block["patterns"]에 들어간다.
+        # response.kql만 보다가, 화면에 KQL 패턴 3개를 보여 주면서 "미달"을 함께 찍었다
+        # (실측 2026-09-30, 카테나-X 건).
+        lambda b: _patterns(b, "mde_kql") or any(
+            q.get("query") and (q.get("validation") or {}).get("syntax") == "basic_checks_passed"
+            for q in (b.get("response") or {}).get("kql") or [])),
     "blocklist": (
         "차단·확인 대상 목록",
         _blocklist_values),
@@ -118,13 +122,36 @@ ARTIFACTS = {
         # 참고 링크만 세다가, 벤더 원문 2건을 읽고도 미달로 찍은 적이 있다.
         lambda b: any(s.get("url") and (s.get("chars") or 0) > 0
                       for s in (b.get("primary") or {}).get("sources") or [])),
+    # 정보성 기사(공격 사건이 아닌 기사)의 산출물. 위 어휘는 모두 IOC·탐지 산출물이라
+    # 제휴 발표 기사에도 헌팅 쿼리·차단 목록·단말 명령이 선언됐고, 낼 수 없으니 셋 다
+    # "미달"로 남았다(실측 2026-09-30, 카테나-X 건). briefing이 실제로 내는 것만 둔다.
+    "background_brief": (
+        "용어·배경 정리",
+        lambda b: bool(b.get("background")) or any(
+            isinstance(row, dict) and row.get("status") in ("answered", "partial")
+            for row in (b.get("synthesis") or {}).get("question_status") or [])),
+    "reading_list": (
+        "참고 자료(공식 문서·해설)",
+        lambda b: any(isinstance(item, dict) and item for item in b.get("reading_list") or [])),
+    "applicability": (
+        "우리 조직 해당 여부 판단",
+        lambda b: bool(((b.get("synthesis") or {}).get("exposure") or {}).get("who"))),
 }
 
+INFORMATIONAL_ARTIFACTS = ("background_brief", "reading_list", "applicability")
 
-def vocabulary_spec():
-    """프롬프트에 넣을 어휘 설명. 이름과 뜻만 주고 선택은 맡긴다."""
+
+def vocabulary_spec(kind="threat"):
+    """프롬프트에 넣을 어휘 설명. 이름과 뜻만 주고 선택은 맡긴다.
+
+    공격 사건 기사에는 정보성 어휘를 보이지 않는다 — 인자 없이 부르는 기존 호출
+    (analysis_targets.SPEC_WITH_VOCAB)의 결과가 그대로여야 한다. 정보성 기사에는
+    반대로 정보성 어휘만 보인다. 탐지 산출물을 보여 주면 모델이 그것을 고른다.
+    """
     lines = []
     for key, (label, _) in ARTIFACTS.items():
+        if (key in INFORMATIONAL_ARTIFACTS) != (kind == "informational"):
+            continue
         lines.append("  {} = {}".format(key, label))
     return "\n".join(lines)
 

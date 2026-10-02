@@ -43,6 +43,7 @@ from datetime import date, timedelta
 from html.parser import HTMLParser
 
 import common_utils
+import research_entities
 
 SEARCH_URL = "https://urlscan.io/api/v1/search/"
 RESULT_URL = "https://urlscan.io/api/v1/result/{}/"
@@ -194,13 +195,13 @@ def _article_date(url):
 
 def seed_facts(seed, api_key=None, article_url=""):
     """시드(도메인 또는 URL)의 urlscan 스캔에서 인프라 지문을 뽑는다."""
-    domain = seed.strip()
-    if "://" in domain:
-        domain = urllib.parse.urlparse(domain).netloc
-    domain = domain.strip("/").lower()
-
-    results, total = urlscan_search('page.domain:"{}"'.format(domain), size=10, api_key=api_key)
-    if not results:
+    target_url = research_entities.web_url(seed)
+    domain = urllib.parse.urlsplit(target_url).hostname if target_url else seed.strip("/").lower()
+    query = research_entities.exact_query(target_url) if target_url else 'page.domain:"{}"'.format(domain)
+    results, total = urlscan_search(query, size=10, api_key=api_key)
+    if target_url:
+        results = [row for row in results if research_entities.scan_matches(row, target_url)]
+    if not results and not target_url:
         # 페이지가 아니라 리소스로만 등장했을 수도 있다(예: 페이로드 호스트).
         results, total = urlscan_search('domain:"{}"'.format(domain), size=10, api_key=api_key)
     if not results:
@@ -224,12 +225,12 @@ def seed_facts(seed, api_key=None, article_url=""):
         start, end = published - timedelta(days=7), published + timedelta(days=7)
         try:
             historical, _ = urlscan_search(
-                'page.domain:"{}" AND date:[{} TO {}]'.format(domain, start, end),
+                '{} AND date:[{} TO {}]'.format(query, start, end),
                 size=10, api_key=api_key)
         except Exception:
             historical = []
         for item in historical:
-            if item.get("_id"):
+            if item.get("_id") and (not target_url or research_entities.scan_matches(item, target_url)):
                 history_by_uuid[item["_id"]] = {
                     "uuid": item["_id"],
                     "scanned_at": ((item.get("task") or {}).get("time") or "")[:19],
@@ -240,6 +241,8 @@ def seed_facts(seed, api_key=None, article_url=""):
                      key=lambda item: (item["near_report"], item["scanned_at"]), reverse=True)
     return {
         "domain": domain,
+        "target_url": target_url,
+        "search_query": query,
         "scan_count": total,
         "uuid": latest.get("_id") or "",
         "scanned_at": (task.get("time") or "")[:19],
@@ -742,7 +745,11 @@ def _inspect_dom(dom):
     risky = bool(re.search(r"(?:https?://|-[Ee](?:nc(?:odedcommand)?)?\b|FromBase64String|Invoke-(?:WebRequest|RestMethod|Expression)|\biwr\b|\birm\b|\bmshta\b)", command, re.I))
     paste = bool(re.search(r"Win(?:dows)?\s*\+\s*R|Ctrl\s*\+\s*V|paste|붙여넣|실행창", page_text, re.I))
     confirmed = bool(copied and executable and risky and paste)
-    return {"markers": hits, "confirmed": confirmed,
+    from bs4 import BeautifulSoup
+
+    links = list(dict.fromkeys(url for anchor in BeautifulSoup(dom, "html.parser").find_all("a", href=True)
+                              if (url := research_entities.web_url(anchor["href"]))))[:40]
+    return {"markers": hits, "confirmed": confirmed, "outgoing_links": links,
             "copied_command": command[:180] if confirmed else "",
             "status": "confirmed" if confirmed else "review" if hits else "unobserved",
             "dom_bytes": len(dom)}
@@ -915,8 +922,10 @@ def classify_ioc_hosts(iocs, text=""):
 def _seed_domains_from_iocs(iocs, text=""):
     """조사할 도메인만 뽑는다 — 공용 서비스·Tor·유출 사이트는 유포지 조사 대상이 아니다."""
     tokens = campaign_tokens_from_text(text)
-    return [host for host in _raw_hosts_from_iocs(iocs)
-            if host_role(host, tokens) == "lure"]
+    return list(dict.fromkeys([urllib.parse.urlsplit(url).hostname
+                               for url in research_entities.urls({}, iocs)] +
+                              [host for host in _raw_hosts_from_iocs(iocs)
+                               if host_role(host, tokens) == "lure"]))
 
 
 def _raw_hosts_from_iocs(iocs):
@@ -1027,6 +1036,10 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
                        if (item or {}).get("actionable") is True}
     confirmed_hosts.discard("")
     all_domains = sorted(roles["lure"], key=lambda host: 0 if host in confirmed_hosts else 1)
+    exact_urls = research_entities.urls({}, iocs)
+    exact_hosts = {urllib.parse.urlsplit(url).hostname for url in exact_urls}
+    candidates = exact_urls + [host for host in all_domains if host not in exact_hosts
+                               and not research_entities.shared(host)]
     if assessed and confirmed_hosts & set(all_domains):
         steps.append("원문 근거로 역할이 확정된 도메인 {}곳을 먼저 조사합니다.".format(
             len(confirmed_hosts & set(all_domains))))
@@ -1051,33 +1064,37 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
         findings.append("Tor 주소 {}건은 DNS·프록시로 차단할 수 없습니다. 사내에서 Tor 자체를 "
                         "쓰는지(브라우저·클라이언트 실행)로 봐야 합니다.".format(len(roles["tor"])))
 
-    for domain in all_domains[:max_seeds]:
+    for candidate in candidates[:max_seeds]:
+        target_url = research_entities.web_url(candidate)
+        domain = urllib.parse.urlsplit(target_url).hostname if target_url else candidate
         if time.time() - started > INVESTIGATION_BUDGET_SECONDS:
             findings.append("시간이 오래 걸려 나머지 도메인은 조사하지 않았습니다.")
             steps.append("시간 예산({}초)을 넘겨 나머지 도메인 조사를 중단했습니다.".format(
                 int(INVESTIGATION_BUDGET_SECONDS)))
             break
         try:
-            facts = seed_facts(domain, api_key=api_key, article_url=article_url)
+            facts = seed_facts(candidate, api_key=api_key, article_url=article_url)
         except Exception as error:
             findings.append("{} — urlscan 조회에 실패했습니다({}).".format(domain, str(error)[:70]))
             steps.append("{} — urlscan 검색이 실패했습니다({}).".format(domain, str(error)[:60]))
             continue
 
-        steps.append('{} — urlscan 검색 API에 page.domain:"{}"으로 물었습니다. 결과 {}건{}.'.format(
-            domain, domain, facts["scan_count"] if facts else 0,
+        search_query = research_entities.exact_query(target_url) if target_url else 'page.domain:"{}"'.format(domain)
+        steps.append('{} — urlscan 검색 API에 {}으로 물었습니다. 결과 {}건{}.'.format(
+            candidate, search_query, facts["scan_count"] if facts else 0,
             "이고 가장 최근 스캔({})을 기준으로 삼았습니다".format(facts["scanned_at"][:10])
-            if facts else " — 이 도메인은 아무도 스캔한 적이 없습니다"))
+            if facts else " — 해당 대상의 공개 스캔을 찾지 못했습니다"))
 
         if not facts:
-            seed = {"domain": domain, "in_urlscan": False, "queries": [_observation_query(domain)]}
-            tech = technique_pivots(domain, None, {}, web_files)
+            seed = {"domain": domain, "target_url": target_url, "in_urlscan": False,
+                    "queries": [_query_row("대상 URL 관측 조회", search_query)] if target_url
+                    else [_observation_query(domain)]}
+            tech = [] if target_url else technique_pivots(domain, None, {}, web_files)
             seed["queries"] += [_query_row(name, query) for name, query, _ in tech]
             seeds.append(seed)
             to_run.append((seed, None, tech))
-            findings.append("{} — urlscan에 스캔 기록이 아예 없습니다. 웹으로 접근하는 유포지가 "
-                            "아니라 악성코드가 직접 통신하는 서버(페이로드·C2)일 가능성이 "
-                            "큽니다.".format(domain))
+            findings.append("{} — 공개 스캔을 찾지 못했습니다. 삭제·비공개·미수집 가능성이 있으며, "
+                            "부재만으로 정상 여부나 C2 역할을 판단하지 않습니다.".format(candidate))
             continue
 
         # 리소스(페이지가 실제로 불러온 파일)까지 본다 — 페이지 속성만 보면 "정상
@@ -1203,7 +1220,8 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
                             "가능성이 있어 실제 방문 화면과 요청을 추가 확인해야 합니다.".format(
                                 dom["dom_bytes"]))
 
-        queries = [_observation_query(domain)]
+        queries = ([_query_row("대상 URL 관측 조회", search_query)] if target_url
+                   else [_observation_query(domain)])
         # 수법 기반 질의를 앞에 둔다 — 침해 사이트를 경유하는 유포에서는 이쪽이 먼저 맞는다.
         tech_pivots = technique_pivots(domain, facts, dom, web_files)
         page_pivots = build_pivots(facts)
@@ -1213,6 +1231,10 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
                 res_pivots.extend(resource_pivots(older["resource_facts"]))
             older.pop("resource_facts", None)
         res_pivots = list({query: (name, query, weight) for name, query, weight in res_pivots}.values())
+        if research_entities.shared(domain):
+            # Shared platform/CDN properties do not identify the abused content.
+            tech_pivots, page_pivots, res_pivots = [], [], []
+            steps.append("{} — 공용 플랫폼이므로 ASN·IP·일반 스크립트 피벗을 제외하고 개별 URL·외부 링크를 확인합니다.".format(candidate))
         for name, query, _weight in tech_pivots + page_pivots + res_pivots:
             queries.append(_query_row(name, query))
         steps.append("{} — 검색 쿼리 {}개를 만들었습니다: 이 도메인 관측 이력 1개 + 수법 기반 {}개"
@@ -1224,6 +1246,8 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
 
         seed = {
             "domain": domain,
+            "target_url": target_url,
+            "outgoing_links": dom.get("outgoing_links") or [],
             "in_urlscan": True,
             "dom_confirmed": bool(dom.get("confirmed")),
             "dom_markers": dom.get("markers") or {},
@@ -1282,6 +1306,8 @@ def investigation_for_iocs(iocs, api_key=None, max_seeds=INVESTIGATION_MAX_SEEDS
 
 def _query_row(name, query):
     return {"name": name, "query": query,
+            "purpose": "discovery", "validation": "unverified",
+            "caution": "조회·확장 후보이며 정상 비교군을 검증한 탐지 규칙이 아닙니다.",
             "url": SEARCH_UI_URL.format(urllib.parse.quote(query, safe=""))}
 
 

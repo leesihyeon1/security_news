@@ -200,6 +200,11 @@ def log(message):
 def _material(investigation, targets):
     """LLM에 넘길 조회 재료. 원자료 그대로가 아니라 판단에 쓰이는 부분만 추린다."""
     lines = []
+    browser_lines = []
+    for check in investigation.get("goal_evidence") or []:
+        browser_lines.append("[목표 증거 점검] {} | 현재 {} | 필요한 것 {} | 근거 {}".format(
+            str(check.get("question") or "")[:150], check.get("status") or "open",
+            str(check.get("missing") or "없음")[:150], check.get("basis") or ""))
     for item in investigation.get("indicator_assessments") or []:
         if item.get("role"):
             lines.append("[지표 역할] {}: {} | {}".format(item.get("value"), item["role"],
@@ -220,8 +225,9 @@ def _material(investigation, targets):
         if entry.get("url"):
             lines.append("대상: " + str(entry["url"]))
     for source in (investigation.get("primary") or {}).get("sources") or []:
-        lines.append("[실제로 읽은 출처] {} | 수집 {}".format(
-            source.get("url"), source.get("retrieved_at") or "미기록"))
+        lines.append("[실제로 읽은 출처] {} | 수집 {} | 발췌 해시 {}".format(
+            source.get("url"), source.get("retrieved_at") or "미기록",
+            str(source.get("excerpt_sha256") or "미기록")[:16]))
     route = investigation.get("route") or {}
     if route.get("label"):
         lines.append("[조사 방향] {} — {}".format(route["label"], route.get("explain") or ""))
@@ -234,28 +240,38 @@ def _material(investigation, targets):
 
     add_findings("URL 분석 결과", investigation.get("findings"))
     browser_track = investigation.get("browser_research") or {}
+    for question in browser_track.get("questions") or []:
+        browser_lines.append("[페이지 조사 목표] " + str(question)[:180])
     for result in browser_track.get("results") or []:
         if result.get("source") == "archived_scan":
             observed = result.get("evidence") or {}
-            lines.append("[질문별 URL 증거] {} | {} | DOM {} | 요청 {}건 | {}".format(
+            browser_lines.append("[질문별 URL 증거] {} | {} | DOM {} | 요청 {}건 | {}".format(
                 observed.get("evidence_id") or "", observed.get("domain") or "",
                 observed.get("dom_status") or "미확인", len(observed.get("http") or []),
                 observed.get("scan_url") or ""))
         elif result.get("status") == "observed":
             observed = result.get("evidence") or {}
-            lines.append("[격리 브라우저 관측] {} | 조작 {} | DOM 변경 {} | 클립보드 {}건 | 클릭 후 HTTP {}건".format(
+            browser_lines.append("[격리 브라우저 관측] {} | 조작 {} | DOM 변경 {} | 클립보드 {}건 | 클릭 후 HTTP {}건".format(
                 observed.get("evidence_id") or "", observed.get("action") or "",
                 (observed.get("before") or {}).get("dom_sha256") !=
                 (observed.get("after") or {}).get("dom_sha256"),
                 len(observed.get("clipboard") or []),
                 sum(row.get("phase") == "after" for row in observed.get("responses") or [])))
             for command in (observed.get("clipboard") or [])[:2]:
-                lines.append("[복사된 명령 특징] {} | 실행도구 {} | 목적지 {}".format(
+                browser_lines.append("[복사된 명령 특징] {} | 실행도구 {} | 목적지 {}".format(
                     command.get("sha256") or "", command.get("executable") or "",
                     ", ".join("{}{}".format(url.get("host") or "", url.get("path") or "")
                               for url in command.get("destinations") or [])))
+            for response in (observed.get("responses") or [])[:16]:
+                browser_lines.append("[페이지 HTTP] {} {}{} | 쿼리키 {} | 상태 {} | 본문 {} | 특징 {} | 시작점 {}".format(
+                    response.get("phase") or "", response.get("host") or "",
+                    response.get("path") or "/", ",".join(response.get("query_keys") or []),
+                    response.get("status"), response.get("body_sha256") or
+                    response.get("body_unobserved") or "미확인",
+                    ",".join(response.get("features") or []),
+                    (response.get("initiator") or {}).get("path") or "")[:340])
         else:
-            lines.append("[격리 브라우저 미확인] " + str(result.get("reason") or "미실행"))
+            browser_lines.append("[격리 브라우저 미확인] " + str(result.get("reason") or "미실행"))
     add_findings("VirusTotal 동적분석", (investigation.get("malware") or {}).get("findings"))
     add_findings("취약점 조회(KEV·EPSS·NVD)", (investigation.get("vulnerability") or {}).get("findings"))
     add_findings("패키지 레지스트리 조회", (investigation.get("supply_chain") or {}).get("findings"))
@@ -290,7 +306,7 @@ def _material(investigation, targets):
     if assets:
         lines.append("[자산 매칭] " + ", ".join(assets))
 
-    text = "\n".join(lines)
+    text = "\n".join(browser_lines[:24] + lines)
     return text[:MAX_MATERIAL_CHARS]
 
 
@@ -447,6 +463,23 @@ def _clean_list(values, corpus, dropped):
 
 ALLOWED_QUESTION_STATUS = {"answered", "partial", "open"}
 ALLOWED_RELATIONS = {"동일 캠페인", "관련 가능성", "같은 도구만 사용", "무관", "판단 보류"}
+# 공격 사건 판단의 verdict. 화면은 이 셋만 색으로 구분하고 나머지는 회색으로 그대로
+# 찍는다 — 20자로 자르기만 하면 "목표 달성 여부: 부분 확인" 같은 형식 문구나 임의의
+# 값이 그대로 배지가 된다.
+ALLOWED_VERDICTS = ("확인됨", "부분 확인", "미확인")
+
+
+def normalize_verdict(value):
+    """허용된 verdict로 맞춘다. 형식 문구가 붙은 값은 그 안의 허용 값을 쓰고, 나머지는
+    미확인이다 — 판정이 불분명한 것을 확인된 쪽으로 올리지 않는다."""
+    compact = re.sub(r"\s+", "", str(value or ""))
+    if "부분확인" in compact or "일부확인" in compact:
+        return "부분 확인"
+    if "미확인" in compact:
+        return "미확인"
+    if "확인됨" in compact:
+        return "확인됨"
+    return "미확인"
 
 
 def question_status(data, questions, corpus, plan_positions=None):
@@ -636,11 +669,24 @@ def _block_review(action, never_block, unconfirmed):
                                if value not in never_block and value not in unconfirmed]
 
 
-def followups(data, corpus):
+# 패키지 후속 조회의 생태계는 원문에 그 이름이 있어야 한다. 모델이 "pip"를 골랐다는
+# 것만으로는 근거가 아니다 — 카테나-X 제휴 기사에서 원문에 npm·pip 언급이 없는데
+# "catena-x" pip 조회가 돌았다(실측 2026-09-30).
+ECOSYSTEM_ALIASES = {"npm": "npm", "pip": "pip", "pypi": "pip"}
+ECOSYSTEM_SOURCE_RE = {
+    "npm": re.compile(r"(?<![a-z0-9])npm(?![a-z0-9])", re.I),
+    "pip": re.compile(r"(?<![a-z0-9])(?:pip|pypi)(?![a-z0-9])", re.I),
+}
+
+
+def followups(data, corpus, source=None):
     """LLM이 요청한 후속 조회 중 실행할 만한 것만. 지어낸 값은 버린다.
 
     조회 재료에 없던 값을 조회하겠다는 것은 없는 지표를 쫓는 것이다 — 그걸 돌리면
     시간만 쓰고 "결과 없음"이 나오는데, 그 결과가 다시 판단 재료로 들어간다.
+
+    source는 기사 원문·분석(모델이 만든 것이 아닌 글). 주면 패키지 생태계 이름이 그
+    안에 있어야 받는다. None이면 이 대조를 건너뛴다(예전 호출과 같은 동작).
     """
     allowed = {"domain": "urlscan", "ip": "urlscan", "hash": "virustotal",
                "cve": "nvd", "package": "registry"}
@@ -675,8 +721,10 @@ def followups(data, corpus):
             }[kind]
         request = {"type": kind, "value": value, "question": question}
         if kind == "package":
-            ecosystem = str(item.get("ecosystem") or "").lower()
-            if ecosystem not in ("npm", "pip"):
+            ecosystem = ECOSYSTEM_ALIASES.get(str(item.get("ecosystem") or "").strip().lower())
+            if not ecosystem:
+                continue
+            if source is not None and not ECOSYSTEM_SOURCE_RE[ecosystem].search(source):
                 continue
             request["ecosystem"] = ecosystem
         out.append(request)
@@ -806,6 +854,11 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
         return None
 
     corpus = _corpus(investigation, article or analysis, primary=primary, extra=extra)
+    # 후속 조회 값은 모델 자신이 앞 단계에서 쓴 글(pattern_synth의 쿼리·설명)로 근거를
+    # 삼지 못하게 한다 — 패턴 설명에 적힌 "*.cofinity-x.com"이 근거가 돼 정상 기업
+    # 도메인 urlscan 조회가 돌았다(실측 2026-09-30, 카테나-X 건).
+    followup_corpus = _corpus({key: value for key, value in investigation.items() if key != "patterns"},
+                              article or analysis, primary=primary, extra=extra)
     dropped = []
     plan = []
     plan_positions = {}
@@ -848,7 +901,7 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
         headline = ""
 
     result = {
-        "verdict": " ".join(str(data.get("verdict") or "").split())[:20],
+        "verdict": normalize_verdict(data.get("verdict")),
         "headline": headline,
         "confirmed": _clean_list(data.get("confirmed"), corpus, dropped),
         "unconfirmed": _clean_list(data.get("unconfirmed"), corpus, dropped),
@@ -859,7 +912,8 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
         "timeline": _timeline(data.get("timeline"), corpus, dropped),
         "objective": (targets or {}).get("objective") or "",
         "workflow_version": analyst_workflow.VERSION,
-        "followups": followups(data, corpus),
+        "followups": followups(data, followup_corpus,
+                               source=" ".join((article or "", analysis or ""))),
         "question_status": question_status(data, (targets or {}).get("questions"), corpus,
                                            plan_positions=plan_positions),
         "campaign_relations": campaign_relations(data, related, corpus),
@@ -877,4 +931,114 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
     for reason in dropped[:4]:
         steps.append("· 폐기: " + reason)
     result["steps"] = steps
+    return result
+
+
+BRIEFING_PROMPT = """당신은 보안 조직의 기술 정보 담당자다. 아래 정보성 기사를 한국어로 정리하라.
+이것은 침해 사고가 아니다. IOC 차단, 악성코드 조사, 로그 헌팅, 격리와 패치를 권하지 마라.
+기사 원문과 읽은 참고 자료를 구분하라. 검색 결과의 제목·요약만 본 자료는 원문을
+읽었다고 하지 마라. 참고 자료로 확인되지 않은 규제 의무·시행일·조직 적용 여부는
+확정하지 말고 확인할 질문으로 남겨라. 우리 조직의 시스템·계약·사업 범위는 알 수 없다.
+회사·기관·제품을 공격자로 취급하지 마라. 근거에 없는 도메인·CVE·수치·날짜를 쓰지 마라.
+확인된 사실에는 기사 또는 실제 읽은 자료의 출처를 명시하라. 공개 자료가 없으면 기사에
+적힌 발표 사실만 확인됐다고 쓰고 배경 질문은 미확인으로 남겨라. 관련이 없으면 plan은
+빈 배열이다. 할 일이 있더라도 검토 과제이지 사고 대응이 아니다.
+
+JSON 하나만 출력하라:
+{"verdict":"확인됨|부분 확인|미확인",
+"headline":"기사와 배경의 핵심을 한국어 한 문장으로",
+"confirmed":["기사 또는 자료로 확인된 사실과 출처"],
+"unconfirmed":["아직 확인할 수 없는 사항과 이유"],
+"contradictions":[],
+"exposure":{"who":"우리 조직 해당 여부는 조건부로 설명. 모르면 미확인",
+"basis":"기사 또는 읽은 자료의 근거","confirm":"내부에서 확인할 대상"},
+"plan":[{"action":"구체적 검토 과제","why":"근거와 목적","when":"검토 시점",
+"owner":"담당 역할","trigger":"검토 착수 조건","check":"확인할 공식 자료·내부 문서",
+"done":"검토 완료 기준"}],
+"open_questions":["공개 자료나 내부 정보가 더 필요한 질문"],
+"question_status":[{"question":"판단 단계 질문을 그대로","status":"answered|partial|open",
+"answer":"근거가 있는 답 또는 답하지 못한 이유","evidence":"출처와 근거"}]}
+
+[제목]\n__TITLE__\n[기사 원문]\n__ARTICLE__\n[기본 분석]\n__ANALYSIS__
+[검토 목표와 질문]\n__TARGETS__\n[참고 자료]\n__MATERIALS__
+"""
+
+
+BRIEFING_VERDICT = "정보성 기사"
+BRIEFING_EXPOSURE_LEAD = "공격 사건이 아니어서 직접 노출·침해 대상은 없습니다."
+
+
+def synthesize_briefing(title, analysis, targets, investigation, article="", materials="",
+                       timeout=SYNTH_TIMEOUT):
+    """Synthesize an informational brief without the incident-response schema."""
+    targets = targets or {}
+    prompt = BRIEFING_PROMPT
+    values = {
+        "__TITLE__": title or "", "__ARTICLE__": (article or "")[:12000],
+        "__ANALYSIS__": (analysis or "")[:7000],
+        "__TARGETS__": json.dumps({key: targets.get(key) for key in
+                                    ("objective", "questions", "topics", "issues", "gaps")},
+                                   ensure_ascii=False),
+        "__MATERIALS__": (materials or "")[:12000],
+    }
+    for marker, value in values.items():
+        prompt = prompt.replace(marker, value)
+    raw = common_utils.llm_generate(prompt, timeout=timeout, json_format=True,
+                                    nvidia_max_attempts=SYNTH_ATTEMPTS,
+                                    max_tokens=SYNTH_MAX_TOKENS)
+    data, salvaged = parse_with_status(raw)
+    if not data:
+        return None
+    corpus = _corpus({}, article or analysis, primary=materials)
+    dropped = []
+    plan = []
+    for item in (data.get("plan") or [])[:MAX_PLAN_STEPS]:
+        if not isinstance(item, dict):
+            continue
+        fields = {key: " ".join(str(item.get(key) or "").split())[:600]
+                  for key in ("action", "why", "when", "owner", "trigger", "check", "done")}
+        if not fields["action"] or _invented(" ".join(fields.values()), corpus):
+            continue
+        fields["preserve"] = analyst_workflow.NOT_APPLICABLE
+        fields["alternative"] = analyst_workflow.NOT_APPLICABLE
+        fields["review_gaps"] = analyst_workflow.plan_gaps(fields, informational=True)
+        plan.append(fields)
+    headline = " ".join(str(data.get("headline") or "").split())[:300]
+    if _invented(headline, corpus):
+        headline = ""
+    confirmed = _clean_list(data.get("confirmed"), corpus, dropped)
+    read_sources = bool((investigation or {}).get("background") or
+                        ((investigation or {}).get("primary") or {}).get("sources"))
+    if not read_sources:
+        confirmed = [line for line in confirmed if "기사" in line]
+    result = {
+        # 정보성 기사에 "확인됨"(초록)·"미확인"을 붙이면 공격 사건을 확인한 것처럼 읽힌다.
+        # 판정은 기사 성격으로 고정하고, 질문별 달성도는 question_status로 보인다.
+        "verdict": BRIEFING_VERDICT,
+        "headline": headline,
+        "confirmed": confirmed,
+        "unconfirmed": _clean_list(data.get("unconfirmed"), corpus, dropped),
+        "contradictions": _clean_list(data.get("contradictions"), corpus, dropped),
+        "plan": plan,
+        "open_questions": _clean_list(data.get("open_questions"), corpus, dropped),
+        "exposure": _exposure(data.get("exposure"), corpus, dropped),
+        "objective": targets.get("objective") or "",
+        "question_status": question_status(data, targets.get("questions"), corpus),
+        "followups": [], "campaign_relations": [], "timeline": [],
+        "workflow_version": analyst_workflow.VERSION,
+    }
+    if not (result["headline"] or result["confirmed"] or result["plan"]):
+        return None
+    exposure = result["exposure"] or {}
+    who = str(exposure.get("who") or "").strip()
+    if not who.startswith(BRIEFING_EXPOSURE_LEAD):
+        who = re.sub(r"^(?:미확인|해당 없음)[.。:\s]*", "", who)
+        exposure["who"] = (BRIEFING_EXPOSURE_LEAD + " " + who).strip()
+        result["exposure"] = exposure
+    result["key_findings"] = key_findings(result["confirmed"], investigation or {})
+    result["steps"] = ["기사와 참고 자료를 구분해 배경·적용 가능성을 정리했습니다."]
+    if salvaged:
+        result["steps"].append("· 응답이 잘려 완결된 항목까지만 반영했습니다.")
+    if dropped:
+        result["steps"].append("· 근거 없는 구체값이 포함된 항목 {}건을 제외했습니다.".format(len(dropped)))
     return result

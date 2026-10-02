@@ -17,6 +17,7 @@
     매체는 수가 적고 잘 바뀌지 않지만, 벤더·연구기관은 매번 새로 나온다.
 """
 
+import hashlib
 import re
 import urllib.parse
 
@@ -70,7 +71,8 @@ SKIP_PATH_RE = re.compile(
     r"/(?:tag|tags|category|categories|topic|topics|author|authors|about|"
     r"contact|privacy|subscribe|newsletter|feed|rss|search)(?:/|$)", re.I)
 # 본문이 아닌 파일
-SKIP_EXT_RE = re.compile(r"\.(?:pdf|zip|gz|xlsx?|docx?|pptx?|png|jpe?g|gif|svg|mp4)$", re.I)
+# 확장자 뒤에 쿼리·조각이 붙는 경우도 같은 파일이다(실측: ...pdf?__blob=publicationFile).
+SKIP_EXT_RE = re.compile(r"\.(?:pdf|zip|gz|xlsx?|docx?|pptx?|png|jpe?g|gif|svg|mp4)(?:[?#].*)?$", re.I)
 
 
 def log(message):
@@ -79,7 +81,10 @@ def log(message):
 
 def _host(url):
     try:
-        return (urllib.parse.urlparse(str(url)).netloc or "").lower().lstrip("www.")
+        # lstrip("www.")은 접두어가 아니라 문자 {w, .}를 지워 www.wired.com을 ired.com으로
+        # 만들었다 — 뉴스 매체 제외와 도메인당 1건 규칙이 함께 깨졌다.
+        host = (urllib.parse.urlparse(str(url)).netloc or "").lower()
+        return host[4:] if host.startswith("www.") else host
     except Exception:
         return ""
 
@@ -246,7 +251,7 @@ def fetch_text(url):
     return text
 
 
-def collect(links, article_url="", limit=MAX_SOURCES):
+def collect(links, article_url="", limit=MAX_SOURCES, origin="article"):
     """고른 1차 자료를 실제로 읽어 온다.
 
     반환: {"sources": [{url, host, chars, text, retrieved_at}], "steps": [...], "attempts": [...]}
@@ -255,8 +260,8 @@ def collect(links, article_url="", limit=MAX_SOURCES):
     candidates = pick(links, article_url=article_url, limit=limit)
     sources, steps, attempts = [], [], []
     if not candidates:
-        steps.append("기사가 인용한 1차 자료(벤더 권고·연구 블로그)가 없어 원문 확인은 "
-                     "건너뜁니다 — 뉴스 매체 링크만 있었습니다.")
+        steps.append(("기사가 인용한 1차 자료" if origin == "article" else "검색 참고 원문")
+                     + "가 없어 원문 확인을 건너뜁니다.")
         return {"sources": sources, "steps": steps, "attempts": attempts}
 
     for item in candidates:
@@ -271,9 +276,11 @@ def collect(links, article_url="", limit=MAX_SOURCES):
             continue
         sources.append({"url": item["url"], "host": item["host"],
                         "chars": len(text), "text": text,
+                        "excerpt_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                        "origin": origin,
                         "retrieved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")})
-        steps.append("기사가 인용한 1차 자료 {}를 직접 읽었습니다({:,}자) — 2차 보도가 "
-                     "생략한 내용을 확인하려는 것입니다.".format(item["host"], len(text)))
+        label = "기사가 인용한 1차 자료" if origin == "article" else "검색으로 찾은 참고 원문(기사 미인용)"
+        steps.append("{} {}를 직접 읽었습니다({:,}자).".format(label, item["host"], len(text)))
     return {"sources": sources, "steps": steps, "attempts": attempts}
 
 

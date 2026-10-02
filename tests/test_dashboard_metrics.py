@@ -26,6 +26,7 @@ def test_actionable_categories_cover_total_including_unclassified():
     payload = report.build_dashboard_payload("Report", "daily", "Period", stats, "", [], [], [])
     assert sum(payload["stats"]["actionable_by_category"].values()) == payload["stats"]["actionable"] == 2
     assert payload["stats"]["actionable_by_category"]["미분류"] == 1
+    assert payload["stats"]["category_counts"] == {"미분류": 1, "취약점": 1}
 
 
 def test_status_distinguishes_collection_and_window():

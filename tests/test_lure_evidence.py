@@ -62,6 +62,15 @@ def test_urlscan_hit_count_does_not_mean_validated(monkeypatch):
     assert facts["unverified"]
 
 
+def test_urlscan_zero_hits_means_unverified_not_nonexistent(monkeypatch):
+    monkeypatch.setattr(ps, "_search_urlscan", lambda query, api_key=None: ([], 0, ""))
+    ok, reason, facts = ps.validate_urlscan({"query": 'filename:"jsrepo?rnd="'},
+                                              positive_hosts=["lure.example"])
+    assert ok and not reason
+    assert facts["hits"] == 0
+    assert "탐지 룰로 적용하지 마세요" in facts["unverified"]
+
+
 def test_structural_filename_survives_large_hit_count_as_review_candidate(monkeypatch):
     monkeypatch.setattr(ps, "_search_urlscan", lambda query, api_key=None: (
         [{"page": {"domain": "unknown.example"}}], 9826, ""))

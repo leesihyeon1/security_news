@@ -3,6 +3,11 @@
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 import ipaddress
 import re
+import research_entities
+
+REPORT_URL_RE = re.compile(r"https?://[^\s<>\"'`]+", re.I)
+REPORT_HOST_RE = re.compile(r"(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+                            r"[a-z][a-z0-9-]{1,23}(?![\w-]|\.[a-z0-9])", re.I)
 
 
 NETWORK_KINDS = {"domain", "url", "ip", "ipv4", "ip-dst", "ip-src"}
@@ -142,7 +147,7 @@ def corroborate(block):
                                  "내용과 프로세스 관계로 추가 확인해야 하므로 차단 후보는 아닙니다.".format(
                                      contacts[host]))
             upgraded.append(item)
-        elif host in dom_confirmed:
+        elif host in dom_confirmed and not research_entities.shared(host):
             item.update(role="distribution", actionable=True, corroborated_by="urlscan_dom",
                         evidence="원문이 지목한 도메인이며, urlscan 페이지 DOM에서 공격 표식이 "
                                  "확인됐습니다.")
@@ -152,6 +157,28 @@ def corroborate(block):
 
 def lookup_iocs(iocs):
     return [i for i in iocs or [] if i.get("role") not in CONTEXT_ROLES]
+
+
+def extract_report_iocs(text, limit=200):
+    """Add plain hosts from a read research report; role assessment still decides use."""
+    import common_utils
+
+    found = list(common_utils.extract_iocs(text, limit=limit))
+    found.extend({"type": "url", "value": url} for url in research_entities.shared_urls(text)
+                 if not any(row.get("value") == url for row in found))
+    seen = {str(item.get("value") or "").lower() for item in found}
+    for kind, pattern in (("url", REPORT_URL_RE), ("domain", REPORT_HOST_RE)):
+        for match in pattern.finditer(text or ""):
+            value = match.group(0).rstrip(".,;:)]}")
+            host = common_utils.host_from_indicator(value)
+            if (not host or common_utils.is_benign_ioc("domain", host)
+                    or value.lower() in seen):
+                continue
+            found.append({"type": kind, "value": value})
+            seen.add(value.lower())
+            if len(found) >= limit:
+                return found
+    return found
 
 
 def display_iocs(iocs):

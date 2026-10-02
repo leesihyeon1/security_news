@@ -18,6 +18,68 @@ SOURCE = "https://research.checkpoint.com/2026/21st-september-threat-intelligenc
 TRACKED = "https://click-tracker-two.vercel.app/api/click?ref=test&url=" + quote(SOURCE, safe="")
 
 
+def test_related_campaign_tail_is_excluded_from_main_investigation():
+    lead = ("Custom GPT Plus 5.6 sends victims to a Google Sites ClickFix lure. "
+            "The MSI side-loads a DLL and launches a RAT. ") * 12
+    tail = ("The findings coincide with the discovery of multiple ClickFix-oriented "
+            "campaigns in the wild - EtherHiding ClearFake Amatera Stealer and "
+            "another campaign on Polygon.")
+    links = [
+        {"url": "https://huntress.example/research", "text": "Custom GPT Plus 5.6"},
+        {"url": "https://other.example/research", "text": "EtherHiding ClearFake"},
+    ]
+    body, kept_links = analysis_worker._focus_article(lead + tail, links)
+    assert body == lead.rstrip()
+    assert kept_links == links[:1]
+    assert "Amatera" not in body
+
+
+def test_genuine_multi_incident_article_is_not_narrowed():
+    body = "Two independent campaigns were reported. " * 35
+    links = [{"url": "https://research.example/a", "text": "independent campaigns"}]
+    assert analysis_worker._focus_article(body, links) == (body, links)
+
+
+def test_analysis_passes_only_lead_story_to_decision_and_investigation(monkeypatch):
+    lead = "Custom GPT ClickFix lure downloads an MSI and launches a RAT. " * 25
+    tail = ("The findings coincide with the discovery of multiple ClickFix-oriented "
+            "campaigns in the wild - Amatera Stealer is a separate campaign.")
+    links = [{"url": "https://huntress.example/report", "text": "Custom GPT ClickFix"},
+             {"url": "https://other.example/report", "text": "Amatera Stealer"}]
+    seen = {}
+
+    monkeypatch.setattr(analysis_worker, "fetch_article_text", lambda _: (lead + tail, links))
+
+    def decide(title, article, analysis, targets):
+        seen["decision_article"] = article
+        return None
+
+    def investigate(iocs, **kwargs):
+        seen["investigation_body"] = kwargs["body"]
+        seen["investigation_links"] = kwargs["links"]
+        return {}
+
+    monkeypatch.setattr(analysis_worker.issue_decision, "decide", decide)
+    monkeypatch.setattr(analysis_worker.investigation, "build_for_article", investigate)
+    # Return a minimal valid analysis after saving the prompt.
+    def generate(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return "[분류: 공격캠페인]\n[핵심 요약]\nCustom GPT ClickFix 유포 사례입니다."
+    monkeypatch.setattr(analysis_worker.common_utils, "llm_generate", generate)
+
+    record = analysis_worker.analyze_one({
+        "ref": "focus-test", "url": "https://example.test/story",
+        "title": "Attackers Abuse ChatGPT Custom GPTs to Deliver RAT via ClickFix Lures",
+        "category": "공격캠페인", "source_label": "Test",
+    })
+
+    assert record is not None
+    assert "Amatera" not in seen["prompt"]
+    assert "Amatera" not in seen["decision_article"]
+    assert "Amatera" not in seen["investigation_body"]
+    assert seen["investigation_links"] == links[:1]
+
+
 def test_source_references_are_not_indicators():
     iocs = [{"type": "url", "value": SOURCE + "#top"},
             {"type": "domain", "value": "research.checkpoint.com"},
@@ -60,6 +122,140 @@ def test_article_body_beats_navigation_and_tracker_is_unwrapped(monkeypatch):
     assert requested == [SOURCE]
     assert "navigation" not in text
     assert links == [{"url": "https://vendor.test/report", "text": "Vendor report"}]
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.darkreading.com/threat-intelligence/needymantis-long-term-access-compromised-networks",
+    "https://www.darkreading.com/identity-access-management-security/carbonato-botnet-ai-agent-hacked-docker-hosts",
+    "https://www.darkreading.com/cloud-security/jadepuffer-ai-actor-azure-tenant-destructive-cloud-attack",
+])
+def test_darkreading_reader_fallback_recovers_blocked_article(url, monkeypatch):
+    primary = analysis_worker._darkreading_primary_source(url)
+    article = "<main><article>" + (
+        "The researchers observed {} and documented the attack chain. ".format(primary["marker"]) * 35
+    ) + '<a href="https://vendor.test/report">Vendor report</a></article></main>'
+    requested = []
+
+    class Response:
+        def __init__(self, status_code, content):
+            self.status_code = status_code
+            self.content = content
+            self.headers = {}
+            self.is_redirect = False
+            self.is_permanent_redirect = False
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise ValueError("HTTP error")
+
+    def get(requested_url, **kwargs):
+        requested.append((requested_url, kwargs))
+        if requested_url == primary["url"]:
+            return Response(200, article.encode("utf-8"))
+        return Response(403, b"Forbidden")
+
+    monkeypatch.setattr(analysis_worker.requests, "get", get)
+    monkeypatch.setattr(analysis_worker.network_safety, "_resolve_all",
+                        lambda hostname: {"93.184.216.34"})
+
+    text, links = analysis_worker.fetch_article_text(url)
+
+    assert len(text) >= analysis_worker.BODY_MIN_CHARS
+    assert primary["marker"] in text
+    assert links == [
+        {"url": primary["url"], "text": "분석 근거: {} 원문".format(primary["label"])},
+        {"url": "https://vendor.test/report", "text": "Vendor report"},
+    ]
+    assert [item[0] for item in requested] == [
+        url,
+        primary["url"],
+    ]
+    assert "boannews-analyzer" not in requested[0][1]["headers"]["User-Agent"]
+
+
+def test_darkreading_captcha_with_http_200_uses_primary_source(monkeypatch):
+    url = "https://www.darkreading.com/cloud-security/jadepuffer-ai-actor-azure-tenant-destructive-cloud-attack"
+    primary = analysis_worker._darkreading_primary_source(url)
+    requested = []
+
+    class Response:
+        def __init__(self, content):
+            self.status_code = 200
+            self.content = content.encode("utf-8")
+            self.headers = {}
+            self.is_redirect = False
+            self.is_permanent_redirect = False
+
+        def raise_for_status(self):
+            pass
+
+    def get(requested_url, **kwargs):
+        requested.append(requested_url)
+        if requested_url == url:
+            return Response("<main>Just a moment... CAPTCHA " + "verification " * 100 + "</main>")
+        return Response("<article>Microsoft observed JADEPUFFER Azure activity. " * 40 + "</article>")
+
+    monkeypatch.setattr(analysis_worker.requests, "get", get)
+    monkeypatch.setattr(analysis_worker.network_safety, "_resolve_all",
+                        lambda hostname: {"93.184.216.34"})
+
+    text, links = analysis_worker.fetch_article_text(url)
+
+    assert requested == [url, primary["url"]]
+    assert "JADEPUFFER Azure activity" in text
+    assert links[0]["url"] == primary["url"]
+
+
+def test_darkreading_fallback_is_disclosed_in_analysis_record(monkeypatch):
+    url = "https://www.darkreading.com/cloud-security/jadepuffer-ai-actor-azure-tenant-destructive-cloud-attack"
+    primary = analysis_worker._darkreading_primary_source(url)
+    monkeypatch.setattr(analysis_worker, "fetch_article_text", lambda _: (
+        "Microsoft observed JADEPUFFER and Storm-3168 in Azure. " * 30,
+        [{"url": primary["url"], "text": "분석 근거: {} 원문".format(primary["label"])}],
+    ))
+    monkeypatch.setattr(analysis_worker.common_utils, "llm_generate", lambda *a, **kw:
+                        "[분류: 공격캠페인]\n[핵심 요약]\n원자료에서 확인한 사건입니다.")
+    monkeypatch.setattr(analysis_worker.issue_decision, "decide", lambda *a: None)
+    monkeypatch.setattr(analysis_worker.investigation, "build_for_article", lambda *a, **kw: {})
+
+    record = analysis_worker.analyze_one({
+        "ref": "jadepuffer-test", "url": url, "title": "JadePuffer Azure activity",
+        "source_label": "Dark Reading", "category": "공격캠페인",
+    })
+
+    assert not record.get("collection_failed")
+    assert record["source_fallback_url"] == primary["url"]
+    assert "Dark Reading 본문 접근이 제한되어" in record["analysis"]
+    assert primary["label"] in record["analysis"]
+
+
+def test_darkreading_fallback_rejects_unrelated_or_short_primary_page(monkeypatch):
+    url = "https://www.darkreading.com/threat-intelligence/needymantis-long-term-access-compromised-networks"
+    primary = analysis_worker._darkreading_primary_source(url)
+
+    class Response:
+        def __init__(self, status_code, content):
+            self.status_code = status_code
+            self.content = content
+            self.headers = {}
+            self.is_redirect = False
+            self.is_permanent_redirect = False
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise ValueError("HTTP error")
+
+    def get(requested_url, **kwargs):
+        if requested_url == primary["url"]:
+            return Response(200, b"<article>Unrelated story. " + b"filler " * 300 + b"</article>")
+        return Response(403, b"Forbidden")
+
+    monkeypatch.setattr(analysis_worker.requests, "get", get)
+    monkeypatch.setattr(analysis_worker.network_safety, "_resolve_all",
+                        lambda hostname: {"93.184.216.34"})
+    assert analysis_worker.fetch_article_text(url) == ("", [])
+    assert analysis_worker._darkreading_primary_source("https://darkreading.com.evil.test" +
+                                                        "/threat-intelligence/needymantis-long-term-access-compromised-networks") is None
 
 
 def test_archive_and_tracking_sources_are_excluded():
@@ -191,3 +387,22 @@ def test_concurrent_update_is_not_silently_retried(correction):
     with pytest.raises(RuntimeError, match="changed concurrently"):
         repair_threat_report.repair(client, correction, apply=True)
     assert pipe.execute.call_count == 1
+
+
+def test_collection_failure_is_not_kept_in_long_lived_analysis_cache(monkeypatch):
+    client, pipe = MagicMock(), MagicMock()
+    client.pipeline.return_value = pipe
+    client.lrange.return_value = []
+    monkeypatch.setattr(analysis_worker.common_utils, "inventory_product_terms", lambda: [])
+
+    analysis_worker.store_result(client, {
+        "ref": "darkreading:blocked",
+        "title": "Dark Reading article",
+        "analysis": "[원문 수집 실패]",
+        "links": [], "iocs": [], "category": "", "attack_techniques": [],
+        "glossary": {}, "attack_grouped": [], "investigation": {}, "targets": {},
+        "collection_failed": True,
+    })
+
+    client.delete.assert_called_once_with("analysis:darkreading:blocked")
+    client.set.assert_not_called()

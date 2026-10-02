@@ -38,6 +38,8 @@ import urllib.parse
 import urllib.request
 
 import abusech
+import common_utils
+import research_entities
 
 OTX_URL = "https://otx.alienvault.com/api/v1/indicators/{}/{}/general"
 SHODAN_URL = "https://internetdb.shodan.io/{}"
@@ -274,7 +276,14 @@ def analyze(iocs=None, targets=None):
             references.extend(result["references"])
         cross_check("ip", value)
 
+    # 개별 콘텐츠 URL(chatgpt.com/g/...)이 도메인 칸에 들어오면 RDAP가 404를 낸다. 호스트로
+    # 바꾸고, 공용 플랫폼은 등록일이 캠페인과 무관하므로 조회하지 않는다.
+    hosts = []
     for value in domains:
+        host = common_utils.host_from_indicator(value) or str(value)
+        if host and host not in hosts and not research_entities.shared(host):
+            hosts.append(host)
+    for value in hosts:
         registration = rdap(value)
         time.sleep(PAUSE_SECONDS)
         if registration and registration.get("registered"):

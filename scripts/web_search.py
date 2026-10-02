@@ -218,6 +218,53 @@ def search(query, num=MAX_RESULTS):
     return items, ""
 
 
+# 회사 소개·게시물 페이지는 개념 설명 자료가 아니다.
+SOCIAL_HOST_RE = re.compile(r"(?:^|\.)(?:linkedin|facebook|instagram|twitter|x|youtube|tiktok)\.com$", re.I)
+
+
+def background(topics):
+    """Find background references without the attack-only security query."""
+    results, steps, seen = [], [], set()
+    attempted = False
+    for topic in (topics or [])[:3]:
+        aliases = re.findall(r"\(([A-Za-z][^()]*)\)", topic)
+        term = aliases[0].strip() if aliases else str(topic).strip()
+        # "DPP"·"PCF" 같은 약어는 다른 뜻으로 더 많이 쓰인다(실측: "DPP" 검색 1위가 호놀룰루
+        # 시 도시계획국). 약어면 원래 이름으로 찾는다.
+        if aliases and re.fullmatch(r"[A-Z0-9]{2,6}", term):
+            base = re.sub(r"\([^()]*\)", "", str(topic)).strip()
+            term = base or term
+        if not term:
+            continue
+        items, error = search('"{}"'.format(term.replace('"', "")), num=4)
+        if items is None:
+            steps.append("{} 배경 검색 불가: {}".format(term, error))
+            continue
+        attempted = True
+        matched = 0
+        for item in items:
+            url = item.get("link") or ""
+            if not url or url in seen:
+                continue
+            title = item.get("title") or ""
+            snippet = item.get("snippet") or ""
+            if (_norm(term) not in _norm(title + " " + snippet)
+                    or _generic_feed({"link": url}) or _is_news_site(urllib.parse.urlparse(url).netloc)
+                    or SOCIAL_HOST_RE.search(urllib.parse.urlparse(url).netloc or "")):
+                continue
+            seen.add(url)
+            matched += 1
+            results.append({"term": term, "title": title, "url": url,
+                            "host": item.get("site") or urllib.parse.urlparse(url).netloc,
+                            "snippet": snippet})
+        steps.append("{} 배경 검색: 관련 결과 {}건".format(term, matched))
+    if not attempted:
+        return None
+    return {"results": results, "findings": [],
+            "references": [row["url"] for row in results], "steps": steps,
+            "terms": [row.get("term") for row in results]}
+
+
 # 이름만 던지면 엉뚱한 것이 걸린다. 실측: "ChocoShell"로 검색하니 5건 중 4건이
 # GitHub 사용자·포트나이트 위키·아이스크림 토핑·인스타 계정이었다. 악성코드 이름은
 # 일상 낱말과 겹치기 쉬운데, 그렇게 찾은 링크가 1차 자료 수집으로 넘어가면 조사가
@@ -243,13 +290,20 @@ QUESTION_STOPWORDS = {
 # 라운드 재검색에서 질문 기반 검색어를 몇 개까지 더할지. 고정 용어(malware/actors/
 # cves)가 다 안 풀렸을 때만 쓰이므로 한도를 넉넉히 늘리지 않는다.
 MAX_QUESTION_TERMS = 1
+QUESTION_TECHNIQUES = re.compile(
+    r"clickfix|c2|유포지|스크립트|클립보드|도메인|해시|확장|지속성|"
+    r"피싱|탈취|취약점|패키지|드라이버|샌드박스|패치|버전|http|dom", re.I)
 
 
 def _question_keyword(question):
-    """질문 문장에서 검색어로 쓸 핵심어 하나를 뽑는다 — 조사·흔한 어미를 뺀 토큰 중
-    가장 긴 것. 이 낱말이 이번 라운드에 실제로 검색된 적 없는 새 검색어가 된다."""
+    """Use the investigation subject, not the longest question ending."""
     text = re.sub(r"[?？]", "", question or "")
-    tokens = [t for t in re.split(r"\s+", text) if len(t) >= 2 and t not in QUESTION_STOPWORDS]
+    match = QUESTION_TECHNIQUES.search(text)
+    if match:
+        return match.group(0)
+    tokens = [t for t in re.split(r"\s+", text) if len(t) >= 2
+              and t not in QUESTION_STOPWORDS
+              and not re.search(r"(?:있는가|없는가|무엇인가|어떠한가|확인하는가)$", t)]
     return max(tokens, key=len) if tokens else ""
 
 
@@ -274,10 +328,33 @@ def terms_from(targets, exclude=(), open_questions=None):
         if len(out) >= MAX_QUERIES_PER_ARTICLE + MAX_QUESTION_TERMS:
             break
         keyword = _question_keyword(question)
-        if (keyword and len(keyword) >= MIN_TERM_CHARS
+        meaningful_short = bool(out and QUESTION_TECHNIQUES.fullmatch(keyword or ""))
+        if (keyword and (len(keyword) >= MIN_TERM_CHARS or meaningful_short)
                 and keyword.lower() not in lowered and keyword not in out):
             out.append(keyword)
     return out
+
+
+def _norm(text):
+    return re.sub(r"[\s\-_.·]+", "", str(text or "")).casefold()
+
+
+def _relevant(item, term):
+    """결과 제목·요약에 검색어(따옴표 안 이름)가 실제로 있는가."""
+    names = re.findall(r'"([^"]+)"', term) or [term]
+    blob = _norm((item.get("title") or "") + " " + (item.get("snippet") or ""))
+    return any(_norm(name) and _norm(name) in blob for name in names)
+
+
+# 특정 사건이 아니라 모든 캠페인·IOC를 모아 둔 페이지. 어떤 이름으로 검색해도 걸린다.
+GENERIC_FEED_RE = re.compile(
+    r"github\.com/[^/]+/(?:[^/]*(?:apt|ioc|malware|threat)[^/]*collection|malware-ioc|"
+    r"apt_cybercriminal)|socradar\.io/(?:free-tools/)?campaigns|cyberpedia/.*indicators?-of-compromise",
+    re.I)
+
+
+def _generic_feed(item):
+    return bool(GENERIC_FEED_RE.search(item.get("link") or ""))
 
 
 def analyze(targets=None, answered=(), open_questions=None):
@@ -297,8 +374,15 @@ def analyze(targets=None, answered=(), open_questions=None):
 
     findings, steps, references = [], [], []
     failures = []
+    fixed_terms = {(str(value).strip()) for key in ("malware", "actors", "cves")
+                   for value in (targets or {}).get(key) or []}
+    anchor = next((value for key in ("malware", "actors", "cves")
+                   for value in (targets or {}).get(key) or [] if value), "")
     for term in terms:
-        items, reason = search(security_query(term))
+        query = security_query(term)
+        if anchor and term not in fixed_terms:
+            query = security_query(anchor) + " " + term
+        items, reason = search(query)
         time.sleep(PAUSE_SECONDS)
         if items is None:
             steps.append("\"{}\" 웹 검색을 건너뛰었습니다 — {}.".format(term, reason))
@@ -308,13 +392,26 @@ def analyze(targets=None, answered=(), open_questions=None):
             steps.append("\"{}\"로 {}에 검색했지만 연구 자료가 없었습니다."
                          .format(term, provider_label()))
             findings.append(
-                "\"{}\"는 연구 사이트(벤더·기관·샌드박스)에 자료가 없습니다 — "
-                "아직 1차 분석이 공개되지 않았다는 뜻이라, 기사 외에 참고할 것이 "
-                "없습니다.".format(term))
+                "\"{}\" 질의에서는 연구 자료를 찾지 못했습니다. 공개 자료의 부재나 "
+                "안전성을 뜻하지 않으며 다른 표현·출처 확인이 필요합니다.".format(term))
+            continue
+        # 검색어가 제목·요약에 없는 결과는 버린다. 따옴표 고유명사 + 보안 OR절은 느슨하게
+        # 매칭돼, 서로 다른 검색어 5개가 같은 APT·IOC 모음 페이지를 받았다(실측
+        # 2026-09-30, 카테나-X 건: 7건 모두 CyberMonitor·prodaft·socradar). 그 링크가 다음
+        # 단계에서 "1차 자료"로 읽혔다.
+        subject = anchor if anchor and term not in fixed_terms else term
+        relevant = [item for item in items if _relevant(item, subject) and not _generic_feed(item)]
+        if len(relevant) < len(items):
+            steps.append("\"{}\" 검색 결과 {}건 중 검색어가 없는 결과·일반 IOC 모음 {}건을 "
+                         "버렸습니다.".format(term, len(items), len(items) - len(relevant)))
+        items = relevant
+        if not items:
+            findings.append("\"{}\" 질의 결과에 이 이름을 다룬 자료가 없었습니다. 공개 자료의 "
+                            "부재를 뜻하지는 않습니다.".format(term))
             continue
         steps.append("\"{}\"로 {}에서 연구 자료 {}건을 찾았습니다.".format(
             term, provider_label(), len(items)))
-        findings.append("\"{}\" 관련 1차 자료를 {}건 찾았습니다: {}.".format(
+        findings.append("\"{}\" 관련 참고 자료를 {}건 찾았습니다: {}.".format(
             term, len(items), ", ".join(item["site"] for item in items[:3])))
         for item in items[:2]:
             if item["snippet"]:

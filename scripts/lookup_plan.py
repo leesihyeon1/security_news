@@ -28,6 +28,74 @@ import browser_research
 # 계획 출력은 짧다 — 길게 쓰라고 하면 이유가 장황해지고 판단에 도움이 안 된다.
 MAX_REASON_CHARS = 120
 
+
+def _question_keys(question, tracks, runnable):
+    """Map one investigation goal to the evidence-producing lookups it needs."""
+    question = str(question or "")
+    selected = []
+    if browser_research.is_web_question(question) and "user_action" in tracks:
+        selected.append("user_action")
+    if re.search(r"동적|샌드박스|샘플|C2|통신|지속성|지속화|예약.?작업|RAT|AMSI|ntdll|레지스트리", question, re.I):
+        if "malware" in tracks:
+            selected.append("malware")
+    if re.search(r"CVE|취약점|패치|안전.?버전", question, re.I) and "vulnerability" in tracks:
+        selected.append("vulnerability")
+    if re.search(r"패키지|npm|공급망|레지스트리", question, re.I) and "supply_chain" in tracks:
+        selected.append("supply_chain")
+    if not selected:
+        selected = [key for key in ("intel", "web") if key in tracks and key in runnable][:1]
+    return list(dict.fromkeys(selected))
+
+
+def _question_reason(question, key):
+    labels = {
+        "user_action": "개별 URL의 DOM·HTTP·리다이렉트를 확인합니다.",
+        "malware": "선정 샘플의 프로세스·지속성·네트워크 행위를 확인합니다.",
+        "vulnerability": "공식 취약점·패치 정보를 대조합니다.",
+        "supply_chain": "레지스트리·권고 데이터에서 패키지 상태를 대조합니다.",
+        "intel": "동일 지표의 독립 인텔리전스 관측을 대조합니다.",
+        "web": "원문과 공개 자료에서 확인 가능한 근거를 수집합니다.",
+    }
+    return labels.get(key, "이 목표에 필요한 외부 관측을 수집합니다.")
+
+
+def build_task_graph(objective, questions, tracks, runnable, question_lookups=None):
+    """Make the investigation ledger explicit: goal, evidence, and next action."""
+    planned = {row.get("question"): row.get("lookups") or []
+               for row in question_lookups or [] if isinstance(row, dict)}
+    tasks = []
+    for index, question in enumerate(questions or [], 1):
+        allowed = _question_keys(question, tracks, runnable)
+        keys = [str(row.get("key")) for row in planned.get(question, [])
+                if isinstance(row, dict) and row.get("key") in allowed]
+        keys = list(dict.fromkeys(keys or allowed))
+        tasks.append({
+            "id": "goal-{}".format(index), "goal": str(question),
+            "objective": objective or "", "lookup_keys": keys,
+            "expected_evidence": "질문에 포함된 주장을 직접 입증하는 관측값",
+            "status": "planned", "next_if_missing": "입력 URL·해시를 먼저 확보한 뒤 해당 조회를 재실행",
+            "why": ", ".join(_question_reason(question, key) for key in keys) or
+                   "현재 실행 가능한 조회가 없어 원문 근거와 미확인 상태를 보존합니다.",
+        })
+    return tasks
+
+
+def reconcile_task_graph(tasks, block):
+    """Update the ledger from evidence, without treating a successful API call as proof."""
+    block = block or {}
+    checks = {row.get("question"): row for row in block.get("goal_evidence") or []}
+    statuses = {row.get("key"): row.get("status") for row in block.get("lookup_status") or []}
+    for task in tasks or []:
+        check = checks.get(task.get("goal")) or {}
+        task["status"] = check.get("status") or task.get("status") or "planned"
+        task["evidence_basis"] = check.get("basis") or "목표별 근거 검증 대기"
+        task["missing"] = check.get("missing") or ""
+        task["executions"] = [{"key": key, "status": statuses.get(key, "not_recorded")}
+                              for key in task.get("lookup_keys") or []]
+        if task["status"] != "answered":
+            task["next_if_missing"] = task["missing"] or task["next_if_missing"]
+    return tasks
+
 PROMPT = """당신은 SOC 대응 책임자다. 이 건의 대응 목표와 확보된 지표를 보고, 아래 조회
 목록 중 무엇을 돌릴지 정하라.
 
@@ -231,5 +299,17 @@ def plan(objective, questions, catalog, route, targets=None, timeout=120, eviden
                                 "why": " ".join(str(item.get("why") or "").split())[:MAX_REASON_CHARS]})
         question_lookups.append({"question": question, "lookups": lookups})
     hashes = [v for v in data.get("hashes") or [] if isinstance(v, str) and v in (route.get("hashes") or [])][:2]
+    # The model may omit a question or attach a generic browser lookup to a malware
+    # goal. Fill the missing mapping deterministically from the goal's evidence type.
+    by_question = {row["question"]: row for row in question_lookups}
+    for question in questions or []:
+        row = by_question.setdefault(question, {"question": question, "lookups": []})
+        allowed = _question_keys(question, tracks, runnable)
+        current = [item for item in row.get("lookups") or [] if item.get("key") in allowed]
+        if not current:
+            current = [{"key": key, "why": _question_reason(question, key)} for key in allowed]
+        row["lookups"] = current
+    question_lookups = list(by_question.values())
     return {"tracks": tracks, "reasons": reasons, "skipped": skipped, "steps": steps,
-            "hashes": hashes, "question_lookups": question_lookups}
+            "hashes": hashes, "question_lookups": question_lookups,
+            "research_plan": build_task_graph(objective, questions, tracks, runnable, question_lookups)}

@@ -35,6 +35,11 @@ TARGET_FIELDS = ("domains", "ips", "hashes", "urls", "url_paths", "cves", "produ
                  "actors", "malware", "files", "paths", "registry", "commands")
 # analysis_targets가 파싱 뒤에 옮겨 담는 칸. 사건 태그는 원래 칸 이름으로 남아 있다.
 TAG_FIELD_ALIASES = {"url_paths": ("urls",), "files": ("domains",)}
+# 기사 전체에 대한 판정(analysis_worker가 article_kind.classify로 채운다). 사건마다 따로
+# 정하지 않으므로 모든 칸에 그대로 복사한다 — 빠뜨리면 종합 기사의 사건 칸에서 키가
+# 사라져 기본값(위협)으로 돌아간다.
+ARTICLE_KIND_FIELDS = ("article_kind", "article_subtype", "article_kind_reason",
+                       "article_type_declared", "topics")
 
 
 def _label(incidents, index):
@@ -82,6 +87,10 @@ def _split_targets(targets, incidents, incident_map):
         slot["investigable"] = targets.get("investigable", True)
         if targets.get("reason"):
             slot["reason"] = targets["reason"]
+        for field in ARTICLE_KIND_FIELDS:
+            if field in targets:
+                value = targets[field]
+                slot[field] = list(value) if isinstance(value, list) else value
         # 사건별 번호 줄이 있으면 그걸 쓰고, 모델이 빼먹었으면(부분 준수) 기사
         # 전체의 공유 값으로 대체한다 — 조용히 비우는 것보다 낫다.
         slot["objective"] = objectives.get(index) or targets.get("objective") or ""

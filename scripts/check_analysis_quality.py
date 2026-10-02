@@ -7,9 +7,36 @@ from pathlib import Path
 import urllib.request
 
 import analyst_workflow
+import article_kind
 
 
 INSIGHTS_URL = "https://click-tracker-two.vercel.app/api/insights"
+
+
+ATTACK_OUTPUT_RE = ("차단", "격리", "헌팅", "KQL")
+
+
+def informational_violations(record):
+    """정보성 기사에 공격형 산출물이 붙었는가. 붙었으면 무엇인지."""
+    block = record.get("investigation") or {}
+    targets = record.get("targets") or {}
+    if not (article_kind.is_informational(block) or article_kind.is_informational(targets)):
+        return []
+    found = []
+    if block.get("patterns"):
+        found.append("탐지 패턴 {}개".format(len(block["patterns"])))
+    response = block.get("response") or {}
+    if any(response.get(key) for key in ("kql", "commands", "blocklists")):
+        found.append("대응 산출물(KQL·명령·차단목록)")
+    if block.get("followup_results") or (block.get("synthesis") or {}).get("followups"):
+        found.append("지표 후속 조회")
+    verdict = (block.get("synthesis") or {}).get("verdict")
+    if verdict and verdict != "정보성 기사":
+        found.append("판정값 {}".format(verdict))
+    for step in (block.get("synthesis") or {}).get("plan") or []:
+        if any(word in str(step.get("action") or "") for word in ATTACK_OUTPUT_RE):
+            found.append("공격 대응형 조치: {}".format(str(step.get("action"))[:40]))
+    return found
 
 
 def evaluate(records):
@@ -17,6 +44,10 @@ def evaluate(records):
     for record in records:
         block = record.get("investigation") or {}
         quality = analyst_workflow.assessment(block)
+        violations = informational_violations(record)
+        if violations:
+            quality = dict(quality, issues=list(quality.get("issues") or [])
+                           + ["정보성 기사에 공격형 산출물: " + v for v in violations])
         rows.append({"ref": record.get("ref"), "title": record.get("title"),
                      "collection_failed": bool(record.get("collection_failed")),
                      "has_synthesis": bool(block.get("synthesis")),

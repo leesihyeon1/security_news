@@ -348,6 +348,8 @@ TASK_SPEC = """
   - 웹 유포 패턴은 원문 시드, 과거 스캔, 연결 사이트의 요청을 구분해 비교하라.
     연결 사이트 하나에서만 나온 경로는 캠페인 공통 지문으로 단정하지 말고 검토 후보로 둬라.
     urlscan filename은 관측된 파일명과 첫 질의 키까지만 써라(값은 넣지 마라).
+    브라우저 본문의 특징 표식은 문자열 존재만 뜻한다. 실행·악성 여부나 여러 유포지의
+    공통성은 클릭 전후 요청·DOM·시드 대조 없이는 확정하지 마라.
   - Google 검색 연산자는 공개 색인될 수 있는 흔적에만 쓰고, 비색인 네트워크 요청은
     urlscan으로 조사하라. 근거가 없으면 해당 플랫폼 쿼리를 생략하라.
   - 같은 것을 잡는 쿼리를 여러 개로 쪼개지 마라. 3~6개만, 서로 다른 층을 잡는 것으로.
@@ -395,6 +397,11 @@ def _objective_block(targets):
 
 def _web_evidence_text(web_evidence):
     rows = []
+    browser_rows = []
+    for fact in (web_evidence or {}).get("shared_web_fingerprints") or []:
+        browser_rows.append("복수 유포지 공통 요청 후보 {} 키={} 확인 호스트={}건".format(
+            fact.get("path") or "/", ",".join(fact.get("query_keys") or []),
+            len(fact.get("hosts") or [])))
     for seed in (web_evidence or {}).get("seeds") or []:
         if not seed.get("in_urlscan"):
             continue
@@ -425,13 +432,13 @@ def _web_evidence_text(web_evidence):
         if result.get("source") != "isolated_browser" or result.get("status") != "observed":
             continue
         observed = result.get("evidence") or {}
-        rows.append("격리 브라우저 {} 행동={} DOM변경={} 클립보드쓰기={}".format(
+        browser_rows.append("격리 브라우저 {} 행동={} DOM변경={} 클립보드쓰기={}".format(
             observed.get("evidence_id") or "", observed.get("action") or "",
             (observed.get("before") or {}).get("dom_sha256") !=
             (observed.get("after") or {}).get("dom_sha256"),
             len(observed.get("clipboard") or [])))
         for command in (observed.get("clipboard") or [])[:3]:
-            rows.append("복사 명령 지문 SHA256={} 실행도구={} 인코딩={} 목적지={}".format(
+            browser_rows.append("복사 명령 지문 SHA256={} 실행도구={} 인코딩={} 목적지={}".format(
                 command.get("sha256") or "", command.get("executable") or "",
                 bool(command.get("encoded")),
                 ",".join("{}{}".format(url.get("host") or "", url.get("path") or "")
@@ -440,16 +447,18 @@ def _web_evidence_text(web_evidence):
                                   key=lambda item: (not bool(item.get("query_keys")),
                                                     not bool(item.get("signals"))))
         for response in ranked_responses[:16]:
-            rows.append("브라우저 응답 단계={} {}{} 키={} 상태={} MIME={} SHA256={} 표식={} 시작점={}".format(
+            browser_rows.append("브라우저 응답 단계={} {}{} 키={} 상태={} MIME={} SHA256={} 본문미관측={} 표식={} 특징={} 시작점={}".format(
                 response.get("phase") or "",
                 response.get("host") or "", response.get("path") or "/",
                 ",".join(response.get("query_keys") or []),
                 response.get("status"), response.get("mime") or "",
-                response.get("body_sha256") or "", ",".join(response.get("signals") or []),
+                response.get("body_sha256") or "", response.get("body_unobserved") or "",
+                ",".join(response.get("signals") or []),
+                ",".join(response.get("features") or []),
                 (response.get("initiator") or {}).get("path") or ""))
         for request in (observed.get("requests") or [])[:60]:
             if request.get("query_keys"):
-                rows.append("브라우저 요청 단계={} {}{} 키={} 메서드={}".format(
+                browser_rows.append("브라우저 요청 단계={} {}{} 키={} 메서드={}".format(
                     request.get("phase") or "", request.get("host") or "",
                     request.get("path") or "/", ",".join(request["query_keys"]),
                     request.get("method") or "GET"))
@@ -459,7 +468,36 @@ def _web_evidence_text(web_evidence):
                 request.get("method") or "", request.get("host") or "",
                 request.get("path") or "/", request.get("status"),
                 request.get("response_body_type") or ""))
-    return "\n".join(rows)[:9000]
+    return "\n".join(browser_rows[:80] + rows)[:9000]
+
+
+def shared_web_fingerprints(seeds, negative_controls=()):
+    """Only distinct DOM-confirmed hosts can support a cross-site invariant."""
+    by_signature = {}
+    negatives = set()
+    for control in negative_controls or []:
+        if control.get("label") not in ("benign_confirmed", "platform_baseline"):
+            continue
+        for request in control.get("http") or []:
+            path = str(request.get("path") or "")
+            keys = tuple(str(key) for key in (request.get("query_keys") or [])[:2])
+            if path and keys:
+                negatives.add((path, keys))
+    for seed in seeds or []:
+        if not seed.get("dom_confirmed"):
+            continue
+        host = str(seed.get("domain") or "").lower()
+        if not host:
+            continue
+        for request in seed.get("http") or []:
+            path = str(request.get("path") or "")
+            keys = tuple(str(key) for key in (request.get("query_keys") or [])[:2])
+            if not path or not keys or request.get("status") not in (200, 301, 302):
+                continue
+            if (path, keys) not in negatives:
+                by_signature.setdefault((path, keys), set()).add(host)
+    return [{"path": path, "query_keys": list(keys), "hosts": sorted(hosts)}
+            for (path, keys), hosts in by_signature.items() if len(hosts) >= 2][:8]
 
 
 def build_prompt(title, analysis, body, iocs, targets=None, web_evidence=None):
@@ -712,7 +750,7 @@ def _search_urlscan(query, api_key=None):
 
 
 def validate_urlscan(candidate, api_key=None, positive_hosts=()):
-    """urlscan에서 실제로 몇 건 잡히는지 센다. 0건·과다는 폐기.
+    """urlscan에서 실제로 몇 건 잡히는지 센다. 0건은 미검증, 과다는 폐기.
 
     조회 자체가 실패한 것은 패턴이 틀렸다는 뜻이 아니다. 예전에는 실패도 폐기로
     처리하면서 "쿼리 문법을 확인해야 합니다"라고 안내했는데, 실제 사유는 대부분
@@ -731,7 +769,8 @@ def validate_urlscan(candidate, api_key=None, positive_hosts=()):
         return True, "", {"unverified": "urlscan 조회에 실패해 실제 관측 수를 확인하지 "
                                         "못했습니다({})".format(error[:60])}
     if total < URLSCAN_MIN_HITS:
-        return False, "urlscan 0건 — 실재하지 않는 패턴", {"hits": 0}
+        return True, "", {"hits": 0, "unverified":
+                "현재 공개 urlscan 인덱스에서 0건입니다. 패턴의 부재나 오탐 여부는 판단할 수 없어 탐지 룰로 적용하지 마세요"}
     structural = bool(re.search(r'\bfilename:"[^"\s?]{4,}\?[A-Za-z0-9_-]+=.*"', query))
     if total >= URLSCAN_TOTAL_CAP and not structural:
         return False, "urlscan {:,}건 이상 — 캠페인 지문이 아니라 웹 전체".format(

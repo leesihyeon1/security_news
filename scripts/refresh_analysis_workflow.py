@@ -8,6 +8,7 @@ from pathlib import Path
 
 import analysis_worker
 import analyst_workflow
+import article_kind
 import common_utils
 import dashboard_text
 import investigation
@@ -48,6 +49,8 @@ def prepare(record, rebuild=False):
     block = result.get("investigation") or {}
     if not block or record.get("collection_failed"):
         raise ValueError("No collected investigation to revise")
+    if article_kind.is_informational(block) or article_kind.is_informational(result.get("targets")):
+        raise ValueError("정보성 기사는 공격 조사 갱신 대상이 아닙니다; 판단 재생성은 resynthesize.py를 사용하세요")
     body, _ = analysis_worker.fetch_article_text(record.get("url"))
     if len(body) < analysis_worker.BODY_MIN_CHARS or (len(body) < analysis_worker.BLOCKED_PAGE_MAX_CHARS
                                                     and analysis_worker.BLOCKED_PAGE_RE.search(body)):

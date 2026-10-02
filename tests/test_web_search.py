@@ -58,3 +58,23 @@ def test_analyze_passes_open_questions_into_terms_from(monkeypatch):
     result = web_search.analyze({"malware": ["X"]}, open_questions=["질문"])
     assert result is None  # terms_from 빈 목록 -> analyze는 None
     assert captured["open_questions"] == ["질문"]
+
+
+def test_followup_question_query_stays_anchored_to_campaign(monkeypatch):
+    monkeypatch.setattr(web_search, "available", lambda: True)
+    monkeypatch.setattr(web_search, "provider_label", lambda: "test")
+    monkeypatch.setattr(web_search.time, "sleep", lambda _: None)
+    monkeypatch.setattr(web_search, "usage_today", lambda: 0)
+    monkeypatch.setattr(web_search, "daily_cap", lambda: 60)
+    queries = []
+
+    def fake_search(query):
+        queries.append(query)
+        return [], ""
+
+    monkeypatch.setattr(web_search, "search", fake_search)
+    result = web_search.analyze(
+        {"malware": ["GhostCode"]}, open_questions=["ClickFix 유포지의 스크립트는 무엇인가"])
+    assert any("GhostCode" in query and "clickfix" in query.lower() for query in queries)
+    assert all("공개 자료의 부재나 안전성을 뜻하지" in finding
+               for finding in result["findings"])

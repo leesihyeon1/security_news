@@ -63,10 +63,25 @@ RECENT_DAYS = 14
 
 BS = chr(92)
 
+# npm 뒤·앞에 이런 말이 있어야 대문자 "NPM"을 레지스트리로 본다.
+NPM_CONTEXT = (r"(?:packages?|registry|ecosystem|install|malicious|typosquat\w*|javascript|"
+               r"node\.?js|supply[\s-]*chain|패키지|레지스트리|생태계|저장소|악성|공급망|"
+               r"자바스크립트|타이포스쿼트)")
+
 # 기사에서 레지스트리를 알아보는 표현. GitHub Advisory의 ecosystem 값에 맞춰 둔다 —
 # 그 값이 그대로 조회 키가 된다.
+#
+# npm은 단어 경계와 대소문자를 본다. 예전 r"npm"은 re.I로 어디서나 걸려서, 제품행사
+# 기사 "Riverbed NPM 360"(Network Performance Monitoring)이 npm 레지스트리 조회를
+# 일으킬 수 있었다(실측 2026-09-30 events.jsonl). 레지스트리 이름은 원문에서 거의 항상
+# 소문자 "npm"으로 쓰이므로 소문자 낱말은 그대로 인정하고, 대문자·혼합 표기("NPM
+# packages", "악성 NPM 패키지")는 가까이에 패키지·레지스트리 문맥이 있을 때만 인정한다.
+# 한글이 바로 붙는 "npm에"도 낱말로 보려고 \b 대신 ASCII 경계를 쓴다.
 REGISTRY_PATTERNS = (
-    ("npm", r"npm|npmjs|node[\s-]*package|노드\s*패키지"),
+    ("npm", r"(?-i:(?<![A-Za-z0-9])npm(?![A-Za-z0-9]))|npmjs"
+            r"|(?<![A-Za-z0-9])npm(?![A-Za-z0-9])(?=[^\n]{0,24}?" + NPM_CONTEXT + r")"
+            r"|" + NPM_CONTEXT + r"[^\n]{0,24}?(?<![A-Za-z0-9])npm(?![A-Za-z0-9])"
+            r"|node[\s-]*package|노드\s*패키지"),
     ("pip", r"pypi|pip\s+install|python\s*package\s*index|파이썬\s*패키지"),
     ("rubygems", r"rubygems|ruby\s*gem"),
     ("maven", r"maven|메이븐"),
@@ -86,10 +101,27 @@ DOCKER_RE = re.compile(r"docker\s*hub|dockerhub|컨테이너\s*이미지|contain
 # 공급망 기사인지 판단하는 보조 신호. 레지스트리 이름이 없어도 이런 표현이 있으면
 # 공급망 맥락으로 본다.
 SUPPLY_CHAIN_RE = re.compile(
-    r"공급망|supply[\s-]*chain|의존성|dependency|오픈소스\s*패키지|악성\s*패키지|"
+    r"소프트웨어\s*공급망|software\s*supply[\s-]*chain|의존성|dependency|오픈소스\s*패키지|악성\s*패키지|"
     r"malicious\s*package|typosquat|타이포스쿼트|저장소\s*오염|package\s*registry",
     re.I,
 )
+# "공급망" 한 단어는 물류·규제·ESG 문맥에도 흔하다(실측 2026-09-30: "유럽 공급망 규제 대응"
+# 기사가 패키지 레지스트리 조사로 갔다). 앞뒤 가까이에 소프트웨어·공격 문맥이 있을 때만
+# 소프트웨어 공급망 신호로 본다.
+BARE_SUPPLY_CHAIN_RE = re.compile(r"공급망|supply[\s-]*chain", re.I)
+SOFTWARE_CONTEXT_RE = re.compile(
+    r"공격|악성|오염|침해|해킹|탈취|백도어|감염|패키지|오픈소스|라이브러리|빌드|업데이트|"
+    r"레지스트리|SBOM|소프트웨어|코드|attack|compromis|malicious|backdoor|software|package|"
+    r"open[\s-]*source|librar|build|update|registry|npm|pypi|github", re.I)
+SUPPLY_CHAIN_WINDOW = 24
+
+
+def _software_supply_chain(blob):
+    for match in BARE_SUPPLY_CHAIN_RE.finditer(blob):
+        window = blob[max(0, match.start() - SUPPLY_CHAIN_WINDOW):match.end() + SUPPLY_CHAIN_WINDOW]
+        if SOFTWARE_CONTEXT_RE.search(window):
+            return True
+    return False
 
 # 기사 본문에서 패키지 이름을 뽑는 형태. 임의의 단어를 패키지로 오인하지 않게,
 # 스코프 표기이거나 설치 명령 뒤에 온 것만 인정한다.
@@ -135,7 +167,7 @@ def is_supply_chain(text, title=""):
     """공급망 기사로 볼 수 있는가 — 레지스트리 이름이 있거나 공급망 표현이 있으면."""
     blob = "{} {}".format(title or "", text or "")
     return bool(registries_from_text(blob) or mentions_docker(blob)
-                or SUPPLY_CHAIN_RE.search(blob))
+                or SUPPLY_CHAIN_RE.search(blob) or _software_supply_chain(blob))
 
 
 def packages_from_text(text, ecosystems=()):

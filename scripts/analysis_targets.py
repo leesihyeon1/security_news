@@ -134,21 +134,33 @@ INDICATOR_SPEC = """
 적고, 없으면 "없음"이라고 써라. 목표·질문·대응 판단은 이 단계에서 만들지 마라.
 종합 기사라면 사건구분에 사건 라벨을 쉼표로 나열하고, 아래 각 값 뒤에 소속 사건
 번호를 붙여라(예: a.example(1), b.example(2)). 한 사건이면 사건구분은 없음이다.
+제목의 주된 사건 뒤에 '동시에 발견된 다른 캠페인'처럼 관련 사례를 덧붙인 기사는
+종합 기사가 아니다. 관련 사례의 지표를 주된 사건에 섞지 말고 사건구분도 없음으로 둬라.
+기사유형: 위협사건 또는 정보성 중 하나만 써라.
+  위협사건 = 실제 공격·침해·유출, 악성코드, 취약점 공개·악용, 위협 행위자 활동을 다루는
+             기사다. 행위자·악성코드·지표를 구체적으로 다루는 위협 보고서도 여기다.
+  정보성   = 정책·규제·가이드라인, 제품·서비스 출시, 기업 제휴·사업 발표, 기술 동향·연구·
+             통계·칼럼처럼 특정 공격 사건을 다루지 않는 기사다. 제목에 "공급망"·"보안"이
+             있어도 규제 대응·사업 발표 기사면 정보성이다.
 사건구분:
 도메인:
 IP:
 해시:
 URL:
 CVE:
-제품: 제품명과 버전을 한 덩어리로 적어라. 버전을 모르면 제품명만 적어라.
+제품: 취약점이 있거나 공격 대상이 된 제품만, 제품명과 버전을 한 덩어리로 적어라. 버전을
+  모르면 제품명만 적어라. 발표·홍보·도입 대상인 제품·서비스·플랫폼은 적지 마라.
 패키지: npm:이름 또는 pypi:이름 형태로 적어라.
-행위자:
+행위자: 위협 행위자(해킹 그룹·캠페인 운영 주체)만 적어라. 기업·기관·파트너사·피해 조직
+  이름은 적지 마라.
 악성코드:
 파일:
 경로:
 레지스트리키:
 명령:
-조사가능: 위에 조회할 값이 하나라도 있으면 예, 없으면 아니오.
+주제: 정보성이면 배경 자료를 찾을 핵심 표준·제도·기술·서비스 이름을 최대 4개, 원문에 영문
+  표기가 있으면 괄호로 병기하라(예: 카테나-X(Catena-X), 디지털 제품 여권(DPP)). 위협사건이면 없음.
+조사가능: 위협사건이고 위에 조회할 값이 하나라도 있으면 예, 정보성이거나 조회할 값이 없으면 아니오.
 조사불가사유: 아니오라면 이유 한 문장, 그 외에는 없음.
 """
 
@@ -226,9 +238,11 @@ def _split(value):
 # 모델이 헤더를 빼먹고 필드만 이어 쓰는 경우가 있다(실측: 35건 중 1건에서 "[조사 대상]"
 # 없이 "도메인: 없음"부터 시작했고, 헤더를 요구하는 정규식이 못 잡아 기계용 목록이
 # 그대로 화면에 나갔다). 그래서 헤더가 없으면 필드 줄이 이어지는 구간을 찾아서 쓴다.
+# 기사유형은 목록 맨 앞 줄이라 넣고, 주제는 조사가능 앞에 오므로 구간 안에 저절로
+# 들어간다 — "주제: …"는 본문 문장에도 흔해서 구간 시작으로 잡히면 본문이 잘린다.
 FIELD_LINE_RE = re.compile(
     "^[ " + chr(9) + "]*(?:[-*][ ]*)?(" + "|".join(FIELD_MAP)
-    + "|조사가능|조사불가사유|사건구분|목표|확인질문|성공기준|주력|부족한것)"
+    + "|조사가능|조사불가사유|사건구분|목표|확인질문|성공기준|주력|부족한것|기사유형)"
     r"\d{0,2}[ ]*[:：]", re.M)
 # 이만큼 이어져야 목록으로 본다. 한두 줄이면 본문 문장이 우연히 "제품: ..." 형태인
 # 경우와 구별되지 않는다.
@@ -305,6 +319,22 @@ def _url_filename(url):
     return name if FILENAME_ONLY_RE.match(name) else ""
 
 
+# 주제는 배경 자료 검색어가 된다. 검색·조회 호출 수가 주제 수에 비례하므로 명세와 같은
+# 상한(4개)을 파서에서도 지킨다.
+MAX_TOPICS = 4
+
+
+def _article_type(value):
+    """기사유형 줄 → "threat" | "informational" | "". 모델이 "정보성(정책 발표)"처럼
+    괄호 설명을 붙이거나 영어로 쓰는 경우까지 받는다."""
+    cleaned = re.sub(r"\s+", "", _clean(value)).lower()
+    if cleaned.startswith(("정보", "info")):
+        return "informational"
+    if cleaned.startswith(("위협", "공격", "threat", "attack")):
+        return "threat"
+    return ""
+
+
 def _axis(value):
     # 어휘 밖의 값은 버린다. 여기서 거르지 않으면 "네트워크 침투" 같은
     # 자유 문장이 트랙 이름 자리에 들어와 조사 계획이 통째로 어긋난다.
@@ -346,7 +376,17 @@ def parse(text):
     by_incident = {"objective": {}, "questions": {}, "criteria": {}, "gaps": {}, "primary": {}}
     incident_map = {}
 
+    declared, topics = "", []
     for name, num, value in raw_lines:
+        if name == "기사유형":
+            declared = _article_type(value) or declared
+            continue
+        if name == "주제":
+            for item in _split(value):
+                item = _strip_incident_tag(item)[0] if multi else item
+                if item and item not in topics:
+                    topics.append(item)
+            continue
         if name == "조사가능":
             cleaned = _clean(value)
             investigable = cleaned.startswith("예") or cleaned.lower().startswith("y")
@@ -398,6 +438,12 @@ def parse(text):
     found["investigable"] = investigable
     if reason:
         found["reason"] = reason
+    # 분석 단계의 기사유형 선언과 배경 조사 주제. 조사 경로는 이 선언만으로 정하지 않는다
+    # — article_kind.classify가 공격 지표와 함께 보고 정한다(선언이 틀린 위협 기사 방어).
+    if declared:
+        found["article_type_declared"] = declared
+    if topics:
+        found["topics"] = topics[:MAX_TOPICS]
     # 목표는 조회 전에 세우는 것이라 지표가 없어도 의미가 있다 — 지표가 하나도 없는
     # 기사에서도 "무엇을 확인해야 하는가"는 남는다.
     if objective:

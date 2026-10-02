@@ -147,11 +147,21 @@ def _related_iocs(record):
     return out
 
 
+def _informational(record):
+    """정보성 기사 기록인가. 기업·기관 이름이 겹친다고 같은 계열로 엮으면 안 된다
+    (예: 통신사 제휴 발표 기록이 나중의 같은 통신사 침해 사고 기사와 묶인다)."""
+    targets = record.get("targets") or {}
+    block = record.get("investigation") or {}
+    return "informational" in (targets.get("article_kind"), block.get("article_kind"))
+
+
 def find_related(targets, exclude_title="", client=None):
     """같은 계열의 과거 분석. [{title, when, why}] 형식, 최신순.
 
     exclude_title은 지금 분석 중인 기사다 — 재분석하면 자기 자신이 걸리므로 뺀다.
     """
+    if (targets or {}).get("article_kind") == "informational":
+        return []
     names, values = _names(targets), _values(targets)
     if not (names or values):
         return []
@@ -171,7 +181,7 @@ def find_related(targets, exclude_title="", client=None):
         except (ValueError, TypeError):
             continue
         title = record.get("title") or ""
-        if not title or title == exclude_title:
+        if not title or title == exclude_title or _informational(record):
             continue
         past = _record_targets(record)
         shared_names = names & _names(past)
@@ -232,6 +242,8 @@ def stored_axis(title, client=None):
             continue
         if (record.get("title") or "") != title:
             continue
+        if _informational(record):
+            return ""
         route = (record.get("investigation") or {}).get("route") or {}
         return str(route.get("primary") or "")
     return ""

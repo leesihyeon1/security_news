@@ -39,6 +39,8 @@ import past_analyses
 import primary_sources
 import response_synth
 import analyst_workflow
+import article_kind
+import briefing
 
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
@@ -83,14 +85,34 @@ def rebuild(record):
     # 그때 읽은 1차 자료를 판단 재료로 다시 넣는다. 주소는 기록에 남아 있으므로
     # 그 글만 다시 받아 온다 — 조회 한도를 쓰는 외부 조회는 다시 돌리지 않는다.
     evidence = ""
+    source_texts = []
     urls = [{"url": source.get("url")} for source
             in (block.get("primary") or {}).get("sources") or [] if source.get("url")]
     if urls:
         try:
             again = primary_sources.collect(urls, article_url=record.get("url") or "")
-            evidence = primary_sources.as_evidence(again.get("sources"))
+            source_texts = again.get("sources") or []
+            origins = {item.get("url"): item.get("origin") for item in
+                       (block.get("primary") or {}).get("sources") or []}
+            for item in source_texts:
+                item["origin"] = origins.get(item.get("url")) or "article"
+            evidence = primary_sources.as_evidence(source_texts)
         except Exception as error:
             log("    [-] 1차 자료를 다시 읽지 못했습니다: {}".format(str(error)[:70]))
+
+    if article_kind.is_informational(block) or article_kind.is_informational(targets):
+        verdict = response_synth.synthesize_briefing(
+            title, record.get("analysis") or "", targets, block,
+            materials=briefing.materials(block, source_texts))
+        if not verdict:
+            return False
+        briefing.apply_verdict(block, verdict, targets)
+        block["steps_summary"] = briefing.summarize(block)
+        analyst_workflow.finalize(block, targets)
+        record["investigation"] = dashboard_text.redact_private_environment(
+            block, common_utils.inventory_product_terms())
+        record["resynthesized_at"] = common_utils.utc_now_iso()
+        return True
 
     history = ""
     try:

@@ -29,17 +29,22 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from urllib.parse import urlsplit
+
 import requests
 from bs4 import BeautifulSoup
 
 import analysis_targets
+import article_kind
 import issue_decision
 import common_utils
+import campaign_radar
 import dashboard_text
 import investigation
 import response_synth
 import network_safety
 import source_evidence
+import worker_progress
 
 for stream in (sys.stdout, sys.stderr):
     if stream and hasattr(stream, "reconfigure"):
@@ -86,11 +91,37 @@ FETCH_TIMEOUT_SECONDS = 20
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 boannews-analyzer/1.0"
-    )
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ko;q=0.8",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+DARKREADING_HOSTS = {"darkreading.com", "www.darkreading.com"}
+# 기사가 직접 인용한 연구 원문. Dark Reading 본문이 차단됐을 때 이 자료를
+# 분석 근거로 쓰며, 결과에 출처 차이를 명시한다.
+DARKREADING_PRIMARY_SOURCES = {
+    "/threat-intelligence/needymantis-long-term-access-compromised-networks": {
+        "url": "https://www.microsoft.com/en-us/security/blog/2026/09/28/needymantis-unpacking-a-post-compromise-malware-family-used-in-targeted-operations/",
+        "label": "Microsoft Threat Intelligence",
+        "marker": "NeedyMantis",
+    },
+    "/identity-access-management-security/carbonato-botnet-ai-agent-hacked-docker-hosts": {
+        "url": "https://www.threatdown.com/blog/carbonato/",
+        "label": "ThreatDown",
+        "marker": "Carbonato",
+    },
+    "/cloud-security/jadepuffer-ai-actor-azure-tenant-destructive-cloud-attack": {
+        "url": "https://www.microsoft.com/en-us/security/blog/2026/09/25/storm-3168-agentic-driven-cloud-attacks-using-compromised-service-principals/",
+        "label": "Microsoft Security Research",
+        "marker": "JADEPUFFER",
+    },
 }
 
 REPORT_CATEGORIES = "취약점|악성코드|침해사고|개인정보유출|공격캠페인|공급망공격|피싱사기|정책규제|기술동향|제품행사|기타"
+CATEGORY_GUIDE = ("실제 공격 사건·악성코드·취약점이 확인되면 해당 위협 분류를 고르고, "
+                  "제도·사업 발표·기술 동향을 다룬 정보성 기사에는 위협 분류를 억지로 붙이지 마라.")
 # 이 안에 든 것만 "위협/공격"형 — CVSS·공격기법·즉시조치 프레임이 실제로 맞는 기사다.
 # 정책규제·기술동향·제품행사·기타에 같은 프레임을 강제하면 모델이 억지로 위험도를 지어낸다.
 THREAT_CATEGORIES = {"취약점", "악성코드", "침해사고", "개인정보유출", "공격캠페인", "공급망공격", "피싱사기"}
@@ -146,6 +177,23 @@ NAV_LINK_RE = re.compile(r"/(?:tag|tags|category|categories|topic|topics|product
                          r"content-type|author|page)/", re.I)
 MAX_LINKS = 20
 
+# 일부 매체는 한 사건의 보도 끝에 별개 캠페인들을 관련 소식으로 길게 붙인다.
+# 이 구간을 본 사건의 IOC/단계로 읽으면 판단과 조회가 사건 수만큼 반복된다.
+RELATED_CAMPAIGNS_RE = re.compile(
+    r"\bThe findings coincide with the discovery of multiple\b", re.I)
+
+
+def _focus_article(body, links):
+    """Keep a complete lead story; separate a clearly signposted related-campaign tail."""
+    marker = RELATED_CAMPAIGNS_RE.search(body or "")
+    if not marker or marker.start() < BODY_MIN_CHARS:
+        return body, links
+    focused = body[:marker.start()].rstrip()
+    focused_folded = focused.casefold()
+    focused_links = [link for link in links or []
+                     if str(link.get("text") or "").casefold() in focused_folded]
+    return focused, focused_links
+
 
 def _normalize_link(anchor, article_url):
     """<a>를 {url, text} 로 정규화. 관련 링크가 아니면 None.
@@ -169,36 +217,29 @@ def _normalize_link(anchor, article_url):
     return {"url": href, "text": text}
 
 
-def fetch_article_text(url):
-    """기사 원문에서 본문 텍스트와 참고 링크를 뽑는다. 실패 시 ("", [])."""
-    url = source_evidence.article_url(url)
-    # 이 url은 인증 없는 공개 API(/api/analyze)가 그대로 넣은 값이다(실측 2026-09-22:
-    # 문법 검증만 있었다). 우리 PC가 그 값을 그대로 요청하므로, 사설·루프백·예약
-    # 대역을 가리키면 여기서 막는다 — network_safety.py 참고.
+def _darkreading_primary_source(url):
     try:
-        network_safety.check_public_url(url)
-    except network_safety.UnsafeUrlError as error:
-        log("[-] 본문 수집 거부({}): {}".format(url[:70], error))
-        return "", []
-    try:
-        response = network_safety.safe_get(url, headers=REQUEST_HEADERS, timeout=FETCH_TIMEOUT_SECONDS)
-        response.raise_for_status()
-    except Exception as error:
-        log("[-] 본문 수집 실패({}): {}".format(url[:70], error))
-        return "", []
+        parsed = urlsplit(url)
+        if (parsed.hostname or "").lower() in DARKREADING_HOSTS:
+            return DARKREADING_PRIMARY_SOURCES.get(parsed.path.rstrip("/"))
+    except ValueError:
+        pass
+    return None
 
-    # 인코딩은 선언을 우선하되(대부분 utf-8), 구형 국내 페이지(cp949)도 읽는다.
+
+def _response_text(response):
     raw = response.content
     for encoding in ("utf-8", "cp949"):
         try:
-            html = raw.decode(encoding)
-            break
+            return raw.decode(encoding)
         except UnicodeDecodeError:
             continue
-    else:
-        html = raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace")
 
-    soup = BeautifulSoup(html, "html.parser")
+
+def _extract_article_content(raw_html, article_url):
+    """Extract the longest article candidate and useful references from one response."""
+    soup = BeautifulSoup(raw_html, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
         tag.decompose()
 
@@ -226,17 +267,70 @@ def fetch_article_text(url):
             best_text, best_node = whole, soup
 
     target = best_node if best_node is not None else soup
-    text = best_text
     links, seen = [], set()
     for anchor in target.find_all("a", href=True):
-        link = _normalize_link(anchor, url)
+        link = _normalize_link(anchor, article_url)
         if not link or link["url"] in seen:
             continue
         seen.add(link["url"])
         links.append(link)
         if len(links) >= MAX_LINKS:
             break
-    return text, links
+    return best_text, links
+
+
+def fetch_article_text(url):
+    """기사 원문에서 본문 텍스트와 참고 링크를 뽑는다. 실패 시 ("", []).
+
+    등록된 Dark Reading 기사의 차단 응답에서는 각 기사가 직접 인용한 연구 원문을
+    읽는다. 원문에서도 근거를 확인할 수 없으면 분석을 실패 처리한다.
+    """
+    url = source_evidence.article_url(url)
+    # 이 url은 인증 없는 공개 API(/api/analyze)가 그대로 넣은 값이다(실측 2026-09-22:
+    # 문법 검증만 있었다). 우리 PC가 그 값을 그대로 요청하므로, 사설·루프백·예약
+    # 대역을 가리키면 여기서 막는다 — network_safety.py 참고.
+    try:
+        network_safety.check_public_url(url)
+    except network_safety.UnsafeUrlError as error:
+        log("[-] 본문 수집 거부({}): {}".format(url[:70], error))
+        return "", []
+    response = None
+    direct_error = None
+    try:
+        response = network_safety.safe_get(url, headers=REQUEST_HEADERS, timeout=FETCH_TIMEOUT_SECONDS)
+        if getattr(response, "status_code", 200) < 400:
+            text, links = _extract_article_content(_response_text(response), url)
+            blocked = (BLOCKED_PAGE_RE.search(text[:2000])
+                       if len(text) < BLOCKED_PAGE_MAX_CHARS else None)
+            if len(text) >= BODY_MIN_CHARS and not blocked:
+                return text, links
+            direct_error = ("봇 차단 페이지({})".format(blocked.group(0)) if blocked
+                            else "본문이 짧습니다")
+        else:
+            direct_error = "HTTP {}".format(getattr(response, "status_code", "?"))
+    except Exception as error:
+        direct_error = str(error)
+
+    primary = _darkreading_primary_source(url)
+    if primary:
+        primary_url = primary["url"]
+        try:
+            response = network_safety.safe_get(
+                primary_url, headers=REQUEST_HEADERS, timeout=FETCH_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            text, links = _extract_article_content(_response_text(response), primary_url)
+            if len(text) >= BODY_MIN_CHARS and primary["marker"].lower() in text.lower():
+                links = [{"url": primary_url, "text": "분석 근거: {} 원문".format(primary["label"])}] + [
+                    item for item in links if item["url"] != primary_url
+                ][:MAX_LINKS - 1]
+                log("    Dark Reading 인용 원문({}) {:,}자 수집".format(primary["label"], len(text)))
+                return text, links
+            direct_error = "인용 원문 본문 또는 주제 확인 실패"
+        except Exception as error:
+            direct_error = "{}; 인용 원문: {}".format(direct_error or "직접 수집 실패", error)
+
+    log("[-] 본문 수집 실패({}): {}".format(url[:70], direct_error or "본문이 짧습니다"))
+    return "", []
 
 
 # 알려진 위협 행위자 이름. 분류가 위협 범주가 아닌 기사에서 "그래도 위협 사건인가"를
@@ -302,14 +396,24 @@ def build_prompt(title, body, category_hint):
             '원문에 없는 패치 버전·설정·기한을 만들지 말고 벤더 확인이 필요한 것으로 남겨라.\n'
         )
     else:
-        sections = '[주요 내용] 본문의 핵심 사실·수치·일정·고유명사를 빠뜨리지 말고 구체적으로 서술하라(위협·공격을 전제로 지어내지 말 것). 5문장 이상.\n[의미와 영향] 보안 업계·기업·이용자에게 어떤 의미·영향이 있는지, 무엇이 달라지는지를 본문 근거로 쓰라. 3문장 이상.\n[참고 사항] 실무자가 확인·검토해볼 점 3개. 각 항목에 무엇을 어떻게 확인할지 함께 쓰고, 어느 기사에나 통하는 일반론은 쓰지 마라.\n'
+        sections = '[주요 내용] 본문의 핵심 사실·수치·일정·고유명사를 빠뜨리지 말고 구체적으로 서술하라(위협·공격을 전제로 지어내지 말 것). 5문장 이상.\n[의미와 영향] 보안 업계·기업·이용자에게 어떤 의미·영향이 있는지, 무엇이 달라지는지를 본문 근거로 쓰라. 3문장 이상.\n[참고 사항] 실무자가 확인·검토해볼 점 3개. "1."·"2."·"3." 번호를 붙여 한 줄에 한 항목씩 쓰고(한 줄에 여러 번호를 이어 쓰지 마라), 각 항목에 무엇을 어떻게 확인할지 함께 쓰고, 어느 기사에나 통하는 일반론은 쓰지 마라.\n'
+
+    # 정보성 기사에서는 기사의 핵심 표준·제도·시스템이 곧 선수 지식이다. 실측(카테나-X
+    # 기사): "이 기사에만 등장하는 제품·브랜드명 금지·최대 3개" 규칙 때문에 독자가 가장
+    # 먼저 알아야 할 카테나-X·DPP 같은 이름이 빠지거나 한두 개로 잘렸다. 위협 기사는
+    # 지금 규칙(3개, 기사 고유 제품명 금지)을 그대로 쓴다.
+    if threat:
+        glossary_rules = '- 고를 것: 특정 기술·기법·표준·시스템의 이름(예: Active Directory, RMM, 횡적 이동, DLL 사이드로딩, KCMVP)\n- 고르지 말 것: 실무자가 이미 아는 보안 상식어(악성코드, 피싱, 랜섬웨어, 자격 증명, 데이터 유출, 취약점, 보안 패치, 공급망 공격 등), 널리 알려진 서비스·회사명(GitHub, npm, AWS, Windows), 이 기사에만 등장하는 제품·브랜드명\n- 최대 3개까지만 쓰고, 개수를 채우려고 상식어를 넣지 마라. 기준에 맞는 용어가 하나도 없으면 항목 대신 "- 해당 없음" 한 줄만 써라.\n'
+    else:
+        glossary_rules = '- 고를 것: 이 기사의 핵심인 표준·제도·규제·시스템·기술의 이름을 먼저 골라라(예: 카테나-X, 데이터 스페이스, DPP, SBOM, 제로 트러스트). 기사를 이해하는 데 꼭 필요하면 기사에 나온 서비스·플랫폼 이름도 된다.\n- 고르지 말 것: 실무자가 이미 아는 보안 상식어(악성코드, 피싱, 랜섬웨어, 자격 증명, 데이터 유출, 취약점, 보안 패치, 공급망 공격 등), 널리 알려진 서비스·회사명(GitHub, npm, AWS, Windows), 회사·기관 이름 자체\n- 최대 5개까지만 쓰고, 개수를 채우려고 상식어를 넣지 마라. 기준에 맞는 용어가 하나도 없으면 항목 대신 "- 해당 없음" 한 줄만 써라.\n'
 
     return (persona + ' 아래 보안 관련 기사를 심층 분석해 한국어 존댓말로 작성하라.\n\n제목: ' + title
-            + '\n\n출력의 맨 첫 줄에 이 기사가 다음 중 무엇에 해당하는지 정확히 하나만 골라 "[분류: 카테고리명]" 형식으로 써라(목록 밖의 이름을 만들지 마라) — 목록: ' + ", ".join(REPORT_CATEGORIES)
-            + '. 그 다음 줄부터 아래 형식을 따라라.\n\n출력 형식:\n[핵심 요약] 2~3문장\n'
+            + '\n\n출력의 맨 첫 줄에 이 기사가 다음 중 무엇에 해당하는지 정확히 하나만 골라 "[분류: 카테고리명]" 형식으로 써라(목록 밖의 이름을 만들지 마라) — 목록: ' + ", ".join(CATEGORY_CHOICES)
+            + '. ' + CATEGORY_GUIDE
+            + ' 그 다음 줄부터 아래 형식을 따라라.\n\n출력 형식:\n[핵심 요약] 2~3문장\n'
             + sections
-            + '[선수 정보]\n- 용어명1: 이 용어를 모르면 위 분석을 이해할 수 없는 실무자를 위한 1문장 해설\n- 용어명2: 용어명1과 동일한 형태의 해설\n\n섹션 누락 금지: 위 출력 형식의 섹션을 맨 끝의 [조사 대상]까지 하나도 빠짐없이 순서대로 써라 — [권장 대응]이나 [선수 정보]에서 끝내지 마라. [조사 대상]은 도구가 읽는 마지막 섹션이라 빠지면 자동 조사가 통째로 돌지 않는다.\n\n번호 목록 작성 규칙: 번호(예: "1.")만 쓰고 뒤에 설명 문장을 비워두지 마라 — 쓰기로 한 항목은 반드시 같은 줄에 실질적인 문장으로 채우고, 번호는 1부터 순서대로 매겨라.\n\n강조 규칙: 각 섹션에서 가장 핵심적인 용어·수치·행위만 **이렇게** 볼드로 표시하라. 섹션당 2~4개로 제한하고, 문장 전체를 통째로 볼드 처리하지 마라.\n\n선수 정보 작성 규칙: 독자는 보안 실무자다. "이 단어를 모르면 위 분석을 못 읽는가"만 기준으로 삼아라.\n- 고를 것: 특정 기술·기법·표준·시스템의 이름(예: Active Directory, RMM, 횡적 이동, DLL 사이드로딩, KCMVP)\n- 고르지 말 것: 실무자가 이미 아는 보안 상식어(악성코드, 피싱, 랜섬웨어, 자격 증명, 데이터 유출, 취약점, 보안 패치, 공급망 공격 등), 널리 알려진 서비스·회사명(GitHub, npm, AWS, Windows), 이 기사에만 등장하는 제품·브랜드명\n- 최대 3개까지만 쓰고, 개수를 채우려고 상식어를 넣지 마라. 기준에 맞는 용어가 하나도 없으면 항목 대신 "- 해당 없음" 한 줄만 써라.\n- 해설에 용어를 그대로 되풀이하지 마라. 그 용어가 무엇을 하는지, 이 기사에서 왜 중요한지를 써라.\n- 용어명은 본문에 나온 표기 그대로 쓰고 볼드(**)나 번호를 붙이지 마라.\n\n주의: 본문에 없는 사실을 지어내지 마라. 본문이 부실하면 그 사실을 그대로 밝혀라. 모든 출력은 한국어로만 쓰고 한자·중국어를 섞지 마라.'
-            + '\n\n근거 규칙: 여러 독립 사건을 다룬 종합 기사라면 기존 섹션 안에서 사건별로 나누어 쓰고, 하나의 침투·실행·지속화·확산 체인으로 합치지 마라. 원문에 없는 단계는 "원문 미기재"로 남기고 다른 사건의 C2·파일·기법을 옮겨 붙이지 마라. 기사 출처·참고 문서 URL은 IOC나 조사 대상 URL로 넣지 마라. ATT&CK ID와 이름 및 실제 행위가 모두 맞는 경우만 쓰고, 추정 매핑은 생략하라. OAuth 정상 인증 흐름 악용을 비밀번호 탈취나 MFA 직접 우회로 바꾸어 쓰지 마라. 패치 버전·설정·기한을 임의로 보충하지 마라.'
+            + '[선수 정보]\n- 용어명1: 이 용어를 모르면 위 분석을 이해할 수 없는 실무자를 위한 1문장 해설\n- 용어명2: 용어명1과 동일한 형태의 해설\n\n섹션 누락 금지: 위 출력 형식의 섹션을 맨 끝의 [조사 대상]까지 하나도 빠짐없이 순서대로 써라 — [권장 대응]이나 [선수 정보]에서 끝내지 마라. [조사 대상]은 도구가 읽는 마지막 섹션이라 빠지면 자동 조사가 통째로 돌지 않는다.\n\n번호 목록 작성 규칙: 번호(예: "1.")만 쓰고 뒤에 설명 문장을 비워두지 마라 — 쓰기로 한 항목은 반드시 같은 줄에 실질적인 문장으로 채우고, 번호는 1부터 순서대로 매겨라.\n\n강조 규칙: 각 섹션에서 가장 핵심적인 용어·수치·행위만 **이렇게** 볼드로 표시하라. 섹션당 2~4개로 제한하고, 문장 전체를 통째로 볼드 처리하지 마라.\n\n선수 정보 작성 규칙: 독자는 보안 실무자다. "이 단어를 모르면 위 분석을 못 읽는가"만 기준으로 삼아라.\n' + glossary_rules + '- 해설에 용어를 그대로 되풀이하지 마라. 그 용어가 무엇을 하는지, 이 기사에서 왜 중요한지를 써라.\n- 용어명은 본문에 나온 표기 그대로 쓰고 볼드(**)나 번호를 붙이지 마라.\n\n주의: 본문에 없는 사실을 지어내지 마라. 본문이 부실하면 그 사실을 그대로 밝혀라. 모든 출력은 한국어로만 쓰고 한자·중국어를 섞지 마라.'
+            + '\n\n근거 규칙: 제목의 주된 사건을 중심으로 분석하라. 본문 끝에 관련 동향으로 병기된 별도 캠페인은 주된 사건의 공격 단계·IOC·조사 목표에 합치지 마라. 여러 독립 사건을 주제로 다룬 종합 기사라면 기존 섹션 안에서 사건별로 나누어 쓰고, 하나의 침투·실행·지속화·확산 체인으로 합치지 마라. 원문에 없는 단계는 "원문 미기재"로 남기고 다른 사건의 C2·파일·기법을 옮겨 붙이지 마라. 기사 출처·참고 문서 URL은 IOC나 조사 대상 URL로 넣지 마라. ATT&CK ID와 이름 및 실제 행위가 모두 맞는 경우만 쓰고, 추정 매핑은 생략하라. OAuth 정상 인증 흐름 악용을 비밀번호 탈취나 MFA 직접 우회로 바꾸어 쓰지 마라. 패치 버전·설정·기한을 임의로 보충하지 마라.'
             + analysis_targets.indicator_spec()
             + "\n\n본문:\n" + (body or "(본문을 가져오지 못해 제목만으로 분석합니다.)"))
 
@@ -351,6 +455,42 @@ def extract_category(text):
     category = normalize_category(match.group(1))
     rest = (text[:match.start()] + text[match.end():]).lstrip("\n").strip()
     return category, rest
+
+
+INLINE_NUMBER_RE = re.compile(r"(?<=\s)(\d{1,2})[.)]\s")
+
+
+def split_inline_numbering(text):
+    """한 줄에 이어 쓴 "1. … 2. … 3. …"을 줄로 나눈다.
+
+    프롬프트가 한 줄에 한 항목을 요구해도 모델이 이어 쓸 때가 있다(실측: 카테나-X 건의
+    [참고 사항]이 한 줄이라 화면에 항목 하나로 뭉쳤다). 1로 시작하는 줄에서 2, 3…이
+    차례대로 나오는 자리만 나눈다 — "버전 1.2" 같은 숫자는 순서가 안 맞아 그대로 둔다.
+    """
+    out = []
+    for line in (text or "").split("\n"):
+        head = re.match(r"^(\s*\[[^\]\n]{1,20}\])\s*(?=1[.)]\s)", line)
+        if head:
+            # "[참고 사항] 1. …"처럼 헤더와 같은 줄에 붙은 목록은 헤더를 떼어 둔다.
+            out.append(head.group(1).strip())
+            line = line[head.end():]
+        if not re.match(r"^\s*1[.)]\s", line):
+            out.append(line)
+            continue
+        cuts, expected = [], 2
+        for match in INLINE_NUMBER_RE.finditer(line):
+            if int(match.group(1)) == expected:
+                cuts.append(match.start())
+                expected += 1
+        if not cuts:
+            out.append(line)
+            continue
+        start = 0
+        for cut in cuts:
+            out.append(line[start:cut].rstrip())
+            start = cut
+        out.append(line[start:].rstrip())
+    return "\n".join(out)
 
 
 def extract_glossary(text):
@@ -541,6 +681,10 @@ def analyze_one(job):
         return None
 
     body, links = fetch_article_text(url)
+    primary = _darkreading_primary_source(url)
+    fallback_url = (primary["url"] if primary and any(
+        link.get("url") == primary["url"] and str(link.get("text") or "").startswith("분석 근거:")
+        for link in links) else "")
     source = job.get("source_label") or "?"
     if body:
         log("    본문 {:,}자 수집 ({})".format(len(body), source))
@@ -577,15 +721,36 @@ def analyze_one(job):
             "analyzed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 
-    prompt = build_prompt(title, body[:BODY_MAX_CHARS], job.get("category") or "")
+    focused_body, focused_links = _focus_article(body, links)
+    if focused_body != body:
+        log("    관련 캠페인 단락 분리: 주기사 {:,}자 / 별도 사례 {:,}자".format(
+            len(focused_body), len(body) - len(focused_body)))
+    body, links = focused_body, focused_links
+    analysis_body = body[:BODY_MAX_CHARS]
+    if fallback_url:
+        analysis_body = ("Dark Reading 기사 본문은 접근이 제한되어, 해당 기사가 직접 인용한 "
+                         "{}의 연구 원문을 분석 근거로 사용합니다. 이 자료의 내용만 원문 "
+                         "사실로 취급하고 Dark Reading 자체의 추가 보도는 추정하지 마세요.\n\n{}"
+                         .format(primary["label"], analysis_body))
+    prompt = build_prompt(title, analysis_body, job.get("category") or "")
 
     started = time.time()
     # [조사 대상] 목록은 분석문 맨 끝에 온다. 추론 모델이 기본 8192 토큰에서 잘리면 그
     # 목록부터 잘려 조사 입력이 통째로 빈다(실측 2026-09-26: 같은 기사가 21,635자 →
     # 4,988자로 잘렸다). 판단 호출과 같은 상한을 쓴다.
-    raw = common_utils.llm_generate(prompt, timeout=response_synth.SYNTH_TIMEOUT,
-                                    nvidia_max_attempts=3,
-                                    max_tokens=response_synth.SYNTH_MAX_TOKENS)
+    stage_client, _ = worker_progress.current()
+    base_digest = worker_progress.fingerprint(
+        prompt, common_utils.LLM_PROVIDERS, common_utils.NVIDIA_MODEL,
+        common_utils.OLLAMA_MODEL, response_synth.SYNTH_MAX_TOKENS)
+    raw = worker_progress.load(stage_client, job.get("ref"), "base", base_digest)
+    if raw:
+        log("    기본 분석 체크포인트 재사용")
+    else:
+        raw = common_utils.llm_generate(prompt, timeout=response_synth.SYNTH_TIMEOUT,
+                                        nvidia_max_attempts=3,
+                                        max_tokens=response_synth.SYNTH_MAX_TOKENS)
+        if raw:
+            worker_progress.save(stage_client, job.get("ref"), "base", base_digest, raw)
     if not raw:
         log("[-] LLM 생성 실패: {}".format(title[:50]))
         return None
@@ -596,6 +761,9 @@ def analyze_one(job):
     # 보이고, 뒤따르는 섹션 파서들도 이 섹션을 본문으로 오인한다.
     targets = analysis_targets.parse(analysis)
     analysis = analysis_targets.strip(analysis)
+    if fallback_url:
+        analysis = ("[분석 근거] Dark Reading 본문 접근이 제한되어, 이 기사가 인용한 "
+                    "{}의 연구 원문을 분석했습니다.\n\n{}".format(primary["label"], analysis))
     # 섹션이 빠지면 조사 입력이 정규식 추출분만 남아 트랙이 덜 선다. 조용히 넘어가면
     # "조사할 게 없는 기사"와 구별되지 않으므로 로그에 남긴다(실측: 프롬프트가
     # "[선수 정보]까지 쓰라"고 못박고 있어서 모델이 이 섹션을 건너뛴 회차가 있었다).
@@ -609,15 +777,24 @@ def analyze_one(job):
     # 정규식 추출과 LLM이 준 목록을 합친다. 정규식은 원문에 문자 그대로 있는 것만
     # 잡고, LLM은 우리말로 풀어 쓴 것까지 잡는다 — 둘의 사각지대가 다르다.
     iocs = analysis_targets.merge_iocs(common_utils.extract_iocs(body), targets)
-    iocs, _ = source_evidence.filter_iocs(iocs, [url])
-    targets = source_evidence.filter_targets(targets, [url])
-    iocs = source_evidence.assess_iocs(iocs, [{"url": url, "text": body}])
+    source_urls = [url, fallback_url] if fallback_url else [url]
+    iocs, _ = source_evidence.filter_iocs(iocs, source_urls)
+    targets = source_evidence.filter_targets(targets, source_urls)
+    iocs = source_evidence.assess_iocs(iocs, [{"url": fallback_url or url, "text": body}])
     targets = source_evidence.restrict_targets(targets, iocs)
+
+    kind = article_kind.classify(category or job.get("category") or "", targets, iocs,
+                                 threat_substance=has_threat_substance(title, body),
+                                 text=title + "\n" + analysis)
+    targets["article_kind"] = kind["kind"]
+    targets["article_subtype"] = kind["subtype"]
+    targets["article_kind_reason"] = kind["reason"]
+    log("    기사 유형: {} ({})".format(kind["kind"], kind["reason"]))
 
     # The article analysis is complete here. Decide which of its issues warrant
     # investigation before choosing external lookups.
     try:
-        decisions = issue_decision.decide(title, body[:BODY_MAX_CHARS], analysis, targets)
+        decisions = issue_decision.decide(title, analysis_body, analysis, targets)
         if decisions:
             targets = issue_decision.apply(targets, decisions)
         else:
@@ -627,7 +804,7 @@ def analyze_one(job):
         log("[-] 이슈별 판단 예외 — 원문·기본 분석으로 조사 후보를 복구합니다: {}".format(error))
         try:
             targets = issue_decision.apply(
-                targets, issue_decision.fallback(title, body[:BODY_MAX_CHARS], analysis, targets))
+                targets, issue_decision.fallback(title, analysis_body, analysis, targets))
         except Exception as fallback_error:
             targets["decision_status"] = "failed"
             log("[-] 이슈별 판단 복구 실패: {}".format(fallback_error))
@@ -638,11 +815,23 @@ def analyze_one(job):
     # 실패해도 분석 결과는 그대로 저장한다.
     investigation_block = None
     try:
+        investigation_digest = worker_progress.fingerprint(
+            title, analysis, targets, iocs, body[:BODY_MAX_CHARS],
+            os.environ.get("BROWSER_RESEARCH_ENABLED"),
+            os.environ.get("BROWSER_RESEARCH_ISOLATED_WORKER"))
+        investigation_block = worker_progress.load(
+            stage_client, job.get("ref"), "investigation", investigation_digest)
+        if investigation_block:
+            log("    조사 체크포인트 재사용")
         # 원문 발췌도 함께 넘긴다 — 패턴 합성의 근거 확인은 우리말 분석문만으로는
         # 부족하다(URL·경로·명령줄은 원문에만 원형으로 남는 경우가 있다).
-        investigation_block = investigation.build_for_article(
-            iocs, text=analysis, title=title, category=category or "",
-            body=body[:BODY_MAX_CHARS], targets=targets, links=links, article_url=url)
+        if investigation_block is None:
+            investigation_block = investigation.build_for_article(
+                iocs, text=analysis, title=title, category=category or "",
+                body=body[:BODY_MAX_CHARS], targets=targets, links=links, article_url=url)
+            if investigation_block and (investigation_block.get("synthesis_status") or {}).get("status") != "failed":
+                worker_progress.save(stage_client, job.get("ref"), "investigation",
+                                     investigation_digest, investigation_block)
         if investigation_block:
             route = investigation_block.get("route") or {}
             log("    조사&대응: {} / 시드 {}개 / 악성코드 {}건".format(
@@ -651,11 +840,19 @@ def analyze_one(job):
     except Exception as error:
         log("[-] 조사&대응 생성 실패(분석 결과에는 영향 없음): {}".format(error))
 
+    analysis = split_inline_numbering(analysis)
+    if article_kind.is_informational(targets) and investigation_block:
+        reading = investigation_block.get("reading_list") or []
+        if reading:
+            import briefing
+            analysis += "\n\n" + briefing.reading_section(investigation_block)
+
     return {
         "ref": job.get("ref"),
         "title": title,
         "url": url,
         "source_label": job.get("source_label") or "",
+        "source_fallback_url": fallback_url,
         "analysis": analysis,
         "links": links,
         "iocs": source_evidence.display_iocs(iocs),
@@ -704,10 +901,14 @@ def store_result(client, record):
               ("analysis", "links", "iocs", "category", "attack_techniques", "glossary",
                "attack_grouped", "investigation", "targets")}
     if record.get("collection_failed"):
-        cached["collection_failed"] = True
-    cached["partial"] = False
-    client.set("analysis:" + record["ref"], json.dumps(cached, ensure_ascii=False),
-               ex=ANALYSIS_CACHE_TTL_SECONDS)
+        # 원문 접근 실패는 일시적일 수 있다. 실패 문구를 90일 캐시하면 사이트가
+        # 복구되어도 같은 기사가 계속 실패 상태로 남으므로, 이력에만 남기고 다음
+        # 요청이 다시 수집을 시도하게 한다.
+        client.delete("analysis:" + record["ref"])
+    else:
+        cached["partial"] = (record.get("investigation") or {}).get("synthesis_status", {}).get("status") == "failed"
+        client.set("analysis:" + record["ref"], json.dumps(cached, ensure_ascii=False),
+                   ex=ANALYSIS_CACHE_TTL_SECONDS)
 
     # 같은 ref가 이미 있으면 최신 결과로 교체한다(analyze.js의 upsertInsightRecord와 동일).
     existing = client.lrange(INSIGHTS_LIST_KEY, 0, -1)
@@ -832,6 +1033,10 @@ def _run_once():
         return
 
     deadline = time.time() + RUN_BUDGET_SECONDS
+    recovered = worker_progress.recover_expired(client, QUEUE_KEY)
+    promoted = worker_progress.promote_retries(client, QUEUE_KEY)
+    if recovered or promoted:
+        log("[*] 중단 작업 {}건 회수, 재시도 {}건 재등록".format(recovered, promoted))
     if process_summary_job(client) and time.time() >= deadline:
         log("[*] 일일 요약 처리로 이번 회차 예산을 사용했습니다.")
         return
@@ -848,34 +1053,60 @@ def _run_once():
             log("[*] 이번 회차 예산 소진 — 나머지는 다음 실행에서 처리합니다.")
             break
 
-        raw = client.lpop(QUEUE_KEY)
+        raw = worker_progress.claim(client, QUEUE_KEY)
         if raw is None:
             break
         try:
             job = json.loads(raw)
         except ValueError:
             log("[-] 큐 항목 파싱 실패 — 버립니다")
+            worker_progress.release(client, raw)
             continue
 
         log("[*] 분석 시작: {}".format((job.get("title") or "")[:60]))
+        campaign_radar.mark_analysis_status(client, job, "running")
+        record_digest = worker_progress.fingerprint(
+            job.get("ref"), job.get("url"), job.get("title"))
+        record = (worker_progress.load(client, job.get("ref"), "record", record_digest)
+                  if job.get("_retry_count") else None)
         try:
-            record = analyze_one(job)
+            if record is None:
+                token = worker_progress.activate(client, job.get("ref"))
+                try:
+                    record = analyze_one(job)
+                finally:
+                    worker_progress.reset(token)
         except Exception as error:  # 한 건의 실패가 나머지를 막지 않게
             log("[-] 분석 중 예외: {}".format(error))
             record = None
 
         if not record:
-            # 실패한 요청은 되돌리지 않는다 — 같은 이유로 계속 실패하면 큐가 막힌다.
-            # 사용자는 대시보드에서 다시 누르면 된다.
-            log("[-] 실패 — 큐에서 제거했습니다: {}".format((job.get("title") or "")[:50]))
+            retry = worker_progress.defer_retry(client, job)
+            log("[-] 실패 — {}: {}".format(
+                "재시도 예약" if retry else "재시도 한도 도달",
+                (job.get("title") or "")[:50]))
+            campaign_radar.mark_analysis_status(client, job, "queued" if retry else "failed")
+            worker_progress.release(client, raw)
             continue
 
         try:
             store_result(client, record)
+            worker_progress.clear(client, job.get("ref"), "record")
+            synthesis_failed = (record.get("investigation") or {}).get(
+                "synthesis_status", {}).get("status") == "failed"
+            retry = worker_progress.defer_retry(client, job) if synthesis_failed else False
+            campaign_radar.mark_analysis_status(
+                client, job, "failed" if record.get("collection_failed") or
+                (synthesis_failed and not retry) else "queued" if retry else "completed")
             done += 1
             log("[+] 저장 완료: {}".format(record["title"][:60]))
         except Exception as error:
             log("[-] 결과 저장 실패: {}".format(error))
+            worker_progress.save(client, job.get("ref"), "record", record_digest, record)
+            retry = worker_progress.defer_retry(client, job)
+            campaign_radar.mark_analysis_status(client, job, "queued" if retry else "failed")
+        finally:
+            worker_progress.release(client, raw)
 
     log("[+] 이번 회차 {}건 처리 (남은 대기 {}건)".format(done, client.llen(QUEUE_KEY)))
 

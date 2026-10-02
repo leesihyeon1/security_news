@@ -92,6 +92,8 @@ def test_combine_incidents_merges_blocklists_with_incident_labels_already_applie
     assert [row["label"] for row in combined["synthesis"]["per_incident"]] == [
         "GhostCode 침해", "WaterPlum 캠페인"]
     assert len(combined["steps"]) == 2
+    assert combined["steps_summary"] == (
+        "사건별 조사 2건 · GhostCode 침해: 부분 확인 · WaterPlum 캠페인: 부분 확인.")
 
 
 def test_combine_incidents_handles_a_block_with_no_response_or_synthesis():
@@ -102,6 +104,25 @@ def test_combine_incidents_handles_a_block_with_no_response_or_synthesis():
     combined = investigation._combine_incidents(sub_blocks)
     assert combined["response"] is None
     assert "synthesis" not in combined
+
+
+def test_combine_incidents_preserves_dynamic_and_browser_tracks_at_top_level():
+    sub_blocks = [{
+        "incident_id": "1", "incident_label": "Custom GPT 유포",
+        "route": {"tracks": ["user_action", "malware"]},
+        "source_urls": [], "seeds": [], "patterns": [], "findings": [], "steps": [],
+        "response": None, "synthesis": None,
+        "malware": {"checked": True, "files": [{"hash": "a" * 64,
+            "behaviour": {"http": ["evil.example"]}}], "findings": ["통신 확인"]},
+        "browser_research": {"questions": ["유포지 연결은?"], "results": [
+            {"source": "archived_scan", "status": "observed", "evidence": {"target_url": "https://chatgpt.com/g/x"}}
+        ]},
+        "research_plan": [{"id": "goal-1", "goal": "유포지 연결은?"}],
+    }]
+    combined = investigation._combine_incidents(sub_blocks)
+    assert combined["malware"]["files"][0]["incident_label"] == "Custom GPT 유포"
+    assert combined["browser_research"]["results"][0]["incident_label"] == "Custom GPT 유포"
+    assert combined["research_plan"][0]["id"] == "goal-1"
 
 
 # ---------------------------------------------------------------------------
@@ -196,14 +217,24 @@ def test_round_loop_stops_as_soon_as_all_questions_are_answered(monkeypatch):
     def fake_synthesize(*a, **k):
         calls.append(k)
         return _verdict(question_status=[
-            {"question": "유포지가 살아있는가", "status": "answered", "answer": "예"}])
+            {"question": "표적은 누구인가", "status": "answered", "answer": "예"}])
 
     monkeypatch.setattr(response_synth, "synthesize", fake_synthesize)
     block = investigation.build(
         [], text="", title="", category="", body="", targets={
-            "objective": "확인한다", "questions": ["유포지가 살아있는가"]})
+            "objective": "확인한다", "questions": ["표적은 누구인가"]})
     assert len(calls) == 1  # 질문이 1라운드에 풀렸으니 2라운드 판단을 다시 부르지 않는다
-    assert block["questions"] == [{"question": "유포지가 살아있는가", "status": "answered"}]
+    assert block["questions"] == [{"question": "표적은 누구인가", "status": "answered"}]
+
+
+def test_lure_question_is_not_answered_by_model_text_without_observation(monkeypatch):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(response_synth, "synthesize", lambda *a, **k: _verdict(
+        question_status=[{"question": "유포지가 살아있는가", "status": "answered", "answer": "예"}]))
+    block = investigation.build([], text="", title="", category="", body="",
+                                targets={"objective": "확인한다", "questions": ["유포지가 살아있는가"]})
+    assert block["questions"] == [{"question": "유포지가 살아있는가", "status": "open"}]
+    assert "현재 DOM" in block["goal_evidence"][0]["missing"]
 
 
 def test_round_loop_runs_a_second_round_on_followups_and_keeps_only_executed_ones(monkeypatch):
@@ -289,6 +320,55 @@ def test_round_loop_retries_web_search_with_open_questions(monkeypatch):
     assert len(web_calls) == 1
     assert web_calls[0] == ["q0"]
     assert len(synth_calls) == 2
+
+
+def test_followup_search_reads_new_source_and_checks_only_supported_indicators(monkeypatch):
+    _patch_common(monkeypatch)
+    report_url = "https://research.vendor.com/report"
+    sample_hash = "a" * 64
+    source_text = ("Sample " + sample_hash + " used C2 server at evil.io. "
+                   "It probed hosts twilio.com during reconnaissance.")
+    calls = []
+
+    def fake_collect(links, article_url="", limit=2, origin="article"):
+        calls.append((links, limit, origin))
+        return {"sources": [{"url": report_url, "host": "research.vendor.com",
+                             "text": source_text, "chars": len(source_text),
+                             "retrieved_at": "2026-10-01T00:00:00Z"}],
+                "steps": ["후속 원문 읽음"], "attempts": [{"url": report_url,
+                "key": "primary", "status": "returned"}]}
+
+    synth_calls = []
+
+    def fake_synthesize(*args, **kwargs):
+        synth_calls.append(kwargs)
+        if len(synth_calls) == 1:
+            return _verdict(question_status=[{"question": "q0", "status": "open"}])
+        return _verdict(question_status=[{"question": "q0", "status": "partial"}])
+
+    checked = []
+
+    def fake_followups(requests, urlscan_key=None, vt_key=None, block=None):
+        checked.extend(requests)
+        return ["후속 지표 관측"], ["조회 완료"]
+
+    monkeypatch.setattr(primary_sources, "collect", fake_collect)
+    monkeypatch.setattr(response_synth, "synthesize", fake_synthesize)
+    monkeypatch.setattr(investigation.output_critic, "review", lambda *a, **k: [])
+    monkeypatch.setattr(investigation, "_run_followups", fake_followups)
+    monkeypatch.setattr(web_search, "analyze", lambda *a, **k: {
+        "findings": ["새 보고서 발견"], "steps": [], "references": [report_url],
+        "terms": ["sample"]})
+    block = investigation.build([], text="", title="", category="", body="",
+                                targets={"objective": "확인", "questions": ["q0"]})
+
+    assert calls == [([{"url": report_url}], 2, "search")]
+    assert len(synth_calls) == 2
+    assert report_url in synth_calls[1]["primary"]
+    assert sample_hash in synth_calls[1]["primary"]
+    assert {item["value"] for item in checked} == {sample_hash, "evil.io"}
+    assert "twilio.com" not in str(block["response"].get("blocklists"))
+    assert block["source_urls"] == [report_url]
 
 
 def test_round_loop_stops_when_nothing_new_is_found(monkeypatch):

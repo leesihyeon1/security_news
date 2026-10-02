@@ -55,6 +55,9 @@ def test_unmapped_analysis_stage_becomes_an_explicit_question(monkeypatch):
     assert case["missing_steps"] == ["s2"]
     assert case["decision_status"] == "review_required"
     assert any("브라우저 자격증명 탈취" in question for question in case["questions"])
+    assert any(issue["title"] == "2단계 · 브라우저 자격증명 탈취"
+               for issue in case["issues"])
+    assert all("공격 단계 s" not in issue["title"] for issue in case["issues"])
 
 
 def test_missing_completion_criteria_is_not_marked_confirmed(monkeypatch):
@@ -110,7 +113,19 @@ def test_unscoped_multi_incident_stage_requires_review(monkeypatch):
     analysis = "[기술적 세부사항]\n1. 소속이 명시되지 않은 파일 실행\n[권장 대응]"
     cases = issue_decision.decide("종합 기사", "파일 실행", analysis, targets)
     assert all(case["decision_status"] == "review_required" for case in cases)
-    assert any("s1" in reason for reason in cases[0]["review_reasons"])
+    assert any("1단계 · 소속이 명시되지 않은 파일 실행" in reason
+               for reason in cases[0]["review_reasons"])
+
+
+def test_fallback_stage_uses_action_instead_of_internal_id(monkeypatch):
+    monkeypatch.setattr(issue_decision.common_utils, "llm_generate", lambda *a, **k: "{}")
+    analysis = ("[기술적 세부사항]\n1. 첫 단계\n2. 둘째 단계\n"
+                "3. **Custom GPT ClickFix RAT 캠페인(1)**: MSI 설치 후 DLL을 로드한다\n"
+                "[권장 대응]\n")
+    case = issue_decision.decide("기사", "사용자 실행", analysis, {})[0]
+    third = next(issue for issue in case["issues"] if "s3" in issue["step_ids"])
+    assert third["title"] == "3단계 · MSI 설치 후 DLL을 로드한다"
+    assert "s3" not in third["question"]
 
 
 def test_invalid_decision_keeps_source_grounded_questions_for_review(monkeypatch):
