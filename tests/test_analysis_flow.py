@@ -135,3 +135,40 @@ def test_prompt_requests_flow_before_final_targets():
     prompt = analysis_worker.build_prompt("제목", "본문", "공격캠페인")
     assert analysis_flow.SPEC in prompt
     assert prompt.index(analysis_flow.SPEC) < prompt.index(analysis_worker.analysis_targets.indicator_spec())
+
+
+def test_split_removes_flow_json_written_without_its_header():
+    import analysis_flow
+    text = ("[선수 정보]\n- RMM: 원격 관리 도구 설명 문장입니다.\n\n"
+            '{"kind":"attack","scope":"single","nodes":[{"id":"n1"}],"edges":[]}\n\n'
+            "[조사 대상]\n도메인: 없음")
+    clean, value = analysis_flow.split(text)
+    assert value["kind"] == "attack"
+    assert '"nodes"' not in clean
+    assert "[조사 대상]" in clean and "RMM" in clean
+
+
+def test_split_drops_truncated_headerless_json():
+    import analysis_flow
+    clean, value = analysis_flow.split('[선수 정보]\n- A: 설명\n\n{"kind":"attack","nodes":[{"id":"n1","label":"잘')
+    assert value is None
+    assert "kind" not in clean and clean.startswith("[선수 정보]")
+
+
+def test_evidence_accepts_stitched_verbatim_sentences_only():
+    import analysis_flow
+    source = ("The installer drops DLLs. It then registers two services. "
+              "Later the attacker runs ScreenConnect through RunFile.")
+    stitched = "The installer drops DLLs. Later the attacker runs ScreenConnect through RunFile."
+    assert analysis_flow._evidence(stitched, source) == (
+        "The installer drops DLLs. … Later the attacker runs ScreenConnect through RunFile.")
+    assert analysis_flow._evidence("The installer drops DLLs ... It then registers two services.", source)
+    assert analysis_flow._evidence("The installer drops DLLs. It steals every password.", source) == ""
+
+
+def test_stitched_evidence_stays_within_display_limit():
+    import analysis_flow
+    first, second = "A" * 12 + " first sentence " + "x" * 300 + ".", "Second sentence " + "y" * 300 + "."
+    source = first + " middle text here. " + second
+    out = analysis_flow._evidence(first + " " + second, source)
+    assert out and len(out) <= 500 and out in source
