@@ -1408,15 +1408,17 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 again["followup_evidence"] = (verdict.get("followup_evidence") or []) + extra_lines
                 verdict = again
                 _apply_status(verdict)
-            if verdict and not research_state["ran"]:
-                # 시간 예산·조기 종료로 반복이 재조사까지 닿지 못한 경우. 외부 조회는 한 번
-                # 하고, 판단을 다시 받는 대신 목표별 증거 판정만 다시 계산한다(실측
-                # 2026-10-02: 모델 지연으로 180초 예산이 먼저 차서 재조사가 한 번도 안 돌았다).
+            if not research_state["ran"]:
+                # 시간 예산·조기 종료로 반복이 재조사까지 닿지 못한 경우, 또는 판단 생성이
+                # 실패한 경우. 재조사는 모델을 부르지 않으므로 판단이 없어도 돌린다(실측
+                # 2026-10-02: 모델 지연으로 180초 예산이 먼저 찼고, 다음 회차에는 판단 자체가
+                # 504로 실패해 재조사가 두 번 다 안 돌았다). 판단 문장은 다시 받지 않는다.
                 if _research_round():
-                    goal_evidence.reconcile(verdict, block)
+                    if verdict:
+                        goal_evidence.reconcile(verdict, block)
                     steps.append({"track": "목표별 재조사", "text":
-                                  "재조사 결과는 목표별 증거 판정에 반영했고, 종합 판단 문장은 다시 "
-                                  "받지 않았습니다(시간 예산)."})
+                                  "재조사 결과는 조사 기록과 목표별 증거 판정에 반영했고, 종합 판단 "
+                                  "문장은 다시 받지 않았습니다."})
             if verdict is not None and executed_pending is not None:
                 # 실행한 것만 남긴다 — 화면에서 "요청한 것과 다른 것을 조회했다"로
                 # 읽히지 않게(마지막으로 실제 돌린 라운드의 목록만).
