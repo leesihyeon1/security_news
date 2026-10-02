@@ -14,6 +14,7 @@
     보지 않는다 — 실행 결과는 goal_evidence.reconcile이 다시 판정한다.
 """
 
+import os
 import re
 import urllib.parse
 
@@ -113,8 +114,11 @@ def _text_links(block, evidence_text):
     seeds = {research_entities.web_url(seed.get("target_url")) for seed in block.get("seeds") or []
              if seed.get("target_url")}
     seed_hosts = {str(seed.get("domain") or "").lower() for seed in block.get("seeds") or []}
+    # 경로가 한 단계뿐인 주소(chatgpt.com/create, /pricing 등)는 서비스 안내 페이지다. 개별
+    # 콘텐츠는 /g/<id>, /view/<id>처럼 두 단계 이상이다.
     rows = [{"url": url, "from": "원문 서술"} for url in research_entities.shared_urls(evidence_text)
-            if url not in seeds]
+            if url not in seeds
+            and len([part for part in urllib.parse.urlsplit(url).path.split("/") if part]) >= 2]
     # 시드와 다른 플랫폼(GPT → Google Sites)이 다음 단계다. 같은 플랫폼의 다른 주소
     # (chatgpt.com/create 같은 안내 링크)는 뒤로 미룬다.
     return sorted(rows, key=lambda row: (urllib.parse.urlsplit(row["url"]).hostname or "") in seed_hosts)
@@ -174,6 +178,8 @@ def platform_baseline(block, api_key, attempted, lure_hunter):
     공통 요청(예: chatgpt.com의 flush?lightweight_authenticated=)을 캠페인 특징에서
     걸러내는 용도로만 쓴다.
     """
+    # 워커는 키를 넘기지 않고 각 헌터가 환경변수에서 읽는다 — 여기서도 같은 자리를 본다.
+    api_key = api_key or os.environ.get("URLSCAN_API_KEY", "")
     if not api_key:
         return [], "URLSCAN_API_KEY가 없어 비교군을 수집하지 못했습니다."
     seeds = block.get("seeds") or []

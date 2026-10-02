@@ -218,3 +218,12 @@ def test_baseline_skips_duplicate_and_suspicious_pages():
     block = _block()
     ra.platform_baseline(block, "key", set(), Lure())
     assert [c["uuid"] for c in block["negative_controls"]] == ["b1"]
+
+
+def test_text_links_skip_service_pages_and_baseline_reads_env_key(monkeypatch):
+    block = _block()
+    rows = ra._text_links(block, "see https://chatgpt.com/create and sites.google[.]com/view/lure-x")
+    assert [r["url"] for r in rows] == ["https://sites.google.com/view/lure-x"]
+    monkeypatch.setenv("URLSCAN_API_KEY", "env-key")
+    lines, note = ra.platform_baseline(_block(), None, set(), FakeLure())
+    assert "비교군" in note and "없어" not in note
