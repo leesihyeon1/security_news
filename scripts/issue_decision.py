@@ -136,7 +136,7 @@ def _technical_steps(analysis):
         match = STEP_RE.match(line) if inside else None
         if match and match.group(1).strip():
             steps.append({"id": "s{}".format(len(steps) + 1),
-                          "text": _text(match.group(1), 220)})
+                          "text": _text(match.group(1), 600)})
         if len(steps) >= MAX_ISSUES:
             break
     return steps
@@ -145,11 +145,9 @@ def _technical_steps(analysis):
 def _stage_title(step):
     """Turn an internal step ID into a short, readable issue title."""
     number = re.sub(r"\D", "", step.get("id") or "") or "?"
-    detail = re.sub(r"[*_`]", "", step.get("text") or "").strip()
+    detail = re.sub(r"\*\*|`", "", step.get("text") or "").strip()
     detail = re.sub(r"^.{1,100}캠페인\s*\(\d+\)\s*[:：]\s*", "", detail)
     detail = re.sub(r"\s+", " ", detail).strip(" .:：")
-    if len(detail) > 70:
-        detail = detail[:71].rsplit(" ", 1)[0].rstrip(" ,;:：") + "…"
     return "{}단계 · {}".format(number, detail or "행위 근거 확인 필요")
 
 
@@ -276,10 +274,12 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
     for index, entry in enumerate(source["issues"][:MAX_ISSUES], 1):
         if not isinstance(entry, dict):
             continue
-        title = _text(entry.get("title"), 120)
-        evidence = _text(entry.get("evidence"), 240)
+        matched_step = next((step for step in steps if step["id"] in (entry.get("step_ids") or [])
+                             and entry.get("title") == _stage_title(step)), None)
+        title = _text(entry.get("title"), 700 if matched_step else 120)
+        evidence = _text(entry.get("evidence"), 600 if matched_step else 240)
         disposition = entry.get("disposition")
-        question = _text(entry.get("question"), 300)
+        question = _text(entry.get("question"), 800 if matched_step else 300)
         if not title or not evidence or disposition not in DISPOSITIONS:
             continue
         if disposition == "investigate" and not question:
@@ -341,7 +341,8 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
             questions.append(issue["question"])
     if missing or missing_steps:
         objective = objective.rstrip(".。 ") + "; 추가 조사: " + ", ".join(
-            missing + [_stage_title(step) for step in missing_steps]) + "의 실행·영향 조건 확인."
+            missing + (["기본 분석에서 누락된 공격 단계 {}건".format(len(missing_steps))]
+                       if missing_steps else [])) + "의 실행·영향 조건 확인."
     primary = "" if informational else source.get("primary")
     # 정보성 기사에 헌팅 쿼리·차단 목록 같은 기준이 선언되면 낼 수 없어 "미달"로만 남는다.
     allowed = playbook.INFORMATIONAL_ARTIFACTS if informational else playbook.ARTIFACTS

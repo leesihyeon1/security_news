@@ -128,6 +128,21 @@ def test_fallback_stage_uses_action_instead_of_internal_id(monkeypatch):
     assert "s3" not in third["question"]
 
 
+def test_long_fallback_stage_preserves_full_action_in_issue_and_question(monkeypatch):
+    monkeypatch.setattr(issue_decision.common_utils, "llm_generate", lambda *a, **k: "{}")
+    detail = ("피싱 이메일로 디지털 서명된 MSP360 설치 파일 VIP_ECARD_INVITATION.exe를 전달하고 "
+              + "여러 정상 클라우드 저장소에서 내려받게 한 뒤 " * 8
+              + "ScreenConnect를 설치해 원격 접속을 유지함")
+    analysis = "[기술적 세부사항]\n1. {}\n[권장 대응]\n".format(detail)
+    case = issue_decision.decide("MSP360", "원격 관리 도구의 피싱 악용", analysis, {})[0]
+    issue = next(item for item in case["issues"] if item["step_ids"] == ["s1"])
+    assert issue["title"] == "1단계 · " + detail
+    assert detail in issue["question"]
+    assert detail in issue["evidence"]
+    assert "…" not in issue["title"] + issue["question"]
+    assert "VIP_ECARD_INVITATION.exe" in issue["title"]
+
+
 def test_invalid_decision_keeps_source_grounded_questions_for_review(monkeypatch):
     monkeypatch.setattr(issue_decision.common_utils, "llm_generate", lambda *a, **k: '{}')
     article = "ClickFix 유입 이후 취약 드라이버 악용과 자격증명 탈취가 보고됐다."
