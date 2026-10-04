@@ -31,6 +31,7 @@ from pathlib import Path
 
 import common_utils
 import event_calendar
+import live_news
 from dashboard_text import event_summary, public_text
 
 for stream in (sys.stdout, sys.stderr):
@@ -372,6 +373,7 @@ def _write_and_commit(repo, payload, period, date_stamp, data_dir):
         with path.open("w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
     _rebuild_search_index_from_events(repo)
+    live_news.write_snapshot(data_dir / "latest-news.json")
     _rebuild_issue_history(data_dir)
     calendar_path = data_dir / "calendar-events.json"
     with calendar_path.open("w", encoding="utf-8") as file:

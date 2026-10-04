@@ -33,6 +33,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import common_utils
+from live_news import article_image
 
 # Windows 콘솔(cp949)에서 기사 제목의 특수문자(— 등) 출력이 죽지 않도록 UTF-8로 강제
 for stream in (sys.stdout, sys.stderr):
@@ -147,6 +148,8 @@ def fetch_feed_items(feed):
                 "summary_html": item_text(item, "description"),
                 "content_html": item_text(item, "encoded"),
                 "pub_date": item_text(item, "pubDate"),
+                "image_url": article_image(item, link or guid) or article_image(
+                    item_text(item, "encoded") or item_text(item, "description"), link or guid),
             }
         )
     if items:
@@ -169,6 +172,8 @@ def fetch_feed_items(feed):
                 "summary_html": item_text(entry, "summary"),
                 "content_html": item_text(entry, "content"),
                 "pub_date": item_text(entry, "published") or item_text(entry, "updated"),
+                "image_url": article_image(entry, link) or article_image(
+                    item_text(entry, "content") or item_text(entry, "summary"), link),
             }
         )
     if not items and not any(soup.find(tag) for tag in FEED_ROOT_TAGS):
@@ -234,7 +239,7 @@ ARTICLE_FETCH_RETRIES = 2
 ARTICLE_FETCH_RETRY_DELAY_SECONDS = 3
 
 
-def fetch_article_body(feed, url):
+def fetch_article_body(feed, url, article=None):
     """기사 페이지에서 본문 텍스트 추출. 실패 시 ""(RSS 내용으로 대체).
 
     일부 사이트(예: CrowdStrike)는 RSS에 본문 요약이 아예 없어 이 스크래핑이
@@ -262,6 +267,8 @@ def fetch_article_body(feed, url):
         return ""
 
     soup = BeautifulSoup(resp.content, "html.parser")
+    if article is not None:
+        article["image_url"] = article_image(soup, url) or article.get("image_url", "")
 
     # body_selector가 본문을 여러 조각(문단/섹션 div)으로 나눠 반환하는 사이트가 있다
     # (예: CrowdStrike 블로그 — 이미지·인용구 사이사이로 본문이 여러 div에 쪼개져 있음).
@@ -281,7 +288,7 @@ def fetch_article_body(feed, url):
 def resolve_body(feed, article):
     """본문 우선순위: 기사 페이지(설정 시) → RSS 전문(content:encoded) → RSS 요약"""
     if feed.get("fetch_body"):
-        body = fetch_article_body(feed, article["link"])
+        body = fetch_article_body(feed, article["link"], article)
         if body:
             return body
     return html_to_text(article["content_html"] or article["summary_html"])[:BODY_MAX_CHARS]
@@ -679,6 +686,7 @@ def finalize_feed(result, email_sent):
                 article["id"],
                 article["title"],
                 url=article["link"],
+                image_url=article.get("image_url", ""),
                 summary=(html_to_text(article["summary_html"]) or article["body"])[:500],
                 severity=enrichment.get("severity") or "",
                 cves=article["cves"],

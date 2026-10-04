@@ -2010,7 +2010,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
                cluster=None, pirs=None, content_depth="", body_chars=None,
                recommended_actions=None, affected_versions=None, novelty="", category_reason="",
-               analyst_review=None, affected_packages=None):
+               analyst_review=None, affected_packages=None, image_url=""):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -2028,6 +2028,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "source": source,
         "title": clean_text(title),
         "url": url,
+        "image_url": image_url,
         "summary": clean_text(summary),
         "severity": clean_text(severity),
         "score": score,
@@ -2078,6 +2079,9 @@ def append_events(events, events_file=None):
     with path.open("a", encoding="utf-8") as file:
         for event in events:
             file.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+    if events_file is None:
+        from live_news import publish_events
+        publish_events(events)
 
 def send_email_message(subject, text_body, html_body=None, to_email=None):
     to_email = to_email or DEFAULT_TO_EMAIL

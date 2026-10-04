@@ -71,7 +71,7 @@ def decode_page(raw):
     return raw.decode("utf-8", errors="replace")
 
 
-def fetch_article_body(url):
+def fetch_article_body(url, article=None):
     """기사 페이지에서 본문 텍스트와 입력 일시(KST)를 추출. 실패 시 ("", None)."""
     try:
         resp = requests.get(
@@ -86,6 +86,9 @@ def fetch_article_body(url):
         return "", None
 
     soup = BeautifulSoup(page_text, "html.parser")
+    if article is not None:
+        from live_news import article_image
+        article["image_url"] = article_image(soup, url)
 
     # 개편 레이아웃은 ISO8601(+09:00)을 메타로 그대로 준다 — 화면 표기 파싱보다 안정적
     published_at = None
@@ -355,7 +358,7 @@ def main():
 
     # 기사 본문까지 수집해 CVE 추출·EPSS 연계 긴급도 분류(P1/P2/P3)의 정확도를 높인다
     for news in new_articles:
-        news["body"], news["article_published_at"] = fetch_article_body(news["link"])
+        news["body"], news["article_published_at"] = fetch_article_body(news["link"], news)
         news["extracted_cves"] = common_utils.extract_cves(news["title"], news["summary"], news["body"])
         news["iocs"] = common_utils.extract_iocs(news["body"])
         news["attack_techniques"] = common_utils.extract_attack_techniques(news["title"], news["summary"], news["body"])
@@ -435,6 +438,7 @@ def main():
                 article["id"],
                 article["title"],
                 url=article["link"],
+                image_url=article.get("image_url", ""),
                 summary=article["summary"],
                 severity=enrichment.get("severity") or "",
                 cves=article.get("extracted_cves"),
