@@ -60,8 +60,10 @@ QUEUE_KEY = "analysis:queue"
 SUMMARY_QUEUE_KEY = "report-summary:queue"
 SUMMARY_RESULT_TTL_SECONDS = 60 * 60 * 24 * 90
 INSIGHTS_LIST_KEY = "insights:list"
-MAX_INSIGHTS_LIST_SIZE = 300          # analyze.js와 같은 값이어야 목록이 어긋나지 않는다
-ANALYSIS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 90
+# Redis Cloud 무료 30MB 안에 머물게 한다 — 기록 한 건이 평균 61KB라 300건이면 목록만
+# 18MB이고 분석 캐시까지 더하면 한도를 넘어 새 결과가 저장되지 않는다(noeviction).
+MAX_INSIGHTS_LIST_SIZE = 120          # analyze.js와 같은 값이어야 목록이 어긋나지 않는다
+ANALYSIS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30  # analyze.js와 같은 값
 
 # 한 번 실행에서 처리할 최대 건수. 5분마다 도는데 한 건에 30~90초가 걸리므로,
 # 다음 실행과 겹치지 않도록 여유를 두고 끊는다(작업 스케줄러는 IgnoreNew라
