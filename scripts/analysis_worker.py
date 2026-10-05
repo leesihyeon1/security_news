@@ -1015,16 +1015,17 @@ def process_summary_job(client):
         report = response.json()
         if report.get("period") != "daily" or report.get("generated_at") != report_id:
             raise ValueError("보고서가 갱신되어 이전 요청을 처리하지 않았습니다.")
-        if report.get("narrative") and not any(
-                marker in report["narrative"] for marker in (
-                    "한국어 요약을 준비하지 못했습니다", "AI 해석을 생성하지 못해", "요약을 생성하지 못했습니다")):
+        from report_briefing import narrative_problem
+        if not narrative_problem(report.get("narrative")):
             raise ValueError("현재 보고서에는 이미 AI 요약이 있습니다.")
 
-        from generate_report import ai_public_narrative
-        narrative = ai_public_narrative(report.get("period_label") or "", report.get("stats") or {},
-                                        report.get("cards") or [])
+        from generate_report import refresh_public_summary
+        refresh_public_summary(report)
+        if report["briefing"]["status"] != "ready":
+            raise ValueError("요약할 기사 근거가 부족합니다.")
         result_key = "report-summary:result:" + report_id
-        client.set(result_key, json.dumps({"id": report_id, "narrative": narrative}, ensure_ascii=False),
+        client.set(result_key, json.dumps({"id": report_id, "narrative": report["narrative"],
+                                          "briefing": report["briefing"]}, ensure_ascii=False),
                    ex=SUMMARY_RESULT_TTL_SECONDS)
         client.delete(error_key)
         log("[+] 일일 AI 요약 재생성 완료: {}".format(report_id))

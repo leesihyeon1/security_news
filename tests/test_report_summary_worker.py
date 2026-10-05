@@ -35,16 +35,19 @@ def test_summary_job_uses_public_report_format(monkeypatch):
         raise_for_status=lambda: None, json=lambda: report))
     calls = []
 
-    def generate(label, stats, cards):
-        calls.append((label, stats, cards))
-        return "[총평]\n확인했습니다.\n\n[핵심 위협 TOP 3]\n1. 위협입니다.\n\n[권고 조치]\n1. 점검합니다."
+    def generate(payload):
+        calls.append(payload)
+        payload["narrative"] = "[총평]\n확인했습니다.\n\n[핵심 위협 TOP 3]\n1. 위협입니다.\n\n[권고 조치]\n1. 점검합니다."
+        payload["briefing"] = {"version": 1, "status": "ready", "issues": []}
+        return payload
 
-    monkeypatch.setattr(generate_report, "ai_public_narrative", generate)
+    monkeypatch.setattr(generate_report, "refresh_public_summary", generate)
     assert analysis_worker.process_summary_job(client) is True
-    assert calls == [("기간", {"total": 2}, [])]
+    assert calls == [report]
     stored = json.loads(client.values["report-summary:result:" + REPORT_ID])
     assert stored["id"] == REPORT_ID
     assert "[권고 조치]" in stored["narrative"]
+    assert stored["briefing"]["status"] == "ready"
     assert "report-summary:lock:" + REPORT_ID not in client.values
 
 

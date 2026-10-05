@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from report_briefing import narrative_problem
+
 HEADERS = ("총평", "핵심 위협 TOP 3", "권고 조치")
 PLACEHOLDERS = ("한국어 요약을 준비하지 못했습니다", "AI 해석을 생성하지 못해")
 
@@ -36,6 +38,9 @@ def check_narrative(text):
         errors.append("threat and action counts differ")
     if re.search(r"자사|당사|자산\s*매칭|\bPIR\b", text, re.I):
         errors.append("narrative contains private-context markers; review required")
+    problem = narrative_problem(text)
+    if problem:
+        errors.append(problem)
     return errors
 
 
@@ -50,6 +55,14 @@ def check_report(payload):
     if not isinstance(payload, dict):
         return ["report must be an object"]
     errors = check_narrative(payload.get("narrative"))
+    briefing = payload.get("briefing") or {}
+    if briefing.get("version") == 1 and briefing.get("status") == "ready":
+        problem = narrative_problem(payload.get("narrative"), len(briefing.get("issues") or []))
+        if problem:
+            errors.append("briefing: " + problem)
+        for issue in briefing.get("issues") or []:
+            if not issue.get("sources") or not issue.get("summary") or not issue.get("action"):
+                errors.append("briefing issue is missing sources, summary or action")
     stats = payload.get("stats") or {}
     values = [stats.get(key) for key in ("total", "p1", "p2", "info", "actionable")]
     if not all(type(value) is int and value >= 0 for value in values):

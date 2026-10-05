@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from generate_report import ai_public_narrative
+from generate_report import refresh_public_summary
 
 
 def refresh(repo):
@@ -13,8 +13,7 @@ def refresh(repo):
     for period in ("daily", "weekly"):
         path = repo / "dashboard/data" / (period + "-latest.json")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["narrative"] = ai_public_narrative(payload["period_label"], payload["stats"], payload["cards"])
-        payload["narrative_basis"] = "AI 분석 · 출처와 수집 시각은 각 카드 참조"
+        refresh_public_summary(payload)
         outputs.append((path, payload))
         print(period + " Korean narrative validated", flush=True)
     for path, payload in outputs:
