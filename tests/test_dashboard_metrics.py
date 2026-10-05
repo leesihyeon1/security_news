@@ -49,3 +49,28 @@ def test_report_events_exclude_end_boundary(tmp_path, monkeypatch):
     result = report.load_events_between(datetime(2026, 9, 20), datetime(2026, 9, 21))
     assert len(result) == 1
     assert result[0]["url"].endswith("/0")
+
+
+def test_trending_publishes_to_redis_and_tracks_rank_changes():
+    import json
+
+    class FakeRedis:
+        def __init__(self):
+            self.store = {}
+
+        def get(self, key):
+            return self.store.get(key)
+
+        def set(self, key, value):
+            self.store[key] = value
+
+    client = FakeRedis()
+    assert trending.publish(client, [("Fortinet", 5), ("Lazarus", 3)]) is True
+    first = json.loads(client.store[trending.TRENDING_KEY])
+    assert [item["status"] for item in first["items"]] == ["new", "new"]
+    # 순위가 그대로면 다시 쓰지 않는다(변동 표시를 지우지 않게).
+    assert trending.publish(client, [("Fortinet", 5), ("Lazarus", 3)]) is False
+    assert trending.publish(client, [("Lazarus", 6), ("Fortinet", 5)]) is True
+    second = json.loads(client.store[trending.TRENDING_KEY])
+    assert [(item["term"], item["status"], item["delta"]) for item in second["items"]] == [
+        ("Lazarus", "up", 1), ("Fortinet", "down", 1)]
