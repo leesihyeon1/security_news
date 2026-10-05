@@ -50,6 +50,16 @@ def test_p1_non_cve_campaign_is_not_crowded_out_by_cards():
     assert any(row["ref"] == "one" for row in issues)
 
 
+def test_p2_items_cover_distinct_threat_categories_before_repeating_one():
+    rows = [article("one", category="공격캠페인"),
+            article("second", category="취약점", summary="서버 취약점이 확인됐습니다."),
+            article("third", category="취약점", summary="다른 서버 취약점이 확인됐습니다."),
+            article("fourth", category="침해사고", summary="침해 사고가 확인됐습니다.")]
+    for row in rows:
+        row["level"] = "P2"
+    assert [row["category"] for row in select_issues([], rows)] == ["취약점", "침해사고", "공격캠페인"]
+
+
 def test_no_candidates_skips_model_and_reports_insufficient_evidence(monkeypatch):
     monkeypatch.setattr(common_utils, "llm_generate", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no call")))
     payload = {"stats": {"total": 0}}

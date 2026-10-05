@@ -99,6 +99,8 @@ def select_issues(cards, articles, limit=3):
             candidates.append(candidate)
     candidates.sort(key=lambda row: (
         {"P1": 3, "P2": 2}.get(row["level"], 1),
+        {"개인정보유출": 8, "취약점": 7, "악성코드": 7, "랜섬웨어": 7,
+         "침해사고": 6, "공격캠페인": 5, "공격 동향": 5}.get(row["category"], 0),
         bool(re.search(r"[가-힣]", row["summary"])),
         min(len({s["source_label"] for s in row["sources"]}), 5)), reverse=True)
     unique = []
@@ -110,7 +112,16 @@ def select_issues(cards, articles, limit=3):
                 set(row["cves"]).intersection(old["cves"])) for old in unique):
             continue
         unique.append(row)
-    selected = unique[:limit]
+    selected = []
+    for row in unique:
+        if row["level"] != "P1" and row["category"] in {item["category"] for item in selected}:
+            continue
+        selected.append(row)
+        if len(selected) == limit:
+            break
+    if len(selected) < limit:
+        selected.extend(row for row in unique if row not in selected)
+    selected = selected[:limit]
     # A CVE-only cross-source list must not crowd out a high-priority campaign.
     campaign = next((row for row in unique if row["kind"] == "article" and
                      row["level"] == "P1" and not row["cves"]), None)
