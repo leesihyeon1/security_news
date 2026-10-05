@@ -376,8 +376,9 @@ def has_threat_substance(title, body):
 
 def build_prompt(title, body, category_hint):
     """analyze.js의 buildPrompt와 같은 구조 — 출력 형식이 달라지면 대시보드 파싱이 어긋난다."""
-    threat = ((category_hint or "").strip() in THREAT_CATEGORIES
-              or has_threat_substance(title, body))
+    threat = (not article_kind.is_tactic_overview(title, body)
+              and ((category_hint or "").strip() in THREAT_CATEGORIES
+                   or has_threat_substance(title, body)))
 
     persona = ("당신은 SOC 보안관제 조직의 위협 인텔리전스 분석가이다."
                if threat else "당신은 보안 전문 매체의 분석 기자다.")
@@ -400,6 +401,10 @@ def build_prompt(title, body, category_hint):
         )
     else:
         sections = '[주요 내용] 본문의 핵심 사실·수치·일정·고유명사를 빠뜨리지 말고 구체적으로 서술하라(위협·공격을 전제로 지어내지 말 것). 5문장 이상.\n[의미와 영향] 보안 업계·기업·이용자에게 어떤 의미·영향이 있는지, 무엇이 달라지는지를 본문 근거로 쓰라. 3문장 이상.\n[참고 사항] 실무자가 확인·검토해볼 점 3개. "1."·"2."·"3." 번호를 붙여 한 줄에 한 항목씩 쓰고(한 줄에 여러 번호를 이어 쓰지 마라), 각 항목에 무엇을 어떻게 확인할지 함께 쓰고, 어느 기사에나 통하는 일반론은 쓰지 마라.\n'
+        if article_kind.is_tactic_overview(title, body):
+            sections += ('복수 전술 동향 기사다. 각 전술의 수치·기간·분모를 구분하고, '
+                         '개별 사례의 공격 단계·IOC를 다른 사례와 합치지 마라. '
+                         '우리 조직의 침해 여부는 확인되지 않았다고 명시하라.\n')
 
     # 정보성 기사에서는 기사의 핵심 표준·제도·시스템이 곧 선수 지식이다. 실측(카테나-X
     # 기사): "이 기사에만 등장하는 제품·브랜드명 금지·최대 3개" 규칙 때문에 독자가 가장
@@ -790,7 +795,7 @@ def analyze_one(job):
 
     kind = article_kind.classify(category or job.get("category") or "", targets, iocs,
                                  threat_substance=has_threat_substance(title, body),
-                                 text=title + "\n" + analysis)
+                                 text=title + "\n" + analysis, article=body)
     targets["article_kind"] = kind["kind"]
     targets["article_subtype"] = kind["subtype"]
     targets["article_kind_reason"] = kind["reason"]

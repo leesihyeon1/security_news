@@ -408,7 +408,15 @@ def _brief_prompt(title, article, analysis, targets):
         str(targets.get("article_subtype") or "").strip(),
         str(targets.get("article_kind_reason") or "").strip()) if part)
     topics = [str(t).strip() for t in targets.get("topics") or [] if str(t).strip()]
+    trend_rules = (
+        "\n[복수 전술 동향 판단]\n이 기사는 단일 공격 캠페인이 아니다. 수치의 집계 기간·분모와 "
+        "RMM 등 전술별 사례를 분리하라. 공개 원문으로 답할 질문은 전술별 관측 범위와 "
+        "승인된 RMM 도구와 원격접속 정책을 점검하는 데 필요한 공개 지식으로 이어지게 "
+        "하라. 내부 승인 현황은 질문의 답으로 추정하지 말고 판단할 조건으로 남겨라. "
+        "서로 다른 사례의 IOC를 같은 캠페인으로 묶거나 차단·패치를 목표로 삼지 마라.\n"
+        if targets.get("article_subtype") == article_kind.SUBTYPE_TACTIC_OVERVIEW else "")
     return (BRIEF_PROMPT.replace("{vocabulary}", playbook.vocabulary_spec("informational"))
+            + trend_rules
             + "\n[사건]\n1: " + (title or "")
             + "\n[기사 유형]\n정보성 기사" + (" — " + kind_line if kind_line else "")
             + ("\n[배경 자료를 찾을 주제]\n" + ", ".join(topics) if topics else "")

@@ -29,6 +29,7 @@
 import json
 import re
 
+import article_kind
 import common_utils
 import analyst_workflow
 import source_evidence
@@ -327,8 +328,8 @@ def build_prompt(title, analysis, targets, investigation, primary="", extra="",
         + "\n\n[이 건의 대응 목표]\n" + (objective or "(설정되지 않음 — 조회 결과로 직접 판단하라)")
         + ("\n\n[확인해야 할 질문]\n" + "\n".join("- " + q for q in questions) if questions else "")
         + "\n\n[외부 조회 결과]\n" + _material(investigation, targets or {})
-        # 기사가 인용한 1차 자료. 2차 보도가 생략하거나 잘못 옮긴 내용을 여기서 바로잡는다.
-        + ("\n\n[기사가 인용한 1차 자료 원문]\n" + primary if primary else "")
+        # 원문마다 기사 인용/검색 참고 여부를 표시한다. 후속 검색 자료를 기사 인용으로 격상하지 않는다.
+        + ("\n\n[읽은 원문 — 출처 유형 표시]\n" + primary if primary else "")
         # 후속 조회로 새로 얻은 것. 1차 판단에서 못 답한 질문의 답이 여기 있다.
         + ("\n\n[후속 조회 결과]\n" + extra if extra else "")
         # 전에 우리가 분석한 같은 계열. 같은 수법이 반복되는지는 기록에서만 보인다.
@@ -973,6 +974,13 @@ def synthesize_briefing(title, analysis, targets, investigation, article="", mat
     """Synthesize an informational brief without the incident-response schema."""
     targets = targets or {}
     prompt = BRIEFING_PROMPT
+    trend = targets.get("article_subtype") == article_kind.SUBTYPE_TACTIC_OVERVIEW
+    if trend:
+        prompt += ("\n[복수 전술 동향]\n이 기사는 여러 공격 전술을 비교한 보고서이지 "
+                   "하나의 침해 사건이 아니다. 전술별 사례와 집계 수치의 기간·분모를 분리하라. "
+                   "우리 조직에서 승인된 RMM 도구·원격접속 정책·로그 가시성을 확인하는 "
+                   "조건부 검토는 가능하지만, 다른 사례의 IOC 차단·패치·일률적인 기한을 "
+                   "권하지 마라. 사례 사이에 캠페인 연관성을 만들지 마라.\n")
     values = {
         "__TITLE__": title or "", "__ARTICLE__": (article or "")[:12000],
         "__ANALYSIS__": (analysis or "")[:7000],
@@ -998,6 +1006,10 @@ def synthesize_briefing(title, analysis, targets, investigation, article="", mat
         fields = {key: " ".join(str(item.get(key) or "").split())[:600]
                   for key in ("action", "why", "when", "owner", "trigger", "check", "done")}
         if not fields["action"] or _invented(" ".join(fields.values()), corpus):
+            continue
+        if trend and re.search(r"IOC.{0,12}차단|도메인.{0,12}차단|IP.{0,12}차단|"
+                               r"패치 적용|즉시 격리|block\s+(?:the\s+)?(?:IOC|IP|domain)",
+                               fields["action"], re.I):
             continue
         fields["preserve"] = analyst_workflow.NOT_APPLICABLE
         fields["alternative"] = analyst_workflow.NOT_APPLICABLE
@@ -1031,9 +1043,11 @@ def synthesize_briefing(title, analysis, targets, investigation, article="", mat
         return None
     exposure = result["exposure"] or {}
     who = str(exposure.get("who") or "").strip()
-    if not who.startswith(BRIEFING_EXPOSURE_LEAD):
+    exposure_lead = ("복수 전술의 동향 기사이므로 이 기사만으로 우리 조직의 침해를 "
+                     "확정할 수 없습니다." if trend else BRIEFING_EXPOSURE_LEAD)
+    if not who.startswith(exposure_lead):
         who = re.sub(r"^(?:미확인|해당 없음)[.。:\s]*", "", who)
-        exposure["who"] = (BRIEFING_EXPOSURE_LEAD + " " + who).strip()
+        exposure["who"] = (exposure_lead + " " + who).strip()
         result["exposure"] = exposure
     result["key_findings"] = key_findings(result["confirmed"], investigation or {})
     result["steps"] = ["기사와 참고 자료를 구분해 배경·적용 가능성을 정리했습니다."]

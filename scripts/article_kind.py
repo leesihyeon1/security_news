@@ -16,7 +16,8 @@
     - 분류만 보면 기술동향으로 분류된 위협(DUSTMAKER 프롬프트 인젝션, Check Point
       주간 위협 리포트)을 놓친다.
     그래서 공격 지표(CVE·해시·악성코드·패키지·알려진 위협 그룹)가 하나라도 있으면
-    위협으로 둔다. 지표가 없을 때만 분석 단계의 선언(기사유형)과 분류를 본다.
+    보통 위협으로 둔다. 단, 원문이 여러 전술과 서로 다른 분모의 통계를 비교하고
+    구체적 CVE·해시가 없다면 개별 악성코드 이름이 있어도 복수 전술 동향으로 둔다.
     키가 없으면 위협으로 본다 — 기존 레코드·테스트는 모두 예전 경로를 그대로 탄다.
 
 네트워크·LLM을 부르지 않는 순수 함수만 둔다.
@@ -35,6 +36,7 @@ KINDS = (INFORMATIONAL, THREAT)
 SUBTYPE_BY_CATEGORY = {"정책규제": "정책·규제", "제품행사": "제품·사업 발표",
                        "기술동향": "기술·동향", "기타": "일반"}
 SUBTYPE_REPORT = "통계·보고서"
+SUBTYPE_TACTIC_OVERVIEW = "복수 전술 동향"
 SUBTYPE_GENERAL = "일반"
 
 # 이 칸에 값이 있으면 조회할 공격 지표가 있는 기사다. 행위자·제품은 넣지 않는다 —
@@ -48,6 +50,27 @@ HARD_IOC_TYPES = {"cve": "CVE 지표", "md5": "해시 지표", "sha1": "해시 �
 # 침해사고 통계가 "침해사고", 클라우드 설정 오류 지수 보고서가 "취약점"으로 분류됐다).
 REPORT_RE = re.compile(r"통계|보고서|리포트|설문|조사 결과|실태|현황|지수|백서|"
                        r"\breport\b|\bsurvey\b|statistic|\bindex\b", re.I)
+TACTIC_FAMILIES = (
+    re.compile(r"\bRMM\b|remote monitoring and management|원격 관리", re.I),
+    re.compile(r"mailbox|메일함|inbox rule", re.I),
+    re.compile(r"\bAiTM\b|adversary.in.the.middle|중간자", re.I),
+    re.compile(r"device.code|디바이스 코드|장치 코드", re.I),
+    re.compile(r"ClickFix|클릭픽스", re.I),
+    re.compile(r"FakeAgent|가짜 에이전트", re.I),
+)
+AGGREGATE_RE = re.compile(r"\brank(?:ed|ing)?\b|\btactics?\b|\btrend\b|"
+                          r"분석 결과|전술|동향|증가율|분기|통계|보고서|리포트", re.I)
+ARTICLE_INDICATOR_RE = re.compile(r"\bCVE-\d{4}-\d{4,}\b|\b[a-f0-9]{32}\b|"
+                                  r"\b[a-f0-9]{40}\b|\b[a-f0-9]{64}\b", re.I)
+
+
+def is_tactic_overview(title, article):
+    """여러 독립 전술의 수치를 비교하는 기사만 단일 사건 경로에서 제외한다."""
+    source = "\n".join((title or "", article or ""))
+    return (bool(AGGREGATE_RE.search(source))
+            and len(re.findall(r"\b\d+(?:\.\d+)?\s*%", source)) >= 2
+            and sum(bool(pattern.search(source)) for pattern in TACTIC_FAMILIES) >= 3
+            and not ARTICLE_INDICATOR_RE.search(source))
 
 
 def _values(targets, key):
@@ -93,7 +116,7 @@ def _informational_subtype(category, targets, text):
     return SUBTYPE_REPORT if REPORT_RE.search(haystack) else SUBTYPE_GENERAL
 
 
-def classify(category, targets, iocs, threat_substance=False, text=""):
+def classify(category, targets, iocs, threat_substance=False, text="", article=""):
     """{"kind", "subtype", "reason", "signals"}.
 
     text(제목+분석문)는 선택이다 — 위협 분류인데 정보성으로 선언된 기사가 통계·보고서
@@ -109,8 +132,13 @@ def classify(category, targets, iocs, threat_substance=False, text=""):
     if said:
         signals.append("기사유형 선언: {}".format("정보성" if said == INFORMATIONAL else "위협사건"))
 
-    # 공격 지표가 하나라도 있으면 위협이다. 선언·분류보다 먼저 본다 — 정보성으로 잘못
-    # 보내면 TTP 헌팅이 통째로 사라지지만, 위협으로 잘못 보내는 것은 오늘과 같다.
+    if is_tactic_overview(text, article):
+        signals.append("복수 전술과 통계 수치가 기사 원문에 있음")
+        return {"kind": INFORMATIONAL, "subtype": SUBTYPE_TACTIC_OVERVIEW,
+                "signals": signals,
+                "reason": "독립적인 여러 공격 전술을 비교한 동향 기사로, 단일 캠페인의 침해사고로 합치지 않습니다."}
+
+    # 그 외 공격 지표가 있으면 위협이다. 선언·분류보다 먼저 본다.
     if hard:
         return {"kind": THREAT, "subtype": "", "signals": signals,
                 "reason": "원문에서 공격 지표({})를 확인해 위협 사건 기사로 판단했습니다.".format(

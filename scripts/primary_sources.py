@@ -288,6 +288,9 @@ def as_evidence(sources):
     """프롬프트에 넣을 형태. 어디서 온 글인지 밝혀 둔다."""
     blocks = []
     for source in sources or []:
-        blocks.append("--- {} ({}) ---\n{}".format(
-            source.get("host") or "", source.get("url") or "", source.get("text") or ""))
+        label = ("검색 참고 원문(기사 미인용)" if source.get("origin") == "search"
+                 else "기사 인용 원문")
+        blocks.append("--- {}: {} ({}) ---\n{}".format(
+            label, source.get("host") or "", source.get("url") or "",
+            source.get("text") or ""))
     return "\n\n".join(blocks)

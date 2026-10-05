@@ -1129,7 +1129,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             if intel_refs:
                 try:
                     more = _collect_primary(
-                        [{"url": u} for u in intel_refs], article_url=article_url, limit=1)
+                        [{"url": u} for u in intel_refs], article_url=article_url,
+                        limit=1, origin="search")
                     primary["sources"] = (primary.get("sources") or []) + more["sources"]
                     block.setdefault("lookup_status", []).extend(more.get("attempts") or [])
                     steps.extend({"track": "원문 확인", "text": line}
@@ -1146,6 +1147,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 block["primary"] = {"sources": [
                     {"url": source.get("url") or "", "host": source.get("host") or "",
                      "chars": source.get("chars") or 0,
+                     "origin": source.get("origin") or "article",
                      "retrieved_at": source.get("retrieved_at") or "",
                      "excerpt_sha256": source.get("excerpt_sha256") or ""}
                     for source in primary["sources"]]}
@@ -1160,9 +1162,12 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                                  for line in past_analyses.steps(related))
             except Exception as error:
                 steps.append({"track": "과거 분석", "text": "조회 실패: {}".format(error)})
-            evidence = primary_sources.as_evidence(primary.get("sources"))
+            evidence = primary_sources.as_evidence([
+                source for source in primary.get("sources") or []
+                if source.get("origin", "article") == "article"])
             block["source_urls"] = list(dict.fromkeys(source_urls + [
-                source["url"] for source in primary.get("sources") or [] if source.get("url")]))
+                source["url"] for source in primary.get("sources") or []
+                if source.get("url") and source.get("origin", "article") == "article"]))
             if set(block["source_urls"]) != set(source_urls):
                 block["response"] = response_builder.build(block, iocs, primary=route["primary"], text=text)
                 analyst_workflow.prepare_queries(block.get("response"))
@@ -1339,7 +1344,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                                 block["source_urls"] = list(dict.fromkeys(source_urls))
                                 block["primary"] = {"sources": [{
                                     key: source.get(key) for key in
-                                    ("url", "host", "chars", "retrieved_at", "excerpt_sha256")}
+                                    ("url", "host", "chars", "origin", "retrieved_at",
+                                     "excerpt_sha256")}
                                     for source in primary["sources"]]}
                                 evidence = primary_sources.as_evidence(primary["sources"])
                                 extra_lines.append("후속 검색 원문 {}건을 실제로 읽었습니다.".format(

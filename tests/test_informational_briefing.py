@@ -6,6 +6,7 @@ import article_kind
 import analysis_worker
 import briefing
 import investigation
+import primary_sources
 import reference_lookup
 import refresh_analysis_workflow
 import resynthesize
@@ -27,6 +28,53 @@ def test_article_kind_keeps_informational_business_news_out_of_threat_route():
     assert result["kind"] == "informational"
     assert article_kind.classify("기술동향", {"article_type_declared": "informational",
                                          "cves": ["CVE-2026-12345"]}, [])["kind"] == "threat"
+
+
+RMM_TREND = ("Huntress ranked 11 tactics in its quarterly report. RMM appeared in "
+             "45% of endpoint incidents and RMM abuse rose 277% year over year. "
+             "AiTM, device-code phishing, ClickFix and FakeAgent were separate examples.")
+
+
+def test_multi_tactic_trend_is_not_a_single_malware_campaign():
+    title = "How RMM abuse gives attackers a way in that looks like business as usual"
+    assert article_kind.is_tactic_overview(title, RMM_TREND)
+    result = article_kind.classify("악성코드", {"malware": ["FakeAgent"]}, [],
+                                   threat_substance=True, text=title, article=RMM_TREND)
+    assert result["kind"] == "informational"
+    assert result["subtype"] == "복수 전술 동향"
+    assert "복수 전술" in analysis_worker.build_prompt(title, RMM_TREND, "악성코드")
+
+
+def test_tactic_overview_needs_multiple_statistics_and_no_explicit_cve():
+    title = "RMM abuse campaign"
+    assert not article_kind.is_tactic_overview(title, "ClickFix led to FakeAgent RAT")
+    assert not article_kind.is_tactic_overview(title, RMM_TREND + " CVE-2026-12345")
+    assert article_kind.classify("악성코드", {"malware": ["FakeAgent"]}, [],
+                                 text=title, article="ClickFix led to FakeAgent RAT")["kind"] == "threat"
+
+
+def test_trend_briefing_rejects_incident_blocking_plan(monkeypatch):
+    targets = dict(_targets(), article_subtype="복수 전술 동향")
+    monkeypatch.setattr(response_synth.common_utils, "llm_generate", lambda *a, **k: json.dumps({
+        "headline": "RMM 전술 동향", "confirmed": ["기사: RMM 전술 동향"],
+        "exposure": {"who": "내부 적용 미확인"},
+        "plan": [{"action": "RMM IOC 차단"}, {"action": "승인된 RMM 도구 현황 확인"}]},
+        ensure_ascii=False))
+    result = response_synth.synthesize_briefing("RMM 전술 동향", "분석", targets, {},
+                                                article="RMM 전술 동향. 승인된 RMM 도구 현황 확인")
+    assert result["exposure"]["who"].startswith("복수 전술의 동향")
+    assert [item["action"] for item in result["plan"]] == ["승인된 RMM 도구 현황 확인"]
+
+
+def test_search_reference_is_labeled_as_unlinked_background():
+    evidence = primary_sources.as_evidence([
+        {"origin": "article", "host": "huntress.com", "url": "https://huntress.com/report",
+         "text": "전술 통계"},
+        {"origin": "search", "host": "fortinet.com", "url": "https://fortinet.com/other",
+         "text": "별도 사례"},
+    ])
+    assert "기사 인용 원문: huntress.com" in evidence
+    assert "검색 참고 원문(기사 미인용): fortinet.com" in evidence
 
 
 def test_informational_route_skips_attack_build(monkeypatch):
@@ -146,6 +194,28 @@ def test_worker_classifies_before_decision_and_routes_informational_article(monk
                                           "url": "https://example.com/article"})
     assert captured == {"at_decision": "informational", "at_investigation": "informational"}
     assert result["targets"]["article_kind"] == "informational"
+
+
+def test_worker_overrides_model_threat_label_for_multi_tactic_report(monkeypatch):
+    title = "How RMM abuse gives attackers a way in that looks like business as usual"
+    analysis = ("[핵심 요약]\nRMM 전술 동향\n[조사 대상]\n기사유형: 위협사건\n"
+                "악성코드: FakeAgent\n조사가능: 예\n")
+    seen = {}
+    monkeypatch.setattr(analysis_worker, "fetch_article_text", lambda url: (RMM_TREND * 10, []))
+    monkeypatch.setattr(analysis_worker.common_utils, "llm_generate", lambda *args, **kw: "ok")
+    monkeypatch.setattr(analysis_worker, "extract_category", lambda raw: ("악성코드", analysis))
+    def fake_decide(title, article, summary, targets):
+        seen["kind"] = targets.get("article_kind")
+        return []
+
+    monkeypatch.setattr(analysis_worker.issue_decision, "decide", fake_decide)
+    monkeypatch.setattr(analysis_worker.investigation, "build_for_article", lambda *a, **kw:
+                        {"article_kind": kw["targets"]["article_kind"]})
+    result = analysis_worker.analyze_one({"ref": "sample", "title": title,
+                                          "url": "https://example.com/article"})
+    assert seen["kind"] == "informational"
+    assert result["targets"]["article_subtype"] == "복수 전술 동향"
+    assert result["investigation"]["article_kind"] == "informational"
 
 
 def test_resynthesize_uses_briefing_model_for_informational_record(monkeypatch):
