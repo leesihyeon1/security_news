@@ -28,6 +28,7 @@
 
 import json
 import re
+import analysis_trace
 
 import article_kind
 import common_utils
@@ -376,6 +377,7 @@ def _close_truncated(text):
     return None
 
 
+@analysis_trace.step("종합 판단 JSON 파싱·잘림 복구", kind="validation", inputs=("raw",))
 def parse_with_status(raw):
     """(dict, salvaged). salvaged는 잘린 응답을 되살렸는지 — 판단 단계에 남긴다."""
     if not raw:
@@ -818,6 +820,7 @@ def _timeline(values, corpus, dropped):
     return out
 
 
+@analysis_trace.step("조사 자료 종합·목표 재평가·대응안 생성", "synthesis", inputs=("analysis", "targets", "investigation", "extra", "article"), empty="failed")
 def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
                primary="", extra="", history="", article="", related=None):
     """조회 결과를 읽고 판단한다. 쓸 만한 결과가 없으면 None.
@@ -844,6 +847,7 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
     if not data:
         # 한 번은 더 받아 본다. 같은 프롬프트를 그대로 다시 보내면 같은 자리에서 또
         # 잘리므로(추론 + 본문이 상한을 넘는 경우), 이번에는 짧게 쓰라고 못박는다.
+        analysis_trace.note("응답 JSON 검증 실패: 축약 지시로 LLM 재호출", "synthesis", "reanalysis", "partial")
         log("    [-] 종합 판단 응답을 JSON으로 읽지 못해 짧은 형식으로 다시 받습니다.")
         raw = common_utils.llm_generate(
             prompt + COMPACT_RETRY_NOTE, timeout=timeout, json_format=True,
@@ -969,6 +973,7 @@ BRIEFING_VERDICT = "정보성 기사"
 BRIEFING_EXPOSURE_LEAD = "공격 사건이 아니어서 직접 노출·침해 대상은 없습니다."
 
 
+@analysis_trace.step("정보성 기사 조사 결과와 활용안 생성", "synthesis", inputs=("analysis", "targets", "investigation", "materials"), empty="failed")
 def synthesize_briefing(title, analysis, targets, investigation, article="", materials="",
                        timeout=SYNTH_TIMEOUT):
     """Synthesize an informational brief without the incident-response schema."""

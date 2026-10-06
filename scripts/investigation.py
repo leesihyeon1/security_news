@@ -16,6 +16,7 @@ import re
 import time
 
 import analysis_targets
+import analysis_trace
 import article_kind
 import briefing
 import common_utils
@@ -702,6 +703,18 @@ LOOKUPS = (
 )
 
 
+def _traced_lookup(lookup, ctx):
+    with analysis_trace.span(lookup["label"], "lookup", "lookup", inputs={
+        "iocs": analysis_trace.describe(ctx.get("iocs") or []),
+        "route": analysis_trace.describe(ctx.get("route") or {}),
+    }) as row:
+        result = lookup["run"](ctx)
+        row["output"] = analysis_trace.describe(result)
+        if not result:
+            row["status"] = "empty"
+        return result
+
+
 def run_lookups(ctx, block, steps):
     """등록표를 돌며 성립한 트랙만 실행한다.
 
@@ -725,7 +738,7 @@ def run_lookups(ctx, block, steps):
         track = worker_progress.load(stage_client, stage_ref, "lookup:" + key, digest)
         try:
             if track is None:
-                track = lookup["run"](ctx)
+                track = _traced_lookup(lookup, ctx)
             else:
                 status["reused"] = True
         except Exception as error:
@@ -774,6 +787,7 @@ def _corroborate_roles(block, steps):
     return lines
 
 
+@analysis_trace.step("발견된 IOC 후속 조회", "followup", "lookup", inputs=("requests",))
 def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
     """요청받은 값을 종류별로 조회해 판단 재료로 쓸 문장을 만든다.
 
@@ -864,6 +878,7 @@ def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
     return lines, steps
 
 
+@analysis_trace.step("사건별 조사 실행", "lookup", inputs=("iocs", "targets", "incident_label"))
 def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
           body="", synthesize=True, targets=None, links=None, article_url="",
           shared_primary=None, incident_label=""):
@@ -1404,6 +1419,9 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 analyst_workflow.prepare_queries(block.get("response"))
                 if not extra_lines:
                     break
+                analysis_trace.note("추가 관측 반영 후 종합 판단 재분석", "synthesis", "reanalysis",
+                                    round=round_num + 1, questions=verdict.get("open_questions") or [],
+                                    added_evidence=len(extra_lines))
                 again = response_synth.synthesize(
                     title, text, targets, block, primary=evidence,
                     extra="\n".join(extra_lines), history=history_evidence,

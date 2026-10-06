@@ -19,6 +19,7 @@
 
 import hashlib
 import re
+import analysis_trace
 import urllib.parse
 
 import requests
@@ -113,6 +114,7 @@ def _unwrap(url):
     return str(url or "")
 
 
+@analysis_trace.step("인용·참고 링크 선정", kind="extraction", inputs=("links", "article_url", "limit"))
 def pick(links, article_url="", limit=MAX_SOURCES):
     """1차 자료로 볼 만한 링크를 고른다(뉴스 매체·소셜·목록 페이지 제외)."""
     own = _apex(_host(_unwrap(article_url)))
@@ -229,6 +231,7 @@ def extract_html(html):
     return _excerpt(text) + ("\n[원문 해시 표]\n" + "\n".join(rows)[:6000] if rows else "")
 
 
+@analysis_trace.step("선정한 자료 본문 수집", kind="lookup", inputs=("url",))
 def fetch_text(url):
     """본문 텍스트만. 실패하거나 너무 짧으면 빈 문자열."""
     # 이 url은 기사 본문에 실린 링크·웹 검색 결과다 — 우리가 고른 것이 아니다.
@@ -251,6 +254,7 @@ def fetch_text(url):
     return text
 
 
+@analysis_trace.step("참고 원문 수집", "lookup", "lookup", inputs=("links", "article_url", "origin"))
 def collect(links, article_url="", limit=MAX_SOURCES, origin="article"):
     """고른 1차 자료를 실제로 읽어 온다.
 

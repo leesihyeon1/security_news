@@ -26,6 +26,7 @@
 """
 
 import re
+import analysis_trace
 
 # 프롬프트에 붙일 명세. 사람이 읽는 섹션이 아니라 도구가 읽는 목록이라는 점을 못박고,
 # 줄 이름을 고정해 파싱이 흔들리지 않게 한다.
@@ -342,6 +343,7 @@ def _axis(value):
     return candidate if candidate in PRIMARY_AXES else ""
 
 
+@analysis_trace.step("LLM 응답에서 조사 대상 파싱", "artifacts", "extraction", inputs=("text",))
 def parse(text):
     """[조사 대상] 섹션을 dict로. 섹션이 없으면 빈 dict.
 
@@ -515,6 +517,7 @@ def to_iocs(targets):
     return out
 
 
+@analysis_trace.step("정규식·LLM IOC 병합과 중복 제거", "artifacts", "extraction", inputs=("existing", "targets"))
 def merge_iocs(existing, targets):
     """기존 IOC 목록에 LLM이 준 것을 더한다(값 기준 중복 제거)."""
     seen = {str((item.get("value") or "")).lower() for item in existing or []}

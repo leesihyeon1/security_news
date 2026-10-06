@@ -25,6 +25,7 @@
 
 import json
 import re
+import analysis_trace
 import time
 import urllib.parse
 
@@ -749,6 +750,7 @@ def _search_urlscan(query, api_key=None):
     return None, 0, error
 
 
+@analysis_trace.step("urlscan 패턴 검색 결과 검증", "outputs", "validation", inputs=("candidate", "positive_hosts"))
 def validate_urlscan(candidate, api_key=None, positive_hosts=()):
     """urlscan에서 실제로 몇 건 잡히는지 센다. 0건은 미검증, 과다는 폐기.
 
@@ -1018,6 +1020,7 @@ LINK_LABEL = {
 GOOGLE_SEARCH_UI_URL = "https://www.google.com/search?q={}"
 
 
+@analysis_trace.step("관측 근거로 탐지 패턴 생성·검증", "outputs", inputs=("analysis", "body", "iocs", "targets", "web_evidence"))
 def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240,
                targets=None, web_evidence=None):
     """LLM으로 패턴을 만들고 검증해 통과한 것만 돌려준다.

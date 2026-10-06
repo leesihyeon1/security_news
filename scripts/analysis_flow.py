@@ -4,6 +4,7 @@
 import hashlib
 import json
 import re
+import analysis_trace
 from urllib.parse import urlsplit
 
 
@@ -145,6 +146,7 @@ def _evidence(value, source):
     return "".join(out)
 
 
+@analysis_trace.step("공격 흐름과 원문 근거 대조", "detail", "validation", inputs=("candidate", "body", "source_url"))
 def validate(candidate, body, category, targets, source_url):
     """Fail closed on unsupported types, missing citations or misleading topology.
 

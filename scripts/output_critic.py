@@ -27,6 +27,7 @@
 
 import json
 import re
+import analysis_trace
 
 import common_utils
 import response_synth
@@ -123,6 +124,7 @@ def _block_groups(response):
             if str(group.get("label") or "").startswith(BLOCK_LABEL)]
 
 
+@analysis_trace.step("대응 산출물 재검토", "outputs", "validation", inputs=("synthesis", "response"))
 def review(synthesis, response, investigation=None, timeout=180):
     """차단 후보 중 막으면 안 되는 값을 가려낸다. [{value, why}] 형식, 없으면 []."""
     verdict = _verdict_text(synthesis)

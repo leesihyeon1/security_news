@@ -7,6 +7,7 @@ therefore requires an explicitly isolated worker with network egress controls.
 import hashlib
 import os
 import re
+import analysis_trace
 from urllib.parse import parse_qsl, urlsplit
 
 import network_safety
@@ -110,6 +111,7 @@ def _snapshot(page):
                             "nodes => nodes.map(node => node.src).slice(0, 20)")]}
 
 
+@analysis_trace.step("격리 브라우저 DOM·HTTP 관찰", "lookup", "browser", inputs=("url",))
 def capture(url):
     """Observe one page and one lure-like button; never execute a copied command."""
     network_safety.check_public_url(url)
@@ -245,6 +247,7 @@ def disabled_reason():
     return ""
 
 
+@analysis_trace.step("목표별 브라우저 조사", "lookup", "browser", inputs=("targets", "route"))
 def investigate(targets, block, route):
     """Give each relevant question an evidence trail and a bounded browser attempt."""
     questions = [q for q in (targets or {}).get("questions") or []

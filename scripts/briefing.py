@@ -26,6 +26,7 @@
 """
 
 import re
+import analysis_trace
 import urllib.parse
 
 import analyst_workflow
@@ -380,6 +381,7 @@ def apply_verdict(block, verdict, targets, steps=None):
 
 # ── 블록 ─────────────────────────────────────────────────────────────────────
 
+@analysis_trace.step("정보성 기사 배경·자료 조사", "lookup", inputs=("title", "body", "targets", "links"))
 def build(iocs, text="", title="", category="", body="", targets=None, links=None,
           article_url="", synthesize=True):
     """정보성 기사의 조사&대응 블록. 절대 예외를 던지지 않고 None도 돌려주지 않는다.

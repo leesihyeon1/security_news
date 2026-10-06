@@ -35,6 +35,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import analysis_targets
+import analysis_trace
 import analysis_flow
 import article_kind
 import issue_decision
@@ -186,6 +187,7 @@ RELATED_CAMPAIGNS_RE = re.compile(
     r"\bThe findings coincide with the discovery of multiple\b", re.I)
 
 
+@analysis_trace.step("주기사 범위 선택", "source", inputs=("body", "links"))
 def _focus_article(body, links):
     """Keep a complete lead story; separate a clearly signposted related-campaign tail."""
     marker = RELATED_CAMPAIGNS_RE.search(body or "")
@@ -240,6 +242,7 @@ def _response_text(response):
     return raw.decode("utf-8", errors="replace")
 
 
+@analysis_trace.step("HTML 본문·참고 링크 추출", "source", "extraction", inputs=("raw_html", "article_url"))
 def _extract_article_content(raw_html, article_url):
     """Extract the longest article candidate and useful references from one response."""
     soup = BeautifulSoup(raw_html, "html.parser")
@@ -279,9 +282,12 @@ def _extract_article_content(raw_html, article_url):
         links.append(link)
         if len(links) >= MAX_LINKS:
             break
+    analysis_trace.note("참고 링크 정리: 공유·내비게이션·중복 제외", "source", "extraction",
+                        candidates=len(target.find_all("a", href=True)), links=links, limit=MAX_LINKS)
     return best_text, links
 
 
+@analysis_trace.step("기사 원문 확보", "source", "lookup", inputs=("url",))
 def fetch_article_text(url):
     """기사 원문에서 본문 텍스트와 참고 링크를 뽑는다. 실패 시 ("", []).
 
@@ -681,6 +687,7 @@ def build_attack_groups(analysis, ids=None):
     return groups
 
 
+@analysis_trace.capture
 def analyze_one(job):
     """요청 하나를 분석해 저장용 레코드를 만든다. 실패 시 None."""
     url = source_evidence.article_url(job.get("url"))
@@ -754,10 +761,13 @@ def analyze_one(job):
     raw = worker_progress.load(stage_client, job.get("ref"), "base", base_digest)
     if raw:
         log("    기본 분석 체크포인트 재사용")
+        analysis_trace.note("기사 분석 보고서 작성(체크포인트 재사용, 새 LLM 호출 없음)", "summary", "cache")
     else:
-        raw = common_utils.llm_generate(prompt, timeout=response_synth.SYNTH_TIMEOUT,
-                                        nvidia_max_attempts=3,
-                                        max_tokens=response_synth.SYNTH_MAX_TOKENS)
+        # 분석 경로에서 이 LLM 호출이 어느 단계 것인지 보이게 단계로 묶는다.
+        with analysis_trace.span("기사 분석 보고서 작성", "summary", "code"):
+            raw = common_utils.llm_generate(prompt, timeout=response_synth.SYNTH_TIMEOUT,
+                                            nvidia_max_attempts=3,
+                                            max_tokens=response_synth.SYNTH_MAX_TOKENS)
         if raw:
             worker_progress.save(stage_client, job.get("ref"), "base", base_digest, raw)
     if not raw:
@@ -786,12 +796,17 @@ def analyze_one(job):
             or "값 없음"))
     # 정규식 추출과 LLM이 준 목록을 합친다. 정규식은 원문에 문자 그대로 있는 것만
     # 잡고, LLM은 우리말로 풀어 쓴 것까지 잡는다 — 둘의 사각지대가 다르다.
-    iocs = analysis_targets.merge_iocs(common_utils.extract_iocs(body), targets)
+    with analysis_trace.span("원문 IOC 정규식 추출", "artifacts", "extraction",
+                             inputs={"body": analysis_trace.describe(body, "body")}) as trace_row:
+        extracted_iocs = common_utils.extract_iocs(body)
+        trace_row["output"] = analysis_trace.describe(extracted_iocs)
+    iocs = analysis_targets.merge_iocs(extracted_iocs, targets)
     source_urls = [url, fallback_url] if fallback_url else [url]
-    iocs, _ = source_evidence.filter_iocs(iocs, source_urls)
-    targets = source_evidence.filter_targets(targets, source_urls)
-    iocs = source_evidence.assess_iocs(iocs, [{"url": fallback_url or url, "text": body}])
-    targets = source_evidence.restrict_targets(targets, iocs)
+    with analysis_trace.span("추출 IOC와 원문 문맥 대조", "artifacts", "validation"):
+        iocs, _ = source_evidence.filter_iocs(iocs, source_urls)
+        targets = source_evidence.filter_targets(targets, source_urls)
+        iocs = source_evidence.assess_iocs(iocs, [{"url": fallback_url or url, "text": body}])
+        targets = source_evidence.restrict_targets(targets, iocs)
 
     kind = article_kind.classify(category or job.get("category") or "", targets, iocs,
                                  threat_substance=has_threat_substance(title, body),
@@ -910,10 +925,16 @@ def store_result(client, record):
     if record.get("analysis_flow") is not None:
         record["analysis_flow"] = dashboard_text.redact_private_environment(
             record["analysis_flow"], product_names)
+    if record.get("execution_trace") is not None:
+        record["execution_trace"] = dashboard_text.redact_private_environment(
+            record["execution_trace"], product_names)
 
     # 없는 키는 비워 둔다. 수집 실패 기록처럼 일부 필드가 아예 없는 경우가 있어,
     # 인덱싱으로 꺼내면 저장이 통째로 실패한다(실측: 'targets' KeyError로 기록이
     # 저장되지 않았다).
+    # 실행 기록(execution_trace, 최대 32KB)은 캐시에 넣지 않는다 — 화면은 보고서를
+    # insights:list에서 열고, 캐시는 같은 기사를 다시 요청할 때만 쓴다. 두 곳에 같은
+    # 기록을 두면 Redis 무료 30MB를 두 배로 쓴다.
     cached = {key: record.get(key) for key in
               ("analysis", "links", "iocs", "category", "attack_techniques", "glossary",
                "attack_grouped", "investigation", "targets", "analysis_flow")}

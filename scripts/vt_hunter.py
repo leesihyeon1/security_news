@@ -26,6 +26,7 @@
 import json
 import os
 import re
+import analysis_trace
 import time
 import urllib.parse
 import urllib.request
@@ -55,6 +56,7 @@ def _api_key():
     return (os.environ.get("VT_API_KEY") or os.environ.get("VIRUSTOTAL_API_KEY") or "").strip()
 
 
+@analysis_trace.step("VirusTotal API 조회", kind="lookup", inputs=("url",))
 def _request(url, api_key):
     request = urllib.request.Request(url, headers={
         "x-apikey": api_key,
@@ -536,6 +538,7 @@ def _c2_candidates(behaviour, view):
     return out[:8]
 
 
+@analysis_trace.step("샌드박스 동적 행위 종합", kind="validation", inputs=("report", "behaviour"))
 def analyze_dynamic(report, behaviour, view):
     """동적 분석을 서술로 정리한다 — 유형 / 행위 / C2."""
     report = report or {}
@@ -845,6 +848,7 @@ def local_commands(hashes):
     }]
 
 
+@analysis_trace.step("파일 해시·동적 분석 자료 조사", kind="lookup", inputs=("hashes", "iocs"))
 def analyze_hashes(hashes, api_key=None, max_files=None, iocs=None):
     """해시 목록으로 악성코드 트랙을 만든다. 키가 없으면 링크·검색만 담는다."""
     api_key = api_key if api_key is not None else _api_key()

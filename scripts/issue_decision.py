@@ -3,6 +3,7 @@
 
 import json
 import re
+import analysis_trace
 
 import article_kind
 import common_utils
@@ -204,6 +205,7 @@ def _informational_fallback_case(incident, article, analysis):
     return case
 
 
+@analysis_trace.step("판단 검증 실패 후 원문 기반 후보 복구", "issues", "fallback", inputs=("incident", "article", "steps"))
 def _fallback_case(incident, label, article, analysis, targets, steps, single):
     """Keep a reviewable investigation path when the decision response is unusable."""
     if article_kind.is_informational(targets):
@@ -424,6 +426,7 @@ def _brief_prompt(title, article, analysis, targets):
             + "\n[완료된 기본 분석]\n" + (analysis or "")[:9000])
 
 
+@analysis_trace.step("이슈별 판단 생성과 원문 대조", "issues", inputs=("title", "article", "analysis", "targets"), empty="failed")
 def decide(title, article, analysis, targets):
     """Use validated model decisions, then source-grounded review candidates."""
     targets = targets or {}
@@ -483,6 +486,7 @@ def decide(title, article, analysis, targets):
     return cases
 
 
+@analysis_trace.step("이슈별 조사 목표 확정", "goals", inputs=("targets", "cases"))
 def apply(targets, cases):
     """Overlay the post-analysis decision while preserving extracted indicators."""
     out = dict(targets or {})

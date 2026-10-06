@@ -1,6 +1,7 @@
 """Private checkpoints and recoverable Redis queue operations for the analysis worker."""
 
 import hashlib
+import analysis_trace
 import json
 import time
 from contextvars import ContextVar
@@ -42,7 +43,12 @@ def load(client, ref, stage, digest):
     try:
         raw = client.get(_stage_key(ref, stage))
         data = json.loads(raw) if raw else {}
-        return data.get("value") if data.get("digest") == digest else None
+        value = data.get("value") if data.get("digest") == digest else None
+        if value is not None:
+            trace_stage = "summary" if stage == "base" else "lookup"
+            analysis_trace.note("저장된 단계 결과 재사용", trace_stage, "cache", "cached",
+                                name=stage, value=None)
+        return value
     except Exception:
         return None
 

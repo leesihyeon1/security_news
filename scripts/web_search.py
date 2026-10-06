@@ -29,6 +29,7 @@
 import json
 import os
 import re
+import analysis_trace
 import time
 import urllib.parse
 import urllib.request
@@ -201,6 +202,7 @@ def _search_brave(query, num):
     return items
 
 
+@analysis_trace.step("검색 서비스 질의", kind="lookup", inputs=("query", "num"))
 def search(query, num=MAX_RESULTS):
     """검색 한 번. 실패하거나 한도를 넘었으면 (None, 사유)."""
     which = provider()

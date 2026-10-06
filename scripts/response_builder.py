@@ -19,6 +19,7 @@
 
 import ipaddress
 import re
+import analysis_trace
 
 import artifact_extractor
 import common_utils
@@ -379,6 +380,7 @@ def _kql_queries(values, primary):
     return queries
 
 
+@analysis_trace.step("확인된 지표로 대응 쿼리·목록 구성", "actions", inputs=("iocs", "primary", "text"))
 def build(block, iocs, primary="", text=""):
     """대응 섹션. 만들 게 없으면 None.
 

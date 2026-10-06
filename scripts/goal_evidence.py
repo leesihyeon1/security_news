@@ -1,6 +1,7 @@
 """Check whether a stated investigation goal has the kind of evidence it needs."""
 
 import re
+import analysis_trace
 import browser_research
 
 
@@ -123,6 +124,7 @@ def review(question, block):
     return None
 
 
+@analysis_trace.step("목표별 답변과 실제 관측 근거 대조", "verify", "validation", inputs=("verdict",))
 def reconcile(verdict, block):
     """Downgrade unsupported 'answered' claims; keep the model's grounded answer text."""
     checks = []

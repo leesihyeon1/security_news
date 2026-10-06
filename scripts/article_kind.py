@@ -24,6 +24,7 @@
 """
 
 import re
+import analysis_trace
 
 THREAT_CATEGORIES = frozenset({"취약점", "악성코드", "침해사고", "개인정보유출", "공격캠페인",
                                "공급망공격", "피싱사기"})
@@ -116,6 +117,7 @@ def _informational_subtype(category, targets, text):
     return SUBTYPE_REPORT if REPORT_RE.search(haystack) else SUBTYPE_GENERAL
 
 
+@analysis_trace.step("기사 유형 규칙 판정", "kind", "validation", inputs=("category", "targets", "iocs", "article"))
 def classify(category, targets, iocs, threat_substance=False, text="", article=""):
     """{"kind", "subtype", "reason", "signals"}.
 

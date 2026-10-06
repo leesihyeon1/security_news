@@ -1,4 +1,5 @@
 import hashlib
+import analysis_trace
 import ipaddress
 import math
 import os
@@ -815,7 +816,8 @@ def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False, max_tok
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
-            response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
+            response = analysis_trace.llm_request(requests.post, NVIDIA_API_URL, headers=headers,
+                                                  payload=payload, timeout=timeout, provider="nvidia")
         except requests.exceptions.RequestException as error:
             last_error = error
             if attempt < max_attempts:
@@ -876,11 +878,13 @@ def _generate_ollama(prompt, timeout, json_format):
     payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
     if json_format:
         payload["format"] = "json"
-    response = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+    response = analysis_trace.llm_request(requests.post, OLLAMA_URL, payload=payload,
+                                          timeout=timeout, provider="ollama")
     if response.status_code != 200:
         raise RuntimeError("HTTP {}".format(response.status_code))
     return (response.json() or {}).get("response", "")
 
+@analysis_trace.step("LLM 결과 생성", kind="llm", inputs=("prompt", "json_format", "max_tokens"), empty="failed")
 def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2, max_tokens=None):
     """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
 
@@ -2010,7 +2014,8 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
                cluster=None, pirs=None, content_depth="", body_chars=None,
                recommended_actions=None, affected_versions=None, novelty="", category_reason="",
-               analyst_review=None, affected_packages=None, image_url=""):
+               analyst_review=None, affected_packages=None, image_url="", body_source="",
+               classification_quality="", source_updated_at=""):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -2055,6 +2060,8 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
             for entry in (affected_packages or []) if isinstance(entry, dict) and entry.get("product")
         ][:20],
         "body_chars": body_chars,
+        "body_source": clean_text(body_source),
+        "classification_quality": clean_text(classification_quality),
         "analyst_review": analyst_review or None,
         "recommended_actions": _clean_str_list(recommended_actions or [], 3),
         "references": [r for r in (references or []) if r],
@@ -2063,6 +2070,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "due_date": clean_text(due_date),
         "confidence": clean_text(confidence).lower(),
         "published_at": published_at or "",
+        "source_updated_at": source_updated_at or "",
         "fetched_at": utc_now_iso(),
         "ai_summary": ai_summary,
         "triage": triage,

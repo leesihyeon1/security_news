@@ -21,6 +21,7 @@
 
 import json
 import re
+import analysis_trace
 
 import common_utils
 import browser_research
@@ -209,6 +210,7 @@ def parse(raw):
     return data if isinstance(data, dict) else {}
 
 
+@analysis_trace.step("목표별 조사 도구·대표 샘플 선정", "plan", inputs=("objective", "questions", "route", "evidence"))
 def plan(objective, questions, catalog, route, targets=None, timeout=120, evidence=""):
     """돌릴 조회를 정한다.
 

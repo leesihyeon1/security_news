@@ -33,6 +33,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import common_utils
+import feed_health
 from live_news import article_image
 
 # Windows 콘솔(cp949)에서 기사 제목의 특수문자(— 등) 출력이 죽지 않도록 UTF-8로 강제
@@ -49,6 +50,7 @@ MAX_STORED_SENT_IDS = 1500
 # 분석 없이 적재하되 알림은 보류한다.
 ENRICH_MAX_ATTEMPTS = 3
 BODY_MAX_CHARS = 20000
+MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION = 300
 DEFAULT_MAX_ITEMS = 5
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -286,12 +288,46 @@ def fetch_article_body(feed, url, article=None):
 
 
 def resolve_body(feed, article):
-    """본문 우선순위: 기사 페이지(설정 시) → RSS 전문(content:encoded) → RSS 요약"""
+    """기사 본문을 우선하되 짧은 차단/안내문은 RSS 전문보다 우선하지 않는다."""
+    scraped = ""
     if feed.get("fetch_body"):
-        body = fetch_article_body(feed, article["link"], article)
-        if body:
+        scraped = fetch_article_body(feed, article["link"], article)
+        if len(scraped) >= MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+            article["body_source"] = "article"
+            return scraped
+    for field, source in (("content_html", "rss_content"), ("summary_html", "rss_summary")):
+        body = html_to_text(article.get(field))[:BODY_MAX_CHARS]
+        if len(body) >= MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+            article["body_source"] = source
             return body
-    return html_to_text(article["content_html"] or article["summary_html"])[:BODY_MAX_CHARS]
+    if scraped:
+        article["body_source"] = "article"
+        return scraped
+    for field, source in (("content_html", "rss_content"), ("summary_html", "rss_summary")):
+        body = html_to_text(article.get(field))[:BODY_MAX_CHARS]
+        if body:
+            article["body_source"] = source
+            return body
+    article["body_source"] = "title_only"
+    return ""
+
+
+def classification_quality(article):
+    if article.get("category_fallback"):
+        return "title_rule"
+    if not (article.get("enrichment") or {}).get("category"):
+        return "unclassified"
+    if len(article.get("body") or "") < MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+        return "limited"
+    return "full"
+
+
+def fallback_category(title):
+    """Only classify explicit vulnerability headlines when enrichment is unavailable."""
+    if re.search(r"\bCVE-\d{4}-\d{4,7}\b|취약점|제로데이|\bzero[ -]day\b|"
+                 r"\bvulnerabilit(?:y|ies)\b|\bsecurity flaw\b", title or "", re.I):
+        return "취약점"
+    return ""
 
 
 def alert_summary(article):
@@ -540,6 +576,15 @@ def collect_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
         else:
             article["enrichment"] = {}
             article["enrichment_ok"] = True  # 애초에 분석을 안 하기로 한 피드
+        if len(article["body"] or "") < MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+            if article["enrichment"].get("confidence") in ("high", "medium"):
+                article["enrichment"]["confidence"] = "low"
+            # 제목·짧은 RSS 요약만으로 새 악용 사실을 확정해 긴급도를 올리지 않는다.
+            if (article["enrichment"].get("exploitation") in ("active", "poc")
+                    and article["triage"].get("exploitation") == "none"
+                    and article["triage"].get("exploitation_basis") != "fact"):
+                article["enrichment"]["exploitation"] = None
+        article["classification_quality"] = classification_quality(article)
         # 정규식 추출(명시된 ID) + LLM 매핑(서술형, 공식 카탈로그로 검증됨) 병합
         for technique in article["enrichment"].get("attack_techniques") or []:
             if technique not in article["attack_techniques"]:
@@ -622,6 +667,15 @@ def collect_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
             deferred.append((article, count))
         else:
             attempts.pop(key, None)
+            category = fallback_category(article["title"])
+            if category:
+                article["enrichment"] = {
+                    "category": category,
+                    "category_reason": "AI 분석 실패: 제목에 명시된 취약점 단서로 임시 분류(검토 필요)",
+                    "confidence": "low",
+                }
+                article["category_fallback"] = True
+            article["classification_quality"] = classification_quality(article)
             article["alert"] = False
             article["importance"]["reasons"].append(
                 "AI 분석 {}회 실패 — 검증 불가로 알림 보류(리포트만)".format(ENRICH_MAX_ATTEMPTS)
@@ -711,6 +765,8 @@ def finalize_feed(result, email_sent):
                 analyst_review=enrichment.get("analyst_review"),
                 novelty=enrichment.get("novelty") or "",
                 body_chars=len(article["body"] or ""),
+                body_source=article.get("body_source") or "",
+                classification_quality=article.get("classification_quality") or classification_quality(article),
                 recommended_actions=enrichment.get("recommended_actions"),
                 affected_versions=enrichment.get("affected_versions"),
                 fix_available=enrichment.get("fix_available"),
@@ -775,10 +831,20 @@ def main():
         # 피드 하나가 죽어도 나머지는 계속 수집한다
         try:
             result = collect_feed(feed, dry_run=args.dry_run, enrich_enabled=not args.no_enrich, limit=args.limit)
+            if not args.dry_run:
+                try:
+                    feed_health.record_success(feed)
+                except Exception as health_error:
+                    print("[-] 피드 상태 기록 실패({}): {}".format(feed["name"], health_error))
             if result:
                 results.append(result)
         except Exception as error:
             print("[-] {} 처리 중 오류: {}".format(feed.get("label") or feed.get("name"), error))
+            if not args.dry_run:
+                try:
+                    feed_health.record_failure(feed, error)
+                except Exception as health_error:
+                    print("[-] 피드 상태 기록 실패({}): {}".format(feed["name"], health_error))
 
     if args.dry_run or not results:
         return

@@ -37,6 +37,7 @@ import socket
 import urllib.parse
 
 import requests
+import analysis_trace
 
 ALLOWED_SCHEMES = {"http", "https"}
 MAX_REDIRECTS = 5
@@ -84,6 +85,7 @@ def check_public_url(url):
     return url
 
 
+@analysis_trace.step("기사·참고자료 HTTP 요청", kind="lookup", inputs=("url",))
 def safe_get(url, **kwargs):
     """requests.get과 같은 자리에 쓴다 — 매 리다이렉트마다 사설망 여부를 다시 본다.
 

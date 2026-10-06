@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
+import nvd_details
 
 # Windows 콘솔(cp949)에서 특수문자 출력이 죽지 않도록 UTF-8로 강제
 for stream in (sys.stdout, sys.stderr):
@@ -257,7 +258,7 @@ def parse_nvd_vulnerabilities(vulnerabilities):
     return list(cves.values())
 
 
-def fetch_new_nvd_cves():
+def fetch_nvd_cves_with_updates():
     try:
         published_raw = fetch_nvd_cves_by_date("pubStartDate", "pubEndDate")
     except Exception as error:
@@ -312,7 +313,11 @@ def fetch_new_nvd_cves():
 
 
     filtered_cves.sort(key=lambda item: item["published"], reverse=True)
-    return filtered_cves
+    return filtered_cves, modified_cves
+
+
+def fetch_new_nvd_cves():
+    return fetch_nvd_cves_with_updates()[0]
 
 
 def fetch_cisa_kev():
@@ -613,8 +618,12 @@ def main():
     sent_nvd_ids = set(state["sent_nvd_ids"])
     sent_kev_ids = set(state["sent_kev_ids"])
 
-    nvd_items = filter_important_nvd_items(fetch_new_nvd_cves())
+    recent_nvd, modified_nvd = fetch_nvd_cves_with_updates()
+    nvd_items = filter_important_nvd_items(recent_nvd)
     kev_items = fetch_cisa_kev()
+    updated_details = nvd_details.update_cache(modified_nvd, sent_nvd_ids)
+    if updated_details:
+        print("NVD 수정 정보 {}건을 기존 CVE 상세에 반영했습니다.".format(updated_details))
 
     # 이메일/슬랙(상위 N건, 알림 스팸 방지용 캡)과 이벤트 로그(대시보드 CVE 탭이
     # 그 기간 CVE를 빠짐없이 보여줘야 하므로 캡 없이 전체)를 분리한다 — 예전엔
@@ -677,6 +686,7 @@ def main():
                 references=item.get("references"),
                 affected_packages=item.get("affected_packages"),
                 published_at=item["published"],
+                source_updated_at=item.get("last_modified") or "",
                 email_sent=email_sent and item["id"] in emailed_nvd_ids,
                 slack_sent=slack_sent and item["id"] in emailed_nvd_ids,
                 triage=item.get("triage"),

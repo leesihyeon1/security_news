@@ -303,7 +303,8 @@ def load_events_between(since, until):
     if dropped:
         print("[*] 발행일이 {} 이전인 항목 {}건 제외(수집은 구간 안이지만 옛 기사)".format(
             published_floor.strftime("%Y-%m-%d"), dropped))
-    return list(events.values())
+    from nvd_details import enrich_events
+    return enrich_events(list(events.values()))
 
 
 def _entity_counters(events):
@@ -1064,6 +1065,10 @@ def build_cve_items(events, cards=None):
                 item["summaries"].append((0 if specific else 1, language, text))
             for product in event.get("affected_products") or []:
                 product = str(product or "").strip()
+                if product and product not in item["products"] and len(item["products"]) < 3:
+                    item["products"].append(product)
+            for package in event.get("affected_packages") or []:
+                product = str(package.get("product") or "").strip() if isinstance(package, dict) else ""
                 if product and product not in item["products"] and len(item["products"]) < 3:
                     item["products"].append(product)
 

@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import analysis_trace
 import sys
 import time
 import urllib.parse
@@ -171,6 +172,7 @@ def _request(url, api_key=None, raw=False):
     return json.loads(body.decode("utf-8", errors="replace"))
 
 
+@analysis_trace.step("urlscan 검색 실행", kind="lookup", inputs=("query", "size"))
 def urlscan_search(query, size=MAX_RESULTS_PER_PIVOT, api_key=None):
     """검색 API 호출. 실패해도 예외를 올리지 않고 빈 결과를 준다(피벗 하나가 죽어도 계속)."""
     url = "{}?{}".format(SEARCH_URL, urllib.parse.urlencode({"q": query, "size": size}))
@@ -327,6 +329,7 @@ def _urlscan_filename(url):
     return name
 
 
+@analysis_trace.step("urlscan HTTP 리소스·통신 지문 추출", kind="extraction", inputs=("uuid", "page_host"))
 def resource_facts(uuid, page_host, api_key):
     """스캔이 실제로 주고받은 리소스에서 조사 재료를 뽑는다.
 
@@ -755,6 +758,7 @@ def _inspect_dom(dom):
             "dom_bytes": len(dom)}
 
 
+@analysis_trace.step("저장된 DOM 지문 대조", kind="validation", inputs=("uuid",))
 def verify_dom(uuid, api_key):
     """Inspect stored DOM; partial markers remain candidates, never confirmed lures."""
     try:

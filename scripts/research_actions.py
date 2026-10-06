@@ -16,6 +16,7 @@
 
 import os
 import re
+import analysis_trace
 import urllib.parse
 
 import research_entities
@@ -259,6 +260,7 @@ def more_samples(block, iocs, attempted, run_hash):
     return lines, "추가 샘플 {}건의 외부 샌드박스 행위를 조회했습니다(자체 실행 아님).".format(len(ordered))
 
 
+@analysis_trace.step("미확인 목표 재조사: 링크·샘플·비교 조회", "followup", inputs=("iocs", "attempted", "evidence_text"))
 def execute(block, iocs, api_key, run_hash, attempted=None, lure_hunter=None, evidence_text=""):
     """plan_actions의 행동을 실행한다. (증거 줄, 단계 줄)을 돌려준다.
 

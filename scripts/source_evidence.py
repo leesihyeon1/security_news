@@ -3,6 +3,7 @@
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 import ipaddress
 import re
+import analysis_trace
 import research_entities
 
 REPORT_URL_RE = re.compile(r"https?://[^\s<>\"'`]+", re.I)
@@ -36,6 +37,7 @@ def _plain(value):
     return str(value or "").replace("[.]", ".").replace("hxxp", "http").replace("[:]", ":")
 
 
+@analysis_trace.step("IOC 문맥·역할·조회 가능 여부 판정", kind="validation", inputs=("iocs", "documents"))
 def assess_iocs(iocs, documents):
     """Classify a mention's role, not its owner's reputation. Unknown stays unknown."""
     result = []
@@ -159,6 +161,7 @@ def lookup_iocs(iocs):
     return [i for i in iocs or [] if i.get("role") not in CONTEXT_ROLES]
 
 
+@analysis_trace.step("참고 보고서 IOC 재추출", kind="extraction", inputs=("text",))
 def extract_report_iocs(text, limit=200):
     """Add plain hosts from a read research report; role assessment still decides use."""
     import common_utils
@@ -186,6 +189,7 @@ def display_iocs(iocs):
             or i.get("actionable") is True]
 
 
+@analysis_trace.step("판정된 IOC로 조사 대상 제한", kind="validation", inputs=("targets", "assessed"))
 def restrict_targets(targets, assessed):
     result = dict(targets or {})
     excluded = {i["value"].lower() for i in assessed if i.get("role") in CONTEXT_ROLES}
@@ -219,6 +223,7 @@ def reference_hosts(urls):
             for url in urls if urlsplit(article_url(url)).hostname}
 
 
+@analysis_trace.step("참고자료 주소를 IOC에서 제외", kind="validation", inputs=("iocs", "urls"))
 def filter_iocs(iocs, urls):
     """Exclude exact source URLs and bare source hosts, not other paths on a host.
 
