@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "start_year": 2000,
+  "sources": [
+    {"id":"s125","title":"1·25 인터넷 대란 그 이후","publisher":"대한민국 정책브리핑","url":"https://www.korea.kr/briefing/policyBriefingView.do?newsId=148624792","published_at":"2007-05-23","kind":"정부 회고 자료"},
+    {"id":"s77","title":"방통위, 인터넷 장애 주의 경보 발령","publisher":"방송통신위원회","url":"https://www.korea.kr/news/policyNewsView.do?newsId=148673010","published_at":"2009-07-08","kind":"당시 상황 발표"},
+    {"id":"s320","title":"3·20 사이버테러 중간 조사결과 발표","publisher":"정부 민·관·군 합동대응팀","url":"https://www.korea.kr/briefing/policyBriefingView.do?newsId=148758739","published_at":"2013-04-10","kind":"중간 조사결과"},
+    {"id":"scard1","title":"신용카드업자 고객정보 유출 관련 현황 및 대응방안","publisher":"금융위원회","url":"https://www.fsc.go.kr/po010106/70982","published_at":"2014-01-08","kind":"중간 수사결과 관련 발표"},
+    {"id":"scard2","title":"고객정보 유출 3개 카드사에 대한 제재조치","publisher":"금융위원회","url":"https://www.fsc.go.kr/no010103/24546","published_at":"2014-02-16","kind":"검사 결과·후속 조치"},
+    {"id":"sskt","title":"SK텔레콤 침해사고 최종 조사결과 발표","publisher":"과학기술정보통신부","url":"https://www.korea.kr/news/policyNewsView.do?newsId=156721622","published_at":"2025-07-04","kind":"최종 기술 조사결과"}
+  ],
+  "incidents": [
+    {
+      "id":"kr-2003-internet-outage","review_state":"published","reviewed_at":"2026-10-08",
+      "title":"1·25 인터넷 대란","aliases":["1·25 인터넷 대란","1.25 인터넷 대란","1.25 인터넷침해사고"],
+      "organizations":["국내 인터넷 서비스 사업자"],"sector":"통신·인터넷","category":"웜 확산",
+      "date":"2003-01-25","date_basis":"발생일","occurred":"2003년 1월 25일","discovered_at":"","disclosed_at":"",
+      "summary":"인터넷 연결 장애가 일상과 서비스 전반으로 번졌다. 슬래머 웜 확산은 국가 차원의 사이버 대응체계를 돌아보는 계기가 됐다.",
+      "scope_note":"정부의 2007년 회고 자료를 바탕으로 작성했습니다. 전체 피해액과 피해 이용자 수는 이 기록에서 산정하지 않습니다.",
+      "facts":[
+        {"label":"사고 개요","text":"정부 회고 자료는 2003년 1·25 인터넷 대란을 슬래머 웜 확산에 따른 국내 인터넷 장애로 설명합니다.","source_ids":["s125"],"status":"공식 회고"},
+        {"label":"사회적 영향","text":"인터넷 의존도가 높아진 환경에서 개별 시스템의 감염이 광범위한 서비스 장애로 이어질 수 있음을 드러냈습니다.","source_ids":["s125"],"status":"자료 요약"},
+        {"label":"후속 변화","text":"정부는 이 사고 이후 국가 차원의 사이버 대응체계를 강화했으며, 2004년 2월 국가사이버안전센터가 설립됐습니다.","source_ids":["s125"],"status":"공식 회고"}
+      ],
+      "milestones":[
+        {"date":"2003-01-25","label":"인터넷 장애 발생","text":"슬래머 웜 확산과 함께 국내 인터넷 서비스에 장애가 발생했습니다.","source_ids":["s125"]},
+        {"date":"2004-02","label":"국가사이버안전센터 설립","text":"국가 차원의 예방·관제·사고 대응체계가 강화됐습니다.","source_ids":["s125"]}
+      ],
+      "related_ids":["kr-2009-ddos"],
+      "visual":{"image":"assets/news-fallbacks/network.webp","caption":"네트워크 연결망 · 참고 사진","credit":"Jordan Harrison / Unsplash","credit_url":"https://unsplash.com/photos/blue-utp-cord-40XgDxBfYXM"}
+    },
+    {
+      "id":"kr-2009-ddos","review_state":"published","reviewed_at":"2026-10-08",
+      "title":"7·7 DDoS 공격","aliases":["7·7 DDoS","7.7 DDoS","7·7 디도스","7.7 디도스"],
+      "organizations":["국가기관","국내 은행·언론사"],"sector":"공공·금융·언론","category":"서비스 마비",
+      "date":"2009-07-07","date_basis":"발생일","occurred":"2009년 7월 7일 이후","discovered_at":"","disclosed_at":"2009-07-08",
+      "summary":"국가기관과 은행, 언론사 사이트에 대량의 공격 트래픽이 집중됐다. 감염된 PC를 이용한 공격은 서비스 접속 지연과 장애를 일으켰다.",
+      "scope_note":"2009년 7월 8일 상황 발표 기준입니다. 당시 발표는 공격 출처를 확정하지 않았으며 이후 수사 결과를 포함하지 않습니다.",
+      "facts":[
+        {"label":"공격 방식","text":"다수의 컴퓨터에서 특정 사이트로 트래픽을 보내는 분산서비스거부 공격이 발생했습니다. 국내 국가기관·은행·언론 사이트가 대상에 포함됐습니다.","source_ids":["s77"],"status":"당시 발표"},
+        {"label":"확인된 영향","text":"공격 대상 사이트에 접속 지연과 서비스 장애가 발생했습니다. 이 기록에는 검증되지 않은 전체 피해 규모를 포함하지 않습니다.","source_ids":["s77"],"status":"당시 발표"},
+        {"label":"당시 대응","text":"ISP와 피해 사이트는 감염 PC의 IP 탐지·차단을 진행했습니다. 정부는 24시간 상황실과 공동대응체계를 운영하고 백신 점검과 보안 업데이트를 안내했습니다.","source_ids":["s77"],"status":"당시 발표"}
+      ],
+      "milestones":[
+        {"date":"2009-07-07","label":"공격 발생","text":"오후 7시경부터 국내외 일부 사이트에서 장애가 발생했습니다.","source_ids":["s77"]},
+        {"date":"2009-07-08","label":"주의 경보와 공동대응","text":"방송통신위원회와 KISA가 상황과 대응조치를 발표했습니다.","source_ids":["s77"]}
+      ],
+      "related_ids":["kr-2003-internet-outage","kr-2013-network-destruction"]
+    },
+    {
+      "id":"kr-2013-network-destruction","review_state":"published","reviewed_at":"2026-10-08",
+      "title":"3·20 전산망 마비","aliases":["3·20 사이버테러","3.20 사이버테러","3·20 전산망","3.20 전산망"],
+      "organizations":["방송사·금융기관"],"sector":"금융·언론","category":"시스템 파괴",
+      "date":"2013-03-20","date_basis":"발생일","occurred":"2013년 3월 20일","discovered_at":"","disclosed_at":"",
+      "summary":"방송사와 금융기관의 PC·서버가 동시에 멈췄다. 합동대응팀은 전산장비 파괴와 관련 악성코드·접속기록을 조사했다.",
+      "scope_note":"2013년 4월 10일 중간 조사결과 기준입니다. 같은 브리핑에서 설명한 3월 25·26일 후속 사건은 3월 20일 피해 수치에 합산하지 않았습니다.",
+      "facts":[
+        {"label":"피해 범위","text":"합동대응팀은 3월 20일 방송·금융사에서 약 4만 8,700대의 PC와 서버에 장애가 발생했다고 발표했습니다.","source_ids":["s320"],"status":"중간 조사결과"},
+        {"label":"조사 내용","text":"전산장비 파괴를 일으킨 악성코드와 접속기록을 분석하고, 이후 발생한 사건들과의 연관성을 조사했습니다.","source_ids":["s320"],"status":"중간 조사결과"},
+        {"label":"공격 배후에 대한 발표","text":"정부는 북한 정찰총국의 기존 해킹수법과 유사한 증거를 발견했다고 발표했습니다. 이 기록은 이를 조사기관의 당시 판단으로 인용합니다.","source_ids":["s320"],"status":"조사기관 판단"}
+      ],
+      "milestones":[
+        {"date":"2013-03-20","label":"방송·금융사 전산장비 장애","text":"전산장비 파괴 사고 발생 후 민·관·군 합동대응팀이 가동됐습니다.","source_ids":["s320"]},
+        {"date":"2013-04-10","label":"중간 조사결과 공개","text":"피해 장비 규모와 악성코드·접속기록 분석 내용이 발표됐습니다.","source_ids":["s320"]}
+      ],
+      "related_ids":["kr-2009-ddos"],
+      "visual":{"image":"assets/news-fallbacks/servers.webp","caption":"데이터센터 서버 · 참고 사진","credit":"imgix / Unsplash","credit_url":"https://unsplash.com/photos/server-racks-in-data-center-klWUhr-wPJ8"}
+    },
+    {
+      "id":"kr-2014-card-data","review_state":"published","reviewed_at":"2026-10-08",
+      "title":"카드 3사 고객정보 유출","aliases":["카드 3사 정보유출","카드3사 개인정보유출","2014년 카드사 정보유출"],
+      "organizations":["KB국민카드","롯데카드","NH농협카드"],"sector":"금융","category":"개인정보 유출",
+      "date":"2014-01-08","date_basis":"공개일","occurred":"2012년 10월 ~ 2013년 12월","discovered_at":"","disclosed_at":"2014-01-08",
+      "summary":"개발 용역을 수행하던 협력회사 직원이 카드사의 고객정보를 유출했다. 외부 인력의 접근권한과 자료 반출 통제가 금융권의 주요 과제로 떠올랐다.",
+      "scope_note":"연표는 2014년 공개 시점을 기준으로 합니다. 실제 유출 기간은 2012~2013년이며, 회사별 수치를 합쳐 고유 피해자 수로 표시하지 않았습니다.",
+      "facts":[
+        {"label":"유출 경위","text":"금융위는 KCB 직원이 카드 위·변조 방지 시스템 개발 작업 중 KB국민·롯데·NH농협카드 고객정보를 불법 수집·유포한 혐의로 기소됐다고 발표했습니다.","source_ids":["scard1"],"status":"당시 수사 발표"},
+        {"label":"확인된 문제","text":"검사 결과 고객정보의 외부 유출 방지와 안전성 확보, 내부통제 절차 등에 문제가 확인됐습니다.","source_ids":["scard2"],"status":"검사 결과"},
+        {"label":"후속 조치","text":"금융위는 2014년 2월 세 카드사에 3개월 일부 업무정지 처분을 결정했습니다. 신규 카드 발급 등 제한 대상과 기존 고객 서비스는 구분됐습니다.","source_ids":["scard2"],"status":"처분 발표"}
+      ],
+      "milestones":[
+        {"date":"2012-10 ~ 2013-12","label":"고객정보 유출 기간","text":"금융위의 후속 발표에서 확인된 실제 유출 기간입니다.","source_ids":["scard2"]},
+        {"date":"2014-01-08","label":"사고 공개","text":"금융위가 중간 수사결과에 따른 현황과 대응방안을 발표했습니다.","source_ids":["scard1"]},
+        {"date":"2014-02-16","label":"카드사 제재조치 발표","text":"일부 업무정지와 고객 서비스 유지 방안이 발표됐습니다.","source_ids":["scard2"]}
+      ],
+      "related_ids":["kr-2025-skt"]
+    },
+    {
+      "id":"kr-2025-skt","review_state":"published","reviewed_at":"2026-10-08",
+      "title":"SK텔레콤 유심정보 유출","aliases":["SK텔레콤 유심정보 유출","SKT 유심정보 유출","2025년 SK텔레콤 침해사고"],
+      "organizations":["SK텔레콤","에스케이텔레콤"],"sector":"통신","category":"개인정보 유출",
+      "date":"2025-04-18","date_basis":"유출·인지일","occurred":"2021년 이후 침해 흔적 · 2025년 4월 18일 유심정보 유출","discovered_at":"2025-04-18","disclosed_at":"",
+      "summary":"통신망 침해가 유심정보 유출로 이어졌다. 정부 조사에서는 장기간의 악성코드 감염 흔적과 계정정보·암호화 관리의 문제가 확인됐다.",
+      "scope_note":"2025년 7월 4일 과기정통부의 기술 조사결과 기준입니다. IMSI 건수는 고유 피해자 수와 다르며, 이후 개인정보위 처분·소송 결과를 모두 포괄하지 않습니다.",
+      "facts":[
+        {"label":"유출 정보","text":"과기정통부는 전화번호·IMSI 등 유심정보 25종, IMSI 기준 약 2,696만 건의 유출을 발표했습니다. 건수를 가입자 수로 환산하지 않습니다.","source_ids":["sskt"],"status":"최종 기술 조사결과"},
+        {"label":"침해 경과","text":"2021년 이후 CrossC2·BPFDoor 등 악성코드 설치 흔적이 확인됐습니다. 조사단은 평문 계정정보 관리와 과거 사고 대응의 문제를 지적했습니다.","source_ids":["sskt"],"status":"최종 기술 조사결과"},
+        {"label":"후속 대책","text":"조사단은 계정정보와 주요 정보 암호화, 철저한 원인 분석 및 신고 이행을 요구했습니다. 로그가 없는 기간의 일부 정보 유출 여부는 확인하지 못했습니다.","source_ids":["sskt"],"status":"조사 결과·요구사항"}
+      ],
+      "milestones":[
+        {"date":"2021-08-06","label":"악성코드 설치 흔적","text":"정부 조사에서 확인한 CrossC2 설치 시점으로, 최초 침입일을 확정한 것은 아닙니다.","source_ids":["sskt"]},
+        {"date":"2025-04-18","label":"유심정보 유출·사고 인지","text":"조사단은 이날 유출과 사업자의 사고 인지를 확인했습니다.","source_ids":["sskt"]},
+        {"date":"2025-07-04","label":"최종 기술 조사결과 발표","text":"침해 경과와 유출 범위, 재발방지 대책을 발표했습니다.","source_ids":["sskt"]}
+      ],
+      "related_ids":["kr-2014-card-data"],
+      "visual":{"image":"assets/news-fallbacks/hardware.webp","caption":"전자회로 · 참고 사진","credit":"Dai / Unsplash","credit_url":"https://unsplash.com/photos/yellow-black-and-blue-circuit-boards-isolated-on-white-background-ogxlyCA1BQc"}
+    }
+  ]
+}

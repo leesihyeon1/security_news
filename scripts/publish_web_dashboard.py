@@ -32,6 +32,7 @@ from pathlib import Path
 import common_utils
 import event_calendar
 import live_news
+import incident_archive
 from dashboard_text import event_summary, public_text
 
 for stream in (sys.stdout, sys.stderr):
@@ -379,6 +380,18 @@ def _write_and_commit(repo, payload, period, date_stamp, data_dir):
     with calendar_path.open("w", encoding="utf-8") as file:
         json.dump(event_calendar.from_collected_events(), file, ensure_ascii=False,
                   separators=(",", ":"))
+
+    # Archive errors must not replace the last reviewed edition or stop news delivery.
+    try:
+        incident_archive.publish(data_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("[!] 사고 아카이브 발행 보류: {}".format(error))
+    try:
+        added = incident_archive.discover()
+        if added:
+            print("[*] 사고 아카이브 검토 후보 {}건 추가".format(added))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("[!] 사고 아카이브 후보 수집 보류: {}".format(error))
 
     _run_git(["add", "dashboard/data"], cwd=repo)
     if not _has_staged_changes("dashboard/data", cwd=repo):
