@@ -50,6 +50,13 @@ SECTOR_PATTERNS = (
     ("의료기관", r"병원|의료기관"),
     ("교육기관", r"대학교|대학|학교"),
 )
+GOOGLE_ARTICLE_URL = "https://news.google.com/articles/"
+GOOGLE_BATCH_URL = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0 Safari/537.36")
+MEDIA_BUDGET_SECONDS = 25
+MEDIA_CACHE_DAYS = 3
+MEDIA_TRIES = 3
 OUTAGE_RE = re.compile(r"먹통|접속\s*(?:장애|불가|오류)|서비스\s*(?:장애|중단)|전산\s*장애")
 NOT_HACK_RE = re.compile(r"해킹\s*(?:은|이)?\s*아니|해킹\s*아닌")
 
@@ -168,11 +175,93 @@ def build(rows, catalog, now=None):
             "group_label": group["label"], "published_at": _iso(lead["published"]), "first_at": _iso(first),
             "collected_at": _iso(now), "outlets": len(outlets), "outlets_6h": len(recent),
             "outlet_names": outlets[:6], "articles": len(articles), "tags": sorted(group["tags"]),
-            "claim_status": "alleged" if group["alleged"] * 2 > len(articles) else "reported",
+            "claim_status": "alleged" if group["alleged"] * 2 > len(articles) else "reported", "image_url": "",
+            # 대표 이미지를 찾을 최근 기사들. 발행 전에 attach_media가 지운다.
+            "candidates": [{"title": article["title"], "url": article["url"], "outlet": article["outlet"],
+                            "published_at": _iso(article["published"])} for article in reversed(articles[-MEDIA_TRIES:])],
         })
     items.sort(key=lambda item: (item["outlets_6h"] >= MIN_OUTLETS, item["published_at"]), reverse=True)
     return {"version": 1, "updated_at": _iso(now), "source": "google_news", "window_hours": WINDOW_HOURS,
             "min_outlets": MIN_OUTLETS, "items": items[:MAX_ITEMS]}
+
+
+def _http(url, data=None, headers=None, timeout=8):
+    request = urllib.request.Request(url, data=data, headers=dict({"User-Agent": BROWSER_UA}, **(headers or {})))
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read(MAX_BYTES).decode("utf-8", "replace")
+
+
+def original_url(google_url):
+    """구글 뉴스 경유 주소를 원문 주소로 푼다. 구글 뉴스 화면이 쓰는 비공식 호출이라 실패하면 빈 문자열."""
+    import live_news
+
+    gid = urllib.parse.urlsplit(google_url).path.rsplit("/", 1)[-1]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,}", gid):
+        return ""
+    page = _http(GOOGLE_ARTICLE_URL + gid)
+    sign, stamp = re.search(r'data-n-a-sg="([^"]+)"', page), re.search(r'data-n-a-ts="(\d+)"', page)
+    if not (sign and stamp):
+        return ""
+    request = ["garturlreq", [["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1, None, None, None, None, None,
+                               0, 1], "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0],
+               gid, int(stamp.group(1)), sign.group(1)]
+    body = "f.req=" + urllib.parse.quote(json.dumps([[["Fbv4je", json.dumps(request), None, "generic"]]]))
+    text = _http(GOOGLE_BATCH_URL, body.encode(), {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"})
+    rows = json.loads(text.split("\n\n", 1)[1])[:-2]
+    return live_news.public_url(json.loads(rows[0][2])[1])
+
+
+def page_image(markup, base):
+    """원문의 대표 이미지(og:image·twitter:image)만 쓴다 — 본문 첫 그림은 로고·광고인 경우가 많다."""
+    from bs4 import BeautifulSoup
+    import live_news
+
+    soup = BeautifulSoup(markup or "", "html.parser")
+    for attrs in ({"property": "og:image"}, {"name": "og:image"}, {"name": "twitter:image"}, {"property": "twitter:image"}):
+        node = soup.find("meta", attrs=attrs)
+        value = live_news.public_url(node.get("content"), base) if node else ""
+        if value:
+            return value
+    return ""
+
+
+def resolve_media(google_url):
+    url = original_url(google_url)
+    return (url, page_image(_http(url), url)) if url else ("", "")
+
+
+def attach_media(payload, cache, resolve=resolve_media, budget=MEDIA_BUDGET_SECONDS, clock=time.monotonic):
+    """속보 카드마다 원문 주소와 대표 이미지를 붙인다. 이미 푼 주소는 cache에서 다시 쓴다.
+
+    대표 기사에 이미지가 없으면 같은 사고의 다음 최신 기사로 넘어가고, 그 기사를 카드에 쓴다.
+    시간 한도를 넘기면 남은 카드는 다음 갱신 때 이어서 푼다(그동안은 참고 이미지).
+    """
+    deadline = clock() + budget
+    stamp = _iso(_now())
+    for item in payload["items"]:
+        for candidate in item.pop("candidates", []):
+            hit = cache.get(candidate["url"])
+            if hit is None:
+                if clock() > deadline:
+                    break
+                try:
+                    url, image = resolve(candidate["url"])
+                except Exception:
+                    url, image = "", ""
+                hit = cache[candidate["url"]] = {"url": url, "image": image, "at": stamp}
+            if hit.get("image"):
+                item.update(title=candidate["title"], url=hit.get("url") or candidate["url"],
+                            source_label=candidate["outlet"], published_at=candidate["published_at"],
+                            image_url=hit["image"])
+                break
+            if candidate["url"] == item["url"] and hit.get("url"):
+                item["url"] = hit["url"]  # 이미지는 없어도 대표 기사는 원문으로 바로 연다.
+    return payload
+
+
+def _prune_media(cache, now=None):
+    cutoff = _iso((now or _now()) - timedelta(days=MEDIA_CACHE_DAYS))
+    return {key: value for key, value in cache.items() if value.get("at", "") >= cutoff}
 
 
 def _load_state(path=STATE):
@@ -205,22 +294,23 @@ def publish(payload, client=None):
             client.close()
 
 
-def refresh(force=False, state_path=STATE, fetcher=fetch, client=None, now=None):
+def refresh(force=False, state_path=STATE, fetcher=fetch, client=None, now=None, resolve=resolve_media):
     """Fetch, cluster and publish at most every few minutes. Never raises."""
     state = _load_state(state_path)
     clock = time.time()
     if not force and clock < state.get("next_at", 0):
         return None
+    media = _prune_media(state.get("media", {}), now)
     try:
-        payload = build(parse(fetcher()), incident_archive.load_catalog(), now=now)
+        payload = attach_media(build(parse(fetcher()), incident_archive.load_catalog(), now=now), media, resolve)
         published = publish(payload, client)
         state = {"next_at": clock + MIN_INTERVAL_SECONDS, "updated_at": payload["updated_at"],
-                 "items": len(payload["items"]), "published": published}
+                 "items": len(payload["items"]), "published": published, "media": media}
         print("[breaking] 국내 속보 {}건 갱신{}".format(len(payload["items"]), "" if published else "(Redis 미설정)"))
         return payload
     except Exception as error:
         # 연결 예외 문자열에는 자격 증명이 든 Redis 주소가 섞일 수 있어 종류만 남긴다.
-        state = dict(state, next_at=clock + FAILURE_BACKOFF_SECONDS, error=type(error).__name__)
+        state = dict(state, next_at=clock + FAILURE_BACKOFF_SECONDS, error=type(error).__name__, media=media)
         print("[breaking] 국내 속보 갱신 보류({})".format(type(error).__name__))
         return None
     finally:
@@ -235,7 +325,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print clusters without publishing")
     args = parser.parse_args()
     if args.dry_run:
-        print(json.dumps(build(parse(fetch()), incident_archive.load_catalog()), ensure_ascii=False, indent=2))
+        payload = attach_media(build(parse(fetch()), incident_archive.load_catalog()), {})
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
     refresh(force=True)
 
