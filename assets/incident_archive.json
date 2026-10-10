@@ -2,108 +2,1420 @@
   "schema_version": 1,
   "start_year": 2000,
   "sources": [
-    {"id":"s125","title":"1·25 인터넷 대란 그 이후","publisher":"대한민국 정책브리핑","url":"https://www.korea.kr/briefing/policyBriefingView.do?newsId=148624792","published_at":"2007-05-23","kind":"정부 회고 자료"},
-    {"id":"s77","title":"방통위, 인터넷 장애 주의 경보 발령","publisher":"방송통신위원회","url":"https://www.korea.kr/news/policyNewsView.do?newsId=148673010","published_at":"2009-07-08","kind":"당시 상황 발표"},
-    {"id":"s320","title":"3·20 사이버테러 중간 조사결과 발표","publisher":"정부 민·관·군 합동대응팀","url":"https://www.korea.kr/briefing/policyBriefingView.do?newsId=148758739","published_at":"2013-04-10","kind":"중간 조사결과"},
-    {"id":"scard1","title":"신용카드업자 고객정보 유출 관련 현황 및 대응방안","publisher":"금융위원회","url":"https://www.fsc.go.kr/po010106/70982","published_at":"2014-01-08","kind":"중간 수사결과 관련 발표"},
-    {"id":"scard2","title":"고객정보 유출 3개 카드사에 대한 제재조치","publisher":"금융위원회","url":"https://www.fsc.go.kr/no010103/24546","published_at":"2014-02-16","kind":"검사 결과·후속 조치"},
-    {"id":"sskt","title":"SK텔레콤 침해사고 최종 조사결과 발표","publisher":"과학기술정보통신부","url":"https://www.korea.kr/news/policyNewsView.do?newsId=156721622","published_at":"2025-07-04","kind":"최종 기술 조사결과"}
+    {
+      "id": "s125",
+      "title": "1·25 인터넷 대란 그 이후",
+      "publisher": "대한민국 정책브리핑",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=148624792",
+      "published_at": "2007-05-23",
+      "kind": "정부 회고 자료"
+    },
+    {
+      "id": "s77",
+      "title": "방통위, 인터넷 장애 주의 경보 발령",
+      "publisher": "방송통신위원회",
+      "url": "https://www.korea.kr/news/policyNewsView.do?newsId=148673010",
+      "published_at": "2009-07-08",
+      "kind": "당시 상황 발표"
+    },
+    {
+      "id": "s320",
+      "title": "3·20 사이버테러 중간 조사결과 발표",
+      "publisher": "정부 민·관·군 합동대응팀",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=148758739",
+      "published_at": "2013-04-10",
+      "kind": "중간 조사결과"
+    },
+    {
+      "id": "scard1",
+      "title": "신용카드업자 고객정보 유출 관련 현황 및 대응방안",
+      "publisher": "금융위원회",
+      "url": "https://www.fsc.go.kr/po010106/70982",
+      "published_at": "2014-01-08",
+      "kind": "중간 수사결과 관련 발표"
+    },
+    {
+      "id": "scard2",
+      "title": "고객정보 유출 3개 카드사에 대한 제재조치",
+      "publisher": "금융위원회",
+      "url": "https://www.fsc.go.kr/no010103/24546",
+      "published_at": "2014-02-16",
+      "kind": "검사 결과·후속 조치"
+    },
+    {
+      "id": "sskt",
+      "title": "SK텔레콤 침해사고 최종 조사결과 발표",
+      "publisher": "과학기술정보통신부",
+      "url": "https://www.korea.kr/news/policyNewsView.do?newsId=156721622",
+      "published_at": "2025-07-04",
+      "kind": "최종 기술 조사결과"
+    },
+    {
+      "id": "smsit-coupang-2",
+      "title": "쿠팡 정보유출 '3367만여 건' 확인…자료 보전 명령 위반 '수사 의뢰'",
+      "publisher": "과학기술정보통신부",
+      "url": "https://www.korea.kr/news/policyNewsView.do?newsId=148959361",
+      "published_at": "2026-02-10",
+      "kind": "조사결과 발표"
+    },
+    {
+      "id": "smsit-coupang-3",
+      "title": "쿠팡 침해사고 민관합동조사단 조사결과",
+      "publisher": "과학기술정보통신부",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=156744092",
+      "published_at": "2026-02-11",
+      "kind": "조사결과 브리핑"
+    },
+    {
+      "id": "spipc-coupang-1",
+      "title": "개인정보위 제11회 전체회의 결과",
+      "publisher": "개인정보보호위원회",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=156766176",
+      "published_at": "2026-06-11",
+      "kind": "처분 발표"
+    },
+    {
+      "id": "spipc-coupang-2",
+      "title": "쿠팡(주), 역대 최대 과징금 총 6246억 8100만 원 부과",
+      "publisher": "개인정보보호위원회",
+      "url": "https://www.korea.kr/news/policyNewsView.do?newsId=148966578",
+      "published_at": "2026-06-16",
+      "kind": "처분 발표"
+    },
+    {
+      "id": "sfsc-lotte-1",
+      "title": "롯데카드 정보유출 관련 긴급 대책회의 개최",
+      "publisher": "금융위원회",
+      "url": "https://www.fsc.go.kr/no010101/85319",
+      "published_at": "2025-09-18",
+      "kind": "사고 현황 발표"
+    },
+    {
+      "id": "spipc-lotte-1",
+      "title": "제4회 위원회 전체회의 결과 발표",
+      "publisher": "개인정보보호위원회",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=156748531",
+      "published_at": "2026-03-12",
+      "kind": "처분 발표"
+    },
+    {
+      "id": "sfsc-lotte-2",
+      "title": "롯데카드(주)의 정보유출 관련 1.5개월 업무정지 및 50억원 과징금 부과",
+      "publisher": "금융위원회",
+      "url": "https://www.fsc.go.kr/no010101/87455",
+      "published_at": "2026-07-31",
+      "kind": "처분 발표"
+    },
+    {
+      "id": "spipc-lgu-1",
+      "title": "개인정보위, ㈜엘지유플러스 개인정보 유출사고 관련 추가 유출 건 확인 등 사실조사 진행 중",
+      "publisher": "개인정보보호위원회",
+      "url": "https://www.pipc.go.kr/np/cop/bbs/selectBoardArticle.do?bbsId=BS074&mCode=C020010000&nttId=8599",
+      "published_at": "2023-02-06",
+      "kind": "조사 경과 발표"
+    },
+    {
+      "id": "smsit-lgu-1",
+      "title": "LGU+ 고객정보 유출, 디도스공격 원인분석 및 대책 발표",
+      "publisher": "과학기술정보통신부",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=156565029",
+      "published_at": "2023-04-27",
+      "kind": "조사결과 발표"
+    },
+    {
+      "id": "spipc-lgu-2",
+      "title": "개인정보위, ㈜엘지유플러스 개인정보 유출사고에 대해 과징금 68억 원, 과태료 2,700만 원 및 시정명령",
+      "publisher": "개인정보보호위원회",
+      "url": "https://www.pipc.go.kr/np/cop/bbs/selectBoardArticle.do?bbsId=BS074&mCode=C020010000&nttId=9030",
+      "published_at": "2023-07-12",
+      "kind": "처분 발표"
+    },
+    {
+      "id": "spipc-lgu-3",
+      "title": "개인정보위 제12회 전체회의 결과",
+      "publisher": "개인정보보호위원회",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=156580176",
+      "published_at": "2023-07-12",
+      "kind": "처분 브리핑"
+    },
+    {
+      "id": "sfsc-finbreach-1",
+      "title": "최근 발생하는 금융권 침해위협에 면밀히 대응해 나가겠습니다. - 금융위원회 사무처장 주재 「긴급 상황대응 회의」 개최",
+      "publisher": "금융위원회",
+      "url": "https://www.fsc.go.kr/no010101/87869",
+      "published_at": "2026-10-02",
+      "kind": "보도자료"
+    },
+    {
+      "id": "sfsc-finbreach-2",
+      "title": "전 금융권이 비상한 경각심을 갖고 침해위협에 대응해 나가겠습니다. - 금융위·금감원 합동 「전 금융권 긴급 점검회의」 개최",
+      "publisher": "금융위원회",
+      "url": "https://www.fsc.go.kr/no010101/87876",
+      "published_at": "2026-10-04",
+      "kind": "점검회의 결과"
+    },
+    {
+      "id": "sfsc-finbreach-4",
+      "title": "최근 발생한 금융권 침해사고에서 계좌정보가 유출되어 중국으로 흘러간 정황은 확인되지 않았습니다.",
+      "publisher": "금융위원회",
+      "url": "https://www.fsc.go.kr/no010102/87877",
+      "published_at": "2026-10-04",
+      "kind": "보도설명자료"
+    },
+    {
+      "id": "sopm-finbreach-1",
+      "title": "국무총리 주재 금융·공공기관 개인정보 유출 대응 관계장관회의 보도자료",
+      "publisher": "국무조정실",
+      "url": "https://www.korea.kr/briefing/pressReleaseView.do?newsId=156784421",
+      "published_at": "2026-10-06",
+      "kind": "보도자료"
+    },
+    {
+      "id": "skb-finbreach-1",
+      "title": "개인(신용)정보 유출 관련 안내",
+      "publisher": "KB국민은행",
+      "url": "https://otalk.kbstar.com/quics?QSL=F&articleId=146650&bbsMode=view&page=C019391",
+      "published_at": "2026-10-02",
+      "kind": "사고 공지"
+    },
+    {
+      "id": "skc-kcc",
+      "title": "해킹으로 네이트·싸이월드 개인정보 유출 사고 발생",
+      "publisher": "방송통신위원회",
+      "url": "https://www.kmcc.go.kr/user.do?boardId=1113&boardSeq=31626&mode=view&page=A05030000",
+      "published_at": "2011-07-28",
+      "kind": "사고 현황 발표"
+    },
+    {
+      "id": "skc-briefing",
+      "title": "SK커뮤니케이션즈 개인정보 유출사고 관련 브리핑",
+      "publisher": "방송통신위원회",
+      "url": "https://www.korea.kr/briefing/policyBriefingView.do?newsId=148715935",
+      "published_at": "2011-07-28",
+      "kind": "사고 현황 브리핑"
+    },
+    {
+      "id": "skc-measures",
+      "title": "인터넷 개인정보보호 체계 전면 강화",
+      "publisher": "방송통신위원회",
+      "url": "https://www.korea.kr/news/policyNewsView.do?newsId=148716397",
+      "published_at": "2011-08-09",
+      "kind": "후속 대책 발표"
+    },
+    {
+      "id": "ip-police",
+      "title": "인터파크 개인정보 해킹·공갈, 북 소행으로 판단",
+      "publisher": "경찰청",
+      "url": "https://www.korea.kr/briefing/pressReleaseView.do?newsId=156144599",
+      "published_at": "2016-07-28",
+      "kind": "중간 수사결과 발표"
+    },
+    {
+      "id": "ip-invest",
+      "title": "인터파크 개인정보 유출 침해사고 조사 결과",
+      "publisher": "미래창조과학부·방송통신위원회",
+      "url": "https://www.kmcc.go.kr/user.do?boardId=1113&boardSeq=42740&mode=view&page=A05030000",
+      "published_at": "2016-08-31",
+      "kind": "조사결과 발표"
+    },
+    {
+      "id": "ip-sanction",
+      "title": "방통위, ㈜인터파크 개인정보 유출사고 엄정 제재",
+      "publisher": "방송통신위원회",
+      "url": "https://www.kmcc.go.kr/user.do?boardId=1113&boardSeq=44087&mode=view&page=A05030000",
+      "published_at": "2016-12-06",
+      "kind": "처분 발표"
+    },
+    {
+      "id": "au-measures",
+      "title": "인터넷상 개인정보 침해방지 대책 수립",
+      "publisher": "방송통신위원회",
+      "url": "https://www.korea.kr/briefing/pressReleaseView.do?newsId=155292606",
+      "published_at": "2008-04-24",
+      "kind": "후속 대책 발표"
+    }
   ],
   "incidents": [
     {
-      "id":"kr-2003-internet-outage","review_state":"published","reviewed_at":"2026-10-08",
-      "title":"1·25 인터넷 대란","aliases":["1·25 인터넷 대란","1.25 인터넷 대란","1.25 인터넷침해사고"],
-      "organizations":["국내 인터넷 서비스 사업자"],"sector":"통신·인터넷","category":"웜 확산",
-      "date":"2003-01-25","date_basis":"발생일","occurred":"2003년 1월 25일","discovered_at":"","disclosed_at":"",
-      "summary":"인터넷 연결 장애가 일상과 서비스 전반으로 번졌다. 슬래머 웜 확산은 국가 차원의 사이버 대응체계를 돌아보는 계기가 됐다.",
-      "scope_note":"정부의 2007년 회고 자료를 바탕으로 작성했습니다. 전체 피해액과 피해 이용자 수는 이 기록에서 산정하지 않습니다.",
-      "facts":[
-        {"label":"사고 개요","text":"정부 회고 자료는 2003년 1·25 인터넷 대란을 슬래머 웜 확산에 따른 국내 인터넷 장애로 설명합니다.","source_ids":["s125"],"status":"공식 회고"},
-        {"label":"사회적 영향","text":"인터넷 의존도가 높아진 환경에서 개별 시스템의 감염이 광범위한 서비스 장애로 이어질 수 있음을 드러냈습니다.","source_ids":["s125"],"status":"자료 요약"},
-        {"label":"후속 변화","text":"정부는 이 사고 이후 국가 차원의 사이버 대응체계를 강화했으며, 2004년 2월 국가사이버안전센터가 설립됐습니다.","source_ids":["s125"],"status":"공식 회고"}
+      "id": "kr-2003-internet-outage",
+      "review_state": "published",
+      "reviewed_at": "2026-10-08",
+      "title": "1·25 인터넷 대란",
+      "aliases": [
+        "1·25 인터넷 대란",
+        "1.25 인터넷 대란",
+        "1.25 인터넷침해사고"
       ],
-      "milestones":[
-        {"date":"2003-01-25","label":"인터넷 장애 발생","text":"슬래머 웜 확산과 함께 국내 인터넷 서비스에 장애가 발생했습니다.","source_ids":["s125"]},
-        {"date":"2004-02","label":"국가사이버안전센터 설립","text":"국가 차원의 예방·관제·사고 대응체계가 강화됐습니다.","source_ids":["s125"]}
+      "organizations": [
+        "국내 인터넷 서비스 사업자"
       ],
-      "related_ids":["kr-2009-ddos"],
-      "visual":{"image":"assets/news-fallbacks/network.webp","caption":"네트워크 연결망 · 참고 사진","credit":"Jordan Harrison / Unsplash","credit_url":"https://unsplash.com/photos/blue-utp-cord-40XgDxBfYXM"}
+      "sector": "통신·인터넷",
+      "category": "웜 확산",
+      "date": "2003-01-25",
+      "date_basis": "발생일",
+      "occurred": "2003년 1월 25일",
+      "discovered_at": "",
+      "disclosed_at": "",
+      "summary": "인터넷 연결 장애가 일상과 서비스 전반으로 번졌다. 슬래머 웜 확산은 국가 차원의 사이버 대응체계를 돌아보는 계기가 됐다.",
+      "scope_note": "정부의 2007년 회고 자료를 바탕으로 작성했습니다. 전체 피해액과 피해 이용자 수는 이 기록에서 산정하지 않습니다.",
+      "selection": {
+        "criteria": [
+          "service",
+          "systemic",
+          "historical"
+        ],
+        "rationale": "웜 확산이 국내 인터넷 장애로 번졌고, 이후 국가 차원의 사이버 대응체계를 강화하는 계기가 된 사고입니다.",
+        "source_ids": [
+          "s125"
+        ]
+      },
+      "facts": [
+        {
+          "label": "사고 개요",
+          "text": "정부 회고 자료는 2003년 1·25 인터넷 대란을 슬래머 웜 확산에 따른 국내 인터넷 장애로 설명합니다.",
+          "source_ids": [
+            "s125"
+          ],
+          "status": "공식 회고"
+        },
+        {
+          "label": "사회적 영향",
+          "text": "인터넷 의존도가 높아진 환경에서 개별 시스템의 감염이 광범위한 서비스 장애로 이어질 수 있음을 드러냈습니다.",
+          "source_ids": [
+            "s125"
+          ],
+          "status": "자료 요약"
+        },
+        {
+          "label": "후속 변화",
+          "text": "정부는 이 사고 이후 국가 차원의 사이버 대응체계를 강화했으며, 2004년 2월 국가사이버안전센터가 설립됐습니다.",
+          "source_ids": [
+            "s125"
+          ],
+          "status": "공식 회고"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2003-01-25",
+          "label": "인터넷 장애 발생",
+          "text": "슬래머 웜 확산과 함께 국내 인터넷 서비스에 장애가 발생했습니다.",
+          "source_ids": [
+            "s125"
+          ]
+        },
+        {
+          "date": "2004-02",
+          "label": "국가사이버안전센터 설립",
+          "text": "국가 차원의 예방·관제·사고 대응체계가 강화됐습니다.",
+          "source_ids": [
+            "s125"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2009-ddos"
+      ],
+      "visual": {
+        "image": "assets/news-fallbacks/network.webp",
+        "caption": "네트워크 연결망 · 참고 사진",
+        "credit": "Jordan Harrison / Unsplash",
+        "credit_url": "https://unsplash.com/photos/blue-utp-cord-40XgDxBfYXM"
+      }
     },
     {
-      "id":"kr-2009-ddos","review_state":"published","reviewed_at":"2026-10-08",
-      "title":"7·7 DDoS 공격","aliases":["7·7 DDoS","7.7 DDoS","7·7 디도스","7.7 디도스"],
-      "organizations":["국가기관","국내 은행·언론사"],"sector":"공공·금융·언론","category":"서비스 마비",
-      "date":"2009-07-07","date_basis":"발생일","occurred":"2009년 7월 7일 이후","discovered_at":"","disclosed_at":"2009-07-08",
-      "summary":"국가기관과 은행, 언론사 사이트에 대량의 공격 트래픽이 집중됐다. 감염된 PC를 이용한 공격은 서비스 접속 지연과 장애를 일으켰다.",
-      "scope_note":"2009년 7월 8일 상황 발표 기준입니다. 당시 발표는 공격 출처를 확정하지 않았으며 이후 수사 결과를 포함하지 않습니다.",
-      "facts":[
-        {"label":"공격 방식","text":"다수의 컴퓨터에서 특정 사이트로 트래픽을 보내는 분산서비스거부 공격이 발생했습니다. 국내 국가기관·은행·언론 사이트가 대상에 포함됐습니다.","source_ids":["s77"],"status":"당시 발표"},
-        {"label":"확인된 영향","text":"공격 대상 사이트에 접속 지연과 서비스 장애가 발생했습니다. 이 기록에는 검증되지 않은 전체 피해 규모를 포함하지 않습니다.","source_ids":["s77"],"status":"당시 발표"},
-        {"label":"당시 대응","text":"ISP와 피해 사이트는 감염 PC의 IP 탐지·차단을 진행했습니다. 정부는 24시간 상황실과 공동대응체계를 운영하고 백신 점검과 보안 업데이트를 안내했습니다.","source_ids":["s77"],"status":"당시 발표"}
+      "id": "kr-2009-ddos",
+      "review_state": "published",
+      "reviewed_at": "2026-10-08",
+      "title": "7·7 DDoS 공격",
+      "aliases": [
+        "7·7 DDoS",
+        "7.7 DDoS",
+        "7·7 디도스",
+        "7.7 디도스"
       ],
-      "milestones":[
-        {"date":"2009-07-07","label":"공격 발생","text":"오후 7시경부터 국내외 일부 사이트에서 장애가 발생했습니다.","source_ids":["s77"]},
-        {"date":"2009-07-08","label":"주의 경보와 공동대응","text":"방송통신위원회와 KISA가 상황과 대응조치를 발표했습니다.","source_ids":["s77"]}
+      "organizations": [
+        "국가기관",
+        "국내 은행·언론사"
       ],
-      "related_ids":["kr-2003-internet-outage","kr-2013-network-destruction"]
+      "sector": "공공·금융·언론",
+      "category": "서비스 마비",
+      "date": "2009-07-07",
+      "date_basis": "발생일",
+      "occurred": "2009년 7월 7일 이후",
+      "discovered_at": "",
+      "disclosed_at": "2009-07-08",
+      "summary": "국가기관과 은행, 언론사 사이트에 대량의 공격 트래픽이 집중됐다. 감염된 PC를 이용한 공격은 서비스 접속 지연과 장애를 일으켰다.",
+      "scope_note": "2009년 7월 8일 상황 발표 기준입니다. 당시 발표는 공격 출처를 확정하지 않았으며 이후 수사 결과를 포함하지 않습니다.",
+      "selection": {
+        "criteria": [
+          "service",
+          "systemic"
+        ],
+        "rationale": "국가기관·은행·언론 사이트가 함께 공격받아 접속 지연과 서비스 장애가 발생했고, 정부 공동대응체계가 가동된 사고입니다.",
+        "source_ids": [
+          "s77"
+        ]
+      },
+      "facts": [
+        {
+          "label": "공격 방식",
+          "text": "다수의 컴퓨터에서 특정 사이트로 트래픽을 보내는 분산서비스거부 공격이 발생했습니다. 국내 국가기관·은행·언론 사이트가 대상에 포함됐습니다.",
+          "source_ids": [
+            "s77"
+          ],
+          "status": "당시 발표"
+        },
+        {
+          "label": "확인된 영향",
+          "text": "공격 대상 사이트에 접속 지연과 서비스 장애가 발생했습니다. 이 기록에는 검증되지 않은 전체 피해 규모를 포함하지 않습니다.",
+          "source_ids": [
+            "s77"
+          ],
+          "status": "당시 발표"
+        },
+        {
+          "label": "당시 대응",
+          "text": "ISP와 피해 사이트는 감염 PC의 IP 탐지·차단을 진행했습니다. 정부는 24시간 상황실과 공동대응체계를 운영하고 백신 점검과 보안 업데이트를 안내했습니다.",
+          "source_ids": [
+            "s77"
+          ],
+          "status": "당시 발표"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2009-07-07",
+          "label": "공격 발생",
+          "text": "오후 7시경부터 국내외 일부 사이트에서 장애가 발생했습니다.",
+          "source_ids": [
+            "s77"
+          ]
+        },
+        {
+          "date": "2009-07-08",
+          "label": "주의 경보와 공동대응",
+          "text": "방송통신위원회와 KISA가 상황과 대응조치를 발표했습니다.",
+          "source_ids": [
+            "s77"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2003-internet-outage",
+        "kr-2013-network-destruction"
+      ]
     },
     {
-      "id":"kr-2013-network-destruction","review_state":"published","reviewed_at":"2026-10-08",
-      "title":"3·20 전산망 마비","aliases":["3·20 사이버테러","3.20 사이버테러","3·20 전산망","3.20 전산망"],
-      "organizations":["방송사·금융기관"],"sector":"금융·언론","category":"시스템 파괴",
-      "date":"2013-03-20","date_basis":"발생일","occurred":"2013년 3월 20일","discovered_at":"","disclosed_at":"",
-      "summary":"방송사와 금융기관의 PC·서버가 동시에 멈췄다. 합동대응팀은 전산장비 파괴와 관련 악성코드·접속기록을 조사했다.",
-      "scope_note":"2013년 4월 10일 중간 조사결과 기준입니다. 같은 브리핑에서 설명한 3월 25·26일 후속 사건은 3월 20일 피해 수치에 합산하지 않았습니다.",
-      "facts":[
-        {"label":"피해 범위","text":"합동대응팀은 3월 20일 방송·금융사에서 약 4만 8,700대의 PC와 서버에 장애가 발생했다고 발표했습니다.","source_ids":["s320"],"status":"중간 조사결과"},
-        {"label":"조사 내용","text":"전산장비 파괴를 일으킨 악성코드와 접속기록을 분석하고, 이후 발생한 사건들과의 연관성을 조사했습니다.","source_ids":["s320"],"status":"중간 조사결과"},
-        {"label":"공격 배후에 대한 발표","text":"정부는 북한 정찰총국의 기존 해킹수법과 유사한 증거를 발견했다고 발표했습니다. 이 기록은 이를 조사기관의 당시 판단으로 인용합니다.","source_ids":["s320"],"status":"조사기관 판단"}
+      "id": "kr-2013-network-destruction",
+      "review_state": "published",
+      "reviewed_at": "2026-10-08",
+      "title": "3·20 전산망 마비",
+      "aliases": [
+        "3·20 사이버테러",
+        "3.20 사이버테러",
+        "3·20 전산망",
+        "3.20 전산망"
       ],
-      "milestones":[
-        {"date":"2013-03-20","label":"방송·금융사 전산장비 장애","text":"전산장비 파괴 사고 발생 후 민·관·군 합동대응팀이 가동됐습니다.","source_ids":["s320"]},
-        {"date":"2013-04-10","label":"중간 조사결과 공개","text":"피해 장비 규모와 악성코드·접속기록 분석 내용이 발표됐습니다.","source_ids":["s320"]}
+      "organizations": [
+        "방송사·금융기관"
       ],
-      "related_ids":["kr-2009-ddos"],
-      "visual":{"image":"assets/news-fallbacks/servers.webp","caption":"데이터센터 서버 · 참고 사진","credit":"imgix / Unsplash","credit_url":"https://unsplash.com/photos/server-racks-in-data-center-klWUhr-wPJ8"}
+      "sector": "금융·언론",
+      "category": "시스템 파괴",
+      "date": "2013-03-20",
+      "date_basis": "발생일",
+      "occurred": "2013년 3월 20일",
+      "discovered_at": "",
+      "disclosed_at": "",
+      "summary": "방송사와 금융기관의 PC·서버가 동시에 멈췄다. 합동대응팀은 전산장비 파괴와 관련 악성코드·접속기록을 조사했다.",
+      "scope_note": "2013년 4월 10일 중간 조사결과 기준입니다. 같은 브리핑에서 설명한 3월 25·26일 후속 사건은 3월 20일 피해 수치에 합산하지 않았습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "service",
+          "systemic"
+        ],
+        "rationale": "방송·금융사의 PC와 서버 약 4만 8,700대에 장애가 발생한 전산장비 파괴 사고입니다.",
+        "source_ids": [
+          "s320"
+        ]
+      },
+      "facts": [
+        {
+          "label": "피해 범위",
+          "text": "합동대응팀은 3월 20일 방송·금융사에서 약 4만 8,700대의 PC와 서버에 장애가 발생했다고 발표했습니다.",
+          "source_ids": [
+            "s320"
+          ],
+          "status": "중간 조사결과"
+        },
+        {
+          "label": "조사 내용",
+          "text": "전산장비 파괴를 일으킨 악성코드와 접속기록을 분석하고, 이후 발생한 사건들과의 연관성을 조사했습니다.",
+          "source_ids": [
+            "s320"
+          ],
+          "status": "중간 조사결과"
+        },
+        {
+          "label": "공격 배후에 대한 발표",
+          "text": "정부는 북한 정찰총국의 기존 해킹수법과 유사한 증거를 발견했다고 발표했습니다. 이 기록은 이를 조사기관의 당시 판단으로 인용합니다.",
+          "source_ids": [
+            "s320"
+          ],
+          "status": "조사기관 판단"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2013-03-20",
+          "label": "방송·금융사 전산장비 장애",
+          "text": "전산장비 파괴 사고 발생 후 민·관·군 합동대응팀이 가동됐습니다.",
+          "source_ids": [
+            "s320"
+          ]
+        },
+        {
+          "date": "2013-04-10",
+          "label": "중간 조사결과 공개",
+          "text": "피해 장비 규모와 악성코드·접속기록 분석 내용이 발표됐습니다.",
+          "source_ids": [
+            "s320"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2009-ddos"
+      ],
+      "visual": {
+        "image": "assets/news-fallbacks/servers.webp",
+        "caption": "데이터센터 서버 · 참고 사진",
+        "credit": "imgix / Unsplash",
+        "credit_url": "https://unsplash.com/photos/server-racks-in-data-center-klWUhr-wPJ8"
+      }
     },
     {
-      "id":"kr-2014-card-data","review_state":"published","reviewed_at":"2026-10-08",
-      "title":"카드 3사 고객정보 유출","aliases":["카드 3사 정보유출","카드3사 개인정보유출","2014년 카드사 정보유출"],
-      "organizations":["KB국민카드","롯데카드","NH농협카드"],"sector":"금융","category":"개인정보 유출",
-      "date":"2014-01-08","date_basis":"공개일","occurred":"2012년 10월 ~ 2013년 12월","discovered_at":"","disclosed_at":"2014-01-08",
-      "summary":"개발 용역을 수행하던 협력회사 직원이 카드사의 고객정보를 유출했다. 외부 인력의 접근권한과 자료 반출 통제가 금융권의 주요 과제로 떠올랐다.",
-      "scope_note":"연표는 2014년 공개 시점을 기준으로 합니다. 실제 유출 기간은 2012~2013년이며, 회사별 수치를 합쳐 고유 피해자 수로 표시하지 않았습니다.",
-      "facts":[
-        {"label":"유출 경위","text":"금융위는 KCB 직원이 카드 위·변조 방지 시스템 개발 작업 중 KB국민·롯데·NH농협카드 고객정보를 불법 수집·유포한 혐의로 기소됐다고 발표했습니다.","source_ids":["scard1"],"status":"당시 수사 발표"},
-        {"label":"확인된 문제","text":"검사 결과 고객정보의 외부 유출 방지와 안전성 확보, 내부통제 절차 등에 문제가 확인됐습니다.","source_ids":["scard2"],"status":"검사 결과"},
-        {"label":"후속 조치","text":"금융위는 2014년 2월 세 카드사에 3개월 일부 업무정지 처분을 결정했습니다. 신규 카드 발급 등 제한 대상과 기존 고객 서비스는 구분됐습니다.","source_ids":["scard2"],"status":"처분 발표"}
+      "id": "kr-2014-card-data",
+      "review_state": "published",
+      "reviewed_at": "2026-10-08",
+      "title": "카드 3사 고객정보 유출",
+      "aliases": [
+        "카드 3사 정보유출",
+        "카드3사 개인정보유출",
+        "2014년 카드사 정보유출"
       ],
-      "milestones":[
-        {"date":"2012-10 ~ 2013-12","label":"고객정보 유출 기간","text":"금융위의 후속 발표에서 확인된 실제 유출 기간입니다.","source_ids":["scard2"]},
-        {"date":"2014-01-08","label":"사고 공개","text":"금융위가 중간 수사결과에 따른 현황과 대응방안을 발표했습니다.","source_ids":["scard1"]},
-        {"date":"2014-02-16","label":"카드사 제재조치 발표","text":"일부 업무정지와 고객 서비스 유지 방안이 발표됐습니다.","source_ids":["scard2"]}
+      "organizations": [
+        "KB국민카드",
+        "롯데카드",
+        "NH농협카드"
       ],
-      "related_ids":["kr-2025-skt"]
+      "sector": "금융",
+      "category": "개인정보 유출",
+      "date": "2014-01-08",
+      "date_basis": "공개일",
+      "occurred": "2012년 10월 ~ 2013년 12월",
+      "discovered_at": "",
+      "disclosed_at": "2014-01-08",
+      "summary": "개발 용역을 수행하던 협력회사 직원이 카드사의 고객정보를 유출했다. 외부 인력의 접근권한과 자료 반출 통제가 금융권의 주요 과제로 떠올랐다.",
+      "scope_note": "연표는 2014년 공개 시점을 기준으로 합니다. 실제 유출 기간은 2012~2013년이며, 회사별 수치를 합쳐 고유 피해자 수로 표시하지 않았습니다.",
+      "selection": {
+        "criteria": [
+          "sensitivity",
+          "systemic",
+          "historical"
+        ],
+        "rationale": "협력회사 직원을 통해 카드 3사의 고객정보가 유출돼 일부 업무정지 처분으로 이어졌고, 외부 인력의 접근 통제가 금융권 과제로 떠오른 사고입니다.",
+        "source_ids": [
+          "scard1",
+          "scard2"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 경위",
+          "text": "금융위는 KCB 직원이 카드 위·변조 방지 시스템 개발 작업 중 KB국민·롯데·NH농협카드 고객정보를 불법 수집·유포한 혐의로 기소됐다고 발표했습니다.",
+          "source_ids": [
+            "scard1"
+          ],
+          "status": "당시 수사 발표"
+        },
+        {
+          "label": "확인된 문제",
+          "text": "검사 결과 고객정보의 외부 유출 방지와 안전성 확보, 내부통제 절차 등에 문제가 확인됐습니다.",
+          "source_ids": [
+            "scard2"
+          ],
+          "status": "검사 결과"
+        },
+        {
+          "label": "후속 조치",
+          "text": "금융위는 2014년 2월 세 카드사에 3개월 일부 업무정지 처분을 결정했습니다. 신규 카드 발급 등 제한 대상과 기존 고객 서비스는 구분됐습니다.",
+          "source_ids": [
+            "scard2"
+          ],
+          "status": "처분 발표"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2012-10 ~ 2013-12",
+          "label": "고객정보 유출 기간",
+          "text": "금융위의 후속 발표에서 확인된 실제 유출 기간입니다.",
+          "source_ids": [
+            "scard2"
+          ]
+        },
+        {
+          "date": "2014-01-08",
+          "label": "사고 공개",
+          "text": "금융위가 중간 수사결과에 따른 현황과 대응방안을 발표했습니다.",
+          "source_ids": [
+            "scard1"
+          ]
+        },
+        {
+          "date": "2014-02-16",
+          "label": "카드사 제재조치 발표",
+          "text": "일부 업무정지와 고객 서비스 유지 방안이 발표됐습니다.",
+          "source_ids": [
+            "scard2"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2025-skt"
+      ]
     },
     {
-      "id":"kr-2025-skt","review_state":"published","reviewed_at":"2026-10-08",
-      "title":"SK텔레콤 유심정보 유출","aliases":["SK텔레콤 유심정보 유출","SKT 유심정보 유출","2025년 SK텔레콤 침해사고"],
-      "organizations":["SK텔레콤","에스케이텔레콤"],"sector":"통신","category":"개인정보 유출",
-      "date":"2025-04-18","date_basis":"유출·인지일","occurred":"2021년 이후 침해 흔적 · 2025년 4월 18일 유심정보 유출","discovered_at":"2025-04-18","disclosed_at":"",
-      "summary":"통신망 침해가 유심정보 유출로 이어졌다. 정부 조사에서는 장기간의 악성코드 감염 흔적과 계정정보·암호화 관리의 문제가 확인됐다.",
-      "scope_note":"2025년 7월 4일 과기정통부의 기술 조사결과 기준입니다. IMSI 건수는 고유 피해자 수와 다르며, 이후 개인정보위 처분·소송 결과를 모두 포괄하지 않습니다.",
-      "facts":[
-        {"label":"유출 정보","text":"과기정통부는 전화번호·IMSI 등 유심정보 25종, IMSI 기준 약 2,696만 건의 유출을 발표했습니다. 건수를 가입자 수로 환산하지 않습니다.","source_ids":["sskt"],"status":"최종 기술 조사결과"},
-        {"label":"침해 경과","text":"2021년 이후 CrossC2·BPFDoor 등 악성코드 설치 흔적이 확인됐습니다. 조사단은 평문 계정정보 관리와 과거 사고 대응의 문제를 지적했습니다.","source_ids":["sskt"],"status":"최종 기술 조사결과"},
-        {"label":"후속 대책","text":"조사단은 계정정보와 주요 정보 암호화, 철저한 원인 분석 및 신고 이행을 요구했습니다. 로그가 없는 기간의 일부 정보 유출 여부는 확인하지 못했습니다.","source_ids":["sskt"],"status":"조사 결과·요구사항"}
+      "id": "kr-2025-skt",
+      "review_state": "published",
+      "reviewed_at": "2026-10-08",
+      "title": "SK텔레콤 유심정보 유출",
+      "aliases": [
+        "SK텔레콤 유심정보 유출",
+        "SKT 유심정보 유출",
+        "2025년 SK텔레콤 침해사고"
       ],
-      "milestones":[
-        {"date":"2021-08-06","label":"악성코드 설치 흔적","text":"정부 조사에서 확인한 CrossC2 설치 시점으로, 최초 침입일을 확정한 것은 아닙니다.","source_ids":["sskt"]},
-        {"date":"2025-04-18","label":"유심정보 유출·사고 인지","text":"조사단은 이날 유출과 사업자의 사고 인지를 확인했습니다.","source_ids":["sskt"]},
-        {"date":"2025-07-04","label":"최종 기술 조사결과 발표","text":"침해 경과와 유출 범위, 재발방지 대책을 발표했습니다.","source_ids":["sskt"]}
+      "organizations": [
+        "SK텔레콤",
+        "에스케이텔레콤"
       ],
-      "related_ids":["kr-2014-card-data"],
-      "visual":{"image":"assets/news-fallbacks/hardware.webp","caption":"전자회로 · 참고 사진","credit":"Dai / Unsplash","credit_url":"https://unsplash.com/photos/yellow-black-and-blue-circuit-boards-isolated-on-white-background-ogxlyCA1BQc"}
+      "sector": "통신",
+      "category": "개인정보 유출",
+      "date": "2025-04-18",
+      "date_basis": "유출·인지일",
+      "occurred": "2021년 이후 침해 흔적 · 2025년 4월 18일 유심정보 유출",
+      "discovered_at": "2025-04-18",
+      "disclosed_at": "",
+      "summary": "통신망 침해가 유심정보 유출로 이어졌다. 정부 조사에서는 장기간의 악성코드 감염 흔적과 계정정보·암호화 관리의 문제가 확인됐다.",
+      "scope_note": "2025년 7월 4일 과기정통부의 기술 조사결과 기준입니다. IMSI 건수는 고유 피해자 수와 다르며, 이후 개인정보위 처분·소송 결과를 모두 포괄하지 않습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "sensitivity",
+          "historical"
+        ],
+        "rationale": "IMSI 기준 약 2,696만 건의 유심정보가 유출됐고, 장기간의 악성코드 감염과 계정정보 관리 문제가 정부 조사로 확인된 사고입니다.",
+        "source_ids": [
+          "sskt"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 정보",
+          "text": "과기정통부는 전화번호·IMSI 등 유심정보 25종, IMSI 기준 약 2,696만 건의 유출을 발표했습니다. 건수를 가입자 수로 환산하지 않습니다.",
+          "source_ids": [
+            "sskt"
+          ],
+          "status": "최종 기술 조사결과"
+        },
+        {
+          "label": "침해 경과",
+          "text": "2021년 이후 CrossC2·BPFDoor 등 악성코드 설치 흔적이 확인됐습니다. 조사단은 평문 계정정보 관리와 과거 사고 대응의 문제를 지적했습니다.",
+          "source_ids": [
+            "sskt"
+          ],
+          "status": "최종 기술 조사결과"
+        },
+        {
+          "label": "후속 대책",
+          "text": "조사단은 계정정보와 주요 정보 암호화, 철저한 원인 분석 및 신고 이행을 요구했습니다. 로그가 없는 기간의 일부 정보 유출 여부는 확인하지 못했습니다.",
+          "source_ids": [
+            "sskt"
+          ],
+          "status": "조사 결과·요구사항"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2021-08-06",
+          "label": "악성코드 설치 흔적",
+          "text": "정부 조사에서 확인한 CrossC2 설치 시점으로, 최초 침입일을 확정한 것은 아닙니다.",
+          "source_ids": [
+            "sskt"
+          ]
+        },
+        {
+          "date": "2025-04-18",
+          "label": "유심정보 유출·사고 인지",
+          "text": "조사단은 이날 유출과 사업자의 사고 인지를 확인했습니다.",
+          "source_ids": [
+            "sskt"
+          ]
+        },
+        {
+          "date": "2025-07-04",
+          "label": "최종 기술 조사결과 발표",
+          "text": "침해 경과와 유출 범위, 재발방지 대책을 발표했습니다.",
+          "source_ids": [
+            "sskt"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2014-card-data"
+      ],
+      "visual": {
+        "image": "assets/news-fallbacks/hardware.webp",
+        "caption": "전자회로 · 참고 사진",
+        "credit": "Dai / Unsplash",
+        "credit_url": "https://unsplash.com/photos/yellow-black-and-blue-circuit-boards-isolated-on-white-background-ogxlyCA1BQc"
+      }
+    },
+    {
+      "id": "kr-2025-coupang",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "쿠팡 고객정보 유출",
+      "aliases": [
+        "쿠팡 침해사고",
+        "쿠팡 개인정보 유출 사태",
+        "쿠팡 사태",
+        "쿠팡 정보유출"
+      ],
+      "organizations": [
+        "쿠팡"
+      ],
+      "sector": "유통·전자상거래",
+      "category": "개인정보 유출",
+      "date": "2025-11-17",
+      "date_basis": "인지일",
+      "occurred": "2025년 1월 퇴사 전 사전 테스트 · 이후 약 7개월간 탈취",
+      "discovered_at": "2025-11-17",
+      "disclosed_at": "",
+      "summary": "이용자 인증 시스템을 개발했던 전직 개발자가 퇴사 뒤 고객정보를 빼냈다. 처음 신고된 4,536개 계정보다 훨씬 많은 3,367만여 건의 유출이 정부 조사로 확인됐다.",
+      "scope_note": "과기정통부의 3,367만여 건(성명·이메일 기준)과 개인정보위의 회원 약 3,322만 명·비회원 약 433만 명은 집계 기준이 달라 발표된 그대로 적었으며, 서로 합산하거나 고유 피해자 수로 환산하지 않았습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "historical"
+        ],
+        "rationale": "과기정통부 조사에서 3,367만여 건의 이용자 정보 유출이 확인됐고, 개인정보위가 역대 최대 규모인 총 6,246억 8,100만 원의 과징금(유출 외 위반 포함)을 부과한 사고입니다.",
+        "source_ids": [
+          "smsit-coupang-2",
+          "spipc-coupang-2"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 규모",
+          "text": "과기정통부는 내정보 수정 페이지에서 성명·이메일이 포함된 이용자 정보 33,673,817건이 유출됐고, 배송지 목록 페이지가 148,056,502회 조회돼 정보가 유출됐다고 발표했습니다.",
+          "source_ids": [
+            "smsit-coupang-3"
+          ],
+          "status": "조사 결과"
+        },
+        {
+          "label": "공격자와 관리 문제",
+          "text": "과기정통부는 공격자가 재직 당시 이용자 인증 시스템 설계·개발 업무를 맡았던 소프트웨어 개발자였다고 발표했습니다. 쿠팡은 이 개발자가 퇴사한 뒤에도 서명키를 즉시 갱신하지 않았습니다.",
+          "source_ids": [
+            "smsit-coupang-2"
+          ],
+          "status": "조사 결과"
+        },
+        {
+          "label": "개인정보위 처분",
+          "text": "개인정보위는 회원 약 3,322만 명과 회원이 아닌 정보주체 약 433만 명의 개인정보가 유출됐다고 확인했습니다. 총 과징금 6,246억 8,100만 원과 과태료 1,680만 원을 부과했습니다.",
+          "source_ids": [
+            "spipc-coupang-1"
+          ],
+          "status": "처분 발표"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2025-11-19",
+          "label": "침해사고 신고",
+          "text": "쿠팡이 4,536개 계정의 정보 유출로 한국인터넷진흥원에 신고했습니다. 과기정통부는 CISO 보고 시점부터 24시간이 지난 뒤의 신고라고 밝혔습니다.",
+          "source_ids": [
+            "smsit-coupang-3"
+          ]
+        },
+        {
+          "date": "2025-11-30",
+          "label": "민관합동조사단 구성",
+          "text": "과기정통부가 민관합동조사단을 구성해 피해 현황과 사고 원인 조사에 착수했습니다.",
+          "source_ids": [
+            "smsit-coupang-3"
+          ]
+        },
+        {
+          "date": "2026-02-10",
+          "label": "조사 결과 발표",
+          "text": "과기정통부가 조사 결과를 발표하며 신고 지연에는 과태료를, 자료보전 명령 위반에는 수사 의뢰 조치를 밝혔습니다.",
+          "source_ids": [
+            "smsit-coupang-2"
+          ]
+        },
+        {
+          "date": "2026-06-10",
+          "label": "개인정보위 과징금 의결",
+          "text": "개인정보위가 제11회 전체회의에서 과징금과 과태료 부과를 의결했습니다.",
+          "source_ids": [
+            "spipc-coupang-1"
+          ]
+        }
+      ],
+      "related_ids": []
+    },
+    {
+      "id": "kr-2025-lotte-card",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "롯데카드 고객정보 유출",
+      "aliases": [
+        "롯데카드 해킹",
+        "롯데카드 해킹 사태",
+        "롯데카드 정보유출"
+      ],
+      "organizations": [
+        "롯데카드"
+      ],
+      "sector": "금융",
+      "category": "개인정보 유출",
+      "date": "2025-08-14",
+      "date_basis": "발생일",
+      "occurred": "2025년 8월 14일 ~ 27일",
+      "discovered_at": "",
+      "disclosed_at": "",
+      "summary": "해커가 온라인 결제서버에 침입해 약 200GB의 정보를 빼냈고, 여기에 296.9만 명의 개인신용정보가 들어 있었다. 처음 신고된 1.7GB를 크게 넘는 유출로 금융위원회의 업무정지와 개인정보위의 과징금 처분이 이어졌다.",
+      "scope_note": "유출 인원은 금융위가 처음 발표한 296.9만 명(이후 발표에서는 약 297만 명)을 적었으며, 카드비밀번호·CVC 유출(약 28.3만 명)과 주민등록번호 유출(45만 명)은 서로 다른 기관이 발표한 하위 항목이라 합산하지 않았습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "sensitivity"
+        ],
+        "rationale": "약 297만 명의 개인신용정보와 일부 고객의 카드비밀번호·CVC, 주민등록번호가 유출돼 금융위원회의 업무정지와 개인정보위의 과징금 처분으로 이어진 사고입니다.",
+        "source_ids": [
+          "sfsc-lotte-1",
+          "spipc-lotte-1",
+          "sfsc-lotte-2"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 규모",
+          "text": "금융위원회는 해커가 온라인 결제서버에 웹쉘을 설치하고 2025년 8월 14일부터 27일까지 총 200GB의 정보를 유출했으며, 여기에 296.9만 명의 개인신용정보가 포함됐다고 발표했습니다. 이 가운데 약 28.3만 명은 카드비밀번호와 CVC도 유출됐습니다.",
+          "source_ids": [
+            "sfsc-lotte-1"
+          ],
+          "status": "당시 발표"
+        },
+        {
+          "label": "개인정보위 처분",
+          "text": "개인정보위는 약 297만 명의 개인 신용정보가 유출됐고 그중 45만 명은 주민등록번호도 함께 유출됐다고 밝혔습니다. 온라인 결제 관련 로그에 주민등록번호 등을 평문으로 기록한 문제를 들어 과징금 96억 2,000만 원과 과태료 480만 원을 부과했습니다.",
+          "source_ids": [
+            "spipc-lotte-1"
+          ],
+          "status": "처분 발표"
+        },
+        {
+          "label": "금융위 제재",
+          "text": "금융위원회는 보정(patch) 작업 미실시, 주민등록번호 및 비밀번호 암호화 미이행 등을 들어 1.5개월 업무정지와 과징금 50억 원을 의결했습니다. 업무정지 기간인 2026년 8월 1일부터 9월 15일까지 신규 회원에게는 카드를 발급할 수 없습니다(공공목적 카드 등 예외).",
+          "source_ids": [
+            "sfsc-lotte-2"
+          ],
+          "status": "처분 발표"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2025-09-01",
+          "label": "금융당국 신고",
+          "text": "롯데카드가 약 1.7GB 규모의 정보 유출을 금융위원회와 금융감독원에 신고했습니다.",
+          "source_ids": [
+            "sfsc-lotte-1"
+          ]
+        },
+        {
+          "date": "2025-09-18",
+          "label": "긴급 대책회의·유출 규모 공개",
+          "text": "금융위원회가 긴급 대책회의를 열고 유출 규모와 대응 방안을 공개했습니다.",
+          "source_ids": [
+            "sfsc-lotte-1"
+          ]
+        },
+        {
+          "date": "2026-03-11",
+          "label": "개인정보위 과징금 의결",
+          "text": "개인정보위가 제4회 전체회의에서 과징금과 과태료 부과를 의결했습니다.",
+          "source_ids": [
+            "spipc-lotte-1"
+          ]
+        },
+        {
+          "date": "2026-07-31",
+          "label": "금융위 업무정지·과징금 의결",
+          "text": "금융위원회가 제14차 회의에서 1.5개월 업무정지와 과징금 50억 원 부과를 의결했습니다.",
+          "source_ids": [
+            "sfsc-lotte-2"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2014-card-data"
+      ]
+    },
+    {
+      "id": "kr-2023-lg-uplus",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "LG유플러스 고객정보 유출",
+      "aliases": [
+        "LGU+ 고객정보 유출",
+        "LG유플러스 개인정보 유출",
+        "엘지유플러스 개인정보 유출사고"
+      ],
+      "organizations": [
+        "LG유플러스"
+      ],
+      "sector": "통신",
+      "category": "개인정보 유출",
+      "date": "2023-01-02",
+      "date_basis": "인지일",
+      "occurred": "2018년 6월경 유출 추정 · 2023년 1월 사고 인지",
+      "discovered_at": "2023-01-02",
+      "disclosed_at": "",
+      "summary": "해커가 불법거래 사이트에 고객 개인정보를 공개하면서 드러난 사고다. 개인정보위는 기술지원이 끝난 소프트웨어를 쓰던 고객인증시스템의 관리 부실을 원인으로 판단했다.",
+      "scope_note": "유출 규모는 개인정보위가 처분 때 발표한 중복 제거 기준 297,117건을 적었으며, 같은 해 1~2월 디도스 공격에 따른 서비스 장애는 이 기록에 포함하지 않았습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "historical"
+        ],
+        "rationale": "약 29만 7천 건의 고객정보 유출이 확인됐고, 기술지원이 끝난 소프트웨어 사용과 보안 투자 부족 등 관리 실패가 처분 근거로 제시된 통신사 사고입니다.",
+        "source_ids": [
+          "spipc-lgu-2",
+          "spipc-lgu-3"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 규모",
+          "text": "개인정보위는 해커가 불법거래 사이트에 개인정보 약 60만 건(중복 제거 시 약 30만 건)을 공개했다고 밝혔습니다. 유출이 확인된 개인정보는 중복 제거 시 297,117건이며 휴대전화번호·성명·주소·생년월일 등 26개 항목입니다.",
+          "source_ids": [
+            "spipc-lgu-2"
+          ],
+          "status": "처분 발표"
+        },
+        {
+          "label": "유출 원인 판단",
+          "text": "개인정보위는 유출 시점을 2018년 6월경으로 분석했으며, 당시 고객인증시스템의 상용 소프트웨어가 단종되거나 기술지원이 끝난 상태였다고 밝혔습니다. 고객인증시스템의 관리 부실과 다른 통신사보다 낮은 정보보호 투자가 유출로 이어졌다고 판단했습니다.",
+          "source_ids": [
+            "spipc-lgu-3"
+          ],
+          "status": "처분 발표"
+        },
+        {
+          "label": "개인정보위 처분",
+          "text": "개인정보위는 2023년 7월 12일 전체회의에서 과징금 68억 원과 과태료 2,700만 원을 부과하고 시정명령을 의결했습니다.",
+          "source_ids": [
+            "spipc-lgu-2"
+          ],
+          "status": "처분 발표"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2023-01-02",
+          "label": "사고 인지",
+          "text": "개인정보위 관계자는 LG유플러스가 이날 유출 데이터가 자사 정보인지 확인했다고 설명했습니다.",
+          "source_ids": [
+            "spipc-lgu-3"
+          ]
+        },
+        {
+          "date": "2023-01-31",
+          "label": "추가 유출 확인",
+          "text": "개인정보위가 해지고객 데이터베이스의 개인정보 8만여 건을 추가로 확인해 유출 규모를 총 29만 명으로 파악했습니다.",
+          "source_ids": [
+            "spipc-lgu-1"
+          ]
+        },
+        {
+          "date": "2023-04-27",
+          "label": "과기정통부 원인 분석 발표",
+          "text": "과기정통부가 원인 분석 결과와 대책을 발표하며 유출된 고객정보를 29만 7,117명분으로 확인했습니다.",
+          "source_ids": [
+            "smsit-lgu-1"
+          ]
+        },
+        {
+          "date": "2023-07-12",
+          "label": "개인정보위 과징금 의결",
+          "text": "개인정보위가 전체회의에서 과징금·과태료 부과와 시정명령을 의결했습니다.",
+          "source_ids": [
+            "spipc-lgu-2"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2025-skt"
+      ]
+    },
+    {
+      "id": "kr-2026-shinhan-bank",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "신한은행 정보유출 사고",
+      "aliases": [
+        "신한은행 정보유출",
+        "신한은행 해킹",
+        "신한은행 고객정보 유출"
+      ],
+      "organizations": [
+        "신한은행"
+      ],
+      "sector": "금융",
+      "category": "개인정보 유출",
+      "date": "2026-09-30",
+      "date_basis": "발생일",
+      "occurred": "2026년 9월 30일",
+      "discovered_at": "",
+      "disclosed_at": "",
+      "summary": "2026년 9월 30일 신한은행에서 정보유출 사고가 발생해 금융당국이 당일 현장조사에 들어갔다. 국민은행 등 다른 금융회사의 피해가 이어지면서 금융권 전반의 긴급 점검으로 번졌다.",
+      "scope_note": "금융위원회 발표로 확인되는 사고 발생·접수와 당국 대응만 적었습니다. 보도된 유출 인원·항목과 침입 경로는 공식 문서로 확인하지 못해 뺐고, 잇단 사고가 같은 공격 주체의 소행인지도 공식 확인되지 않았습니다.",
+      "selection": {
+        "criteria": [
+          "systemic"
+        ],
+        "rationale": "금융당국이 잇단 금융권 침해사고 가운데 가장 먼저 이름을 밝힌 사고로, 전 금융권 긴급 점검회의와 국무총리 주재 관계장관회의로 이어졌습니다.",
+        "source_ids": [
+          "sfsc-finbreach-1",
+          "sfsc-finbreach-2",
+          "sopm-finbreach-1"
+        ]
+      },
+      "facts": [
+        {
+          "label": "사고 접수와 현장조사",
+          "text": "금융당국은 9월 30일 신한은행의 침해사고를 접수한 직후 당일 현장조사에 착수해 사고 원인과 피해 범위를 파악하고 있다고 밝혔습니다.",
+          "source_ids": [
+            "sfsc-finbreach-2"
+          ],
+          "status": "당국 발표 · 조사 진행 중"
+        },
+        {
+          "label": "잇단 피해",
+          "text": "금융위원회는 9월 30일 발생한 신한은행 정보유출 사고에 이어 국민은행 등 주요 금융회사에 대한 사이버공격으로 추가 피해가 발생했다고 밝혔습니다.",
+          "source_ids": [
+            "sfsc-finbreach-1"
+          ],
+          "status": "당국 발표"
+        },
+        {
+          "label": "당국이 지목한 점검 대상",
+          "text": "금융위원회는 최근 침해사고의 원인이 된 대출모집인·위탁업체 등 외부인력과 임직원이 사용하는 시스템에서 개인신용정보가 불필요하게 보관·조회되지 않도록 점검하겠다고 밝혔습니다. 회사별 침입 경로는 공식 발표되지 않았습니다.",
+          "source_ids": [
+            "sfsc-finbreach-2"
+          ],
+          "status": "당국 발표 · 사고 전반 대상"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2026-09-30",
+          "label": "사고 접수·현장조사 착수",
+          "text": "금융당국이 신한은행 침해사고를 접수하고 당일 현장조사에 들어갔습니다.",
+          "source_ids": [
+            "sfsc-finbreach-2"
+          ]
+        },
+        {
+          "date": "2026-10-02",
+          "label": "긴급 상황대응 회의",
+          "text": "국민은행 등에서 추가 피해가 이어지자 금융위원회가 사무처장 주재로 긴급 상황대응 회의를 열었습니다.",
+          "source_ids": [
+            "sfsc-finbreach-1"
+          ]
+        },
+        {
+          "date": "2026-10-04",
+          "label": "전 금융권 긴급 점검회의",
+          "text": "금융위·금감원 합동 긴급 점검회의에서 공유된 공격정보에도 점검을 소홀히 해 유사 사고가 나면 법령에 따라 엄정하게 대응한다는 방침이 나왔습니다. 금융위원회는 계좌정보 등 금융거래에 직접 쓰일 수 있는 정보의 유출은 확인되지 않았다고 설명했습니다.",
+          "source_ids": [
+            "sfsc-finbreach-2",
+            "sfsc-finbreach-4"
+          ]
+        },
+        {
+          "date": "2026-10-06",
+          "label": "국무총리 주재 관계장관회의",
+          "text": "국무총리가 금융·공공기관 개인정보 유출 대응 관계장관회의를 주재했습니다.",
+          "source_ids": [
+            "sopm-finbreach-1"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2026-kb-kookmin-bank"
+      ]
+    },
+    {
+      "id": "kr-2026-kb-kookmin-bank",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "KB국민은행 업무지원 시스템 정보유출",
+      "aliases": [
+        "국민은행 정보유출",
+        "KB국민은행 해킹",
+        "국민은행 고객정보 유출"
+      ],
+      "organizations": [
+        "KB국민은행"
+      ],
+      "sector": "금융",
+      "category": "개인정보 유출",
+      "date": "2026-09-30",
+      "date_basis": "인지일",
+      "occurred": "2026년 9월 30일 유출 확인(침입 시점은 공지에 없음)",
+      "discovered_at": "2026-09-30",
+      "disclosed_at": "2026-10-02",
+      "summary": "직원용 모바일 업무지원 시스템에서 고객 99명과 전현직 임직원 20명의 개인(신용)정보가 유출됐다. 금융위원회는 신한은행 사고에 이은 추가 피해 사례로 국민은행을 들었다.",
+      "scope_note": "은행 공지와 금융위원회 발표에 나온 유출 인원·항목·시스템만 적었습니다. 침입 시점과 경로는 공식 확인 전이며, 수치는 조사 결과에 따라 달라질 수 있습니다.",
+      "selection": {
+        "criteria": [
+          "sensitivity",
+          "systemic"
+        ],
+        "rationale": "유출 인원은 119명이지만 신용등급·연소득·대출잔액·예금잔액 등 금융정보가 포함됐고, 금융위원회가 잇단 사이버공격의 추가 피해 사례로 이름을 밝혔습니다.",
+        "source_ids": [
+          "skb-finbreach-1",
+          "sfsc-finbreach-1"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 인원",
+          "text": "KB국민은행은 2026년 9월 30일 고객 99명과 전현직 임직원 20명의 개인(신용)정보가 유출된 사실을 확인했다고 밝혔습니다.",
+          "source_ids": [
+            "skb-finbreach-1"
+          ],
+          "status": "기관 공지 · 조사 진행 중"
+        },
+        {
+          "label": "유출 시스템",
+          "text": "은행은 고객정보가 유출된 시스템이 직원용 모바일 업무지원 시스템이며, 인터넷뱅킹 등 금융거래와는 무관하다고 설명했습니다.",
+          "source_ids": [
+            "skb-finbreach-1"
+          ],
+          "status": "기관 공지"
+        },
+        {
+          "label": "고객 유출 항목",
+          "text": "은행은 고객 유출 항목이 고객명, 휴대폰번호, 암호화된 고유식별정보, 고객신용등급, 연소득금액, 총부채금액, 대출잔액, 예금잔액 등 모두 17개라고 밝혔습니다.",
+          "source_ids": [
+            "skb-finbreach-1"
+          ],
+          "status": "기관 공지"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2026-09-30",
+          "label": "유출 확인",
+          "text": "KB국민은행이 고객과 전현직 임직원의 개인(신용)정보 유출을 확인했습니다.",
+          "source_ids": [
+            "skb-finbreach-1"
+          ]
+        },
+        {
+          "date": "2026-10-02",
+          "label": "유출 안내 공지",
+          "text": "KB국민은행이 공지로 유출 사실을 알리고, 손해가 생기면 전액 배상하겠다고 밝혔습니다.",
+          "source_ids": [
+            "skb-finbreach-1"
+          ]
+        },
+        {
+          "date": "2026-10-02",
+          "label": "금융위 긴급 상황대응 회의",
+          "text": "국민은행 등 주요 금융회사에 대한 사이버공격으로 추가 피해가 발생하자 금융위원회가 긴급 상황대응 회의를 열었습니다.",
+          "source_ids": [
+            "sfsc-finbreach-1"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2026-shinhan-bank"
+      ]
+    },
+    {
+      "id": "kr-2008-auction",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "옥션 개인정보 유출",
+      "aliases": [
+        "옥션 해킹",
+        "옥션 해킹사고",
+        "옥션 개인정보 유출"
+      ],
+      "organizations": [
+        "옥션"
+      ],
+      "sector": "전자상거래",
+      "category": "개인정보 유출",
+      "date": "2008-04-24",
+      "date_basis": "정부 발표일",
+      "occurred": "2008년(해킹 시점은 확인한 공식 자료에 없음)",
+      "discovered_at": "",
+      "disclosed_at": "",
+      "summary": "옥션 해킹사고로 1,081만 명의 개인정보가 유출됐다. 정부는 명의도용과 보이스피싱 같은 후속 피해를 막기 위해 인터넷상 개인정보 침해방지 대책을 내놓았다.",
+      "scope_note": "연표 위치는 2008년 4월 24일 정부 대책 발표일입니다. 해킹 발생 시점과 경위, 수사·소송 결과는 확인한 공식 자료에 없어 포함하지 않았습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "historical"
+        ],
+        "rationale": "정부 발표 기준 1,081만 명의 개인정보가 유출됐고, 주민등록번호 수집 제한과 금융정보 암호화 저장 의무화 등 인터넷 개인정보 보호 대책이 추진된 사고입니다.",
+        "source_ids": [
+          "au-measures"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 규모",
+          "text": "정부는 옥션 해킹사고로 1,081만 명의 개인정보가 유출됐다고 밝히고, 명의도용과 보이스피싱 등 후속 피해가 우려된다고 했습니다.",
+          "source_ids": [
+            "au-measures"
+          ],
+          "status": "당시 발표"
+        },
+        {
+          "label": "관계기관 대응",
+          "text": "방송통신위원회는 행정안전부, 대검찰청, 경찰청, 금융감독원, 한국정보보호진흥원, 통신·인터넷사업자와 대책회의를 열었습니다. 검찰과 경찰은 사업자의 법 위반과 이용자 피해를 수사하기로 했습니다.",
+          "source_ids": [
+            "au-measures"
+          ],
+          "status": "당시 발표"
+        },
+        {
+          "label": "제도 개선 방향",
+          "text": "대책에는 인터넷상 주민등록번호 수집 제한, 주민등록번호·계좌번호 등 금융정보의 암호화 저장 의무화, 침해 사실을 이용자에게 알리도록 하는 정보통신망법 개정이 포함됐습니다.",
+          "source_ids": [
+            "au-measures"
+          ],
+          "status": "대책 발표"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2008-04-24",
+          "label": "개인정보 침해방지 대책 발표",
+          "text": "방송통신위원회가 관계기관 대책회의를 거쳐 인터넷상 개인정보 침해방지 대책을 발표했습니다.",
+          "source_ids": [
+            "au-measures"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2011-sk-communications"
+      ]
+    },
+    {
+      "id": "kr-2011-sk-communications",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "SK커뮤니케이션즈 개인정보 유출",
+      "aliases": [
+        "네이트·싸이월드 해킹",
+        "SK컴즈 개인정보 유출",
+        "네이트 해킹",
+        "싸이월드 개인정보 유출"
+      ],
+      "organizations": [
+        "SK커뮤니케이션즈"
+      ],
+      "sector": "포털·커뮤니티",
+      "category": "개인정보 유출",
+      "date": "2011-07-26",
+      "date_basis": "발생일",
+      "occurred": "2011년 7월 26일",
+      "discovered_at": "2011-07-28",
+      "disclosed_at": "2011-07-28",
+      "summary": "네이트와 싸이월드를 운영하는 SK커뮤니케이션즈 시스템이 해킹돼 회원 개인정보가 유출됐다. 방송통신위원회는 최대 3,500만 명의 정보가 유출됐을 수 있다고 발표했고, 이를 계기로 인터넷상 개인정보 보호 강화 방안을 마련했다.",
+      "scope_note": "3,500만 명은 당시 방송통신위원회가 제시한 최대치이며, 확정된 유출 인원이나 이후 수사 결과를 뜻하지 않습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "historical"
+        ],
+        "rationale": "방송통신위원회가 최대 3,500만 명 규모의 회원 정보 유출 가능성을 발표했고, 이를 계기로 인터넷상 개인정보 보호 강화 방안이 마련된 사고입니다.",
+        "source_ids": [
+          "skc-kcc",
+          "skc-measures"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 정보",
+          "text": "방송통신위원회는 3,500만 명의 고객정보 가운데 이름, ID, 이메일, 전화번호, 암호화된 주민등록번호와 비밀번호가 유출됐다고 발표했습니다.",
+          "source_ids": [
+            "skc-kcc"
+          ],
+          "status": "당시 발표"
+        },
+        {
+          "label": "유출 규모의 성격",
+          "text": "방송통신위원회 브리핑에서 담당 국장은 정확한 유출 인원은 파악 중이며, 3,500만 명은 최대 유출 가능 규모라고 설명했습니다.",
+          "source_ids": [
+            "skc-briefing"
+          ],
+          "status": "당시 발표"
+        },
+        {
+          "label": "접근 경로",
+          "text": "당시 발표는 중국발 IP로 SK컴즈 시스템에 불법 접근이 이뤄졌다고 밝혔습니다. SK컴즈는 경찰청에 수사를 의뢰했고, 방송통신위원회는 사고 조사단을 구성했습니다.",
+          "source_ids": [
+            "skc-kcc"
+          ],
+          "status": "당시 발표"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2011-07-26",
+          "label": "개인정보 유출",
+          "text": "방송통신위원회 브리핑은 정보가 26일에 빠져나갔고 28일 새벽에 이를 알게 됐다고 설명했습니다.",
+          "source_ids": [
+            "skc-briefing"
+          ]
+        },
+        {
+          "date": "2011-07-28",
+          "label": "신고·수사 의뢰와 발표",
+          "text": "SK컴즈가 사실을 확인해 방송통신위원회에 알리고 경찰청에 수사를 의뢰했습니다.",
+          "source_ids": [
+            "skc-kcc"
+          ]
+        },
+        {
+          "date": "2011-08-08",
+          "label": "개인정보 보호 강화 방안 발표",
+          "text": "방송통신위원회가 재발 방지와 2차 피해 예방을 위한 인터넷상 개인정보 보호 강화 방안을 발표했습니다.",
+          "source_ids": [
+            "skc-measures"
+          ]
+        }
+      ],
+      "related_ids": [
+        "kr-2008-auction"
+      ]
+    },
+    {
+      "id": "kr-2016-interpark",
+      "review_state": "published",
+      "reviewed_at": "2026-10-10",
+      "title": "인터파크 개인정보 유출",
+      "aliases": [
+        "인터파크 해킹",
+        "인터파크 개인정보 유출 사고",
+        "인터파크 해킹·공갈 사건"
+      ],
+      "organizations": [
+        "인터파크"
+      ],
+      "sector": "전자상거래",
+      "category": "개인정보 유출",
+      "date": "2016-05-03",
+      "date_basis": "발생일",
+      "occurred": "2016년 5월 3일경 ~ 6일경",
+      "discovered_at": "",
+      "disclosed_at": "",
+      "summary": "인터파크가 해킹을 당해 회원 개인정보 2,500여만 건이 외부로 유출됐다. 경찰은 이 해킹·공갈 사건을 북한 소행으로 판단했고, 방송통신위원회는 당시 개인정보 유출사고 중 최대 금액인 과징금을 부과했다.",
+      "scope_note": "경찰 중간 수사 결과, 민관합동조사단 조사 결과, 방송통신위원회 처분을 기준으로 했습니다. 조사 단계별로 집계 기준이 달라 건수가 다르며, 이후 행정소송 결과는 다루지 않습니다.",
+      "selection": {
+        "criteria": [
+          "scale",
+          "historical"
+        ],
+        "rationale": "중복 제거 기준 2,051만여 명의 개인정보가 유출됐고, 경찰이 북한 소행으로 판단했으며, 당시 개인정보 유출사고 중 최대 과징금이 부과된 사고입니다.",
+        "source_ids": [
+          "ip-sanction",
+          "ip-police"
+        ]
+      },
+      "facts": [
+        {
+          "label": "유출 규모와 항목",
+          "text": "방송통신위원회는 해커가 2016년 5월 3일경부터 6일경까지 지능형 지속 위협(APT) 방식의 해킹으로 개인정보 총 25,403,576건(중복 제거 시 20,510,131명)을 유출했다고 밝혔습니다. 유출 항목은 아이디, 일방향 암호화된 비밀번호, 이름, 생년월일, 전화번호, 이메일, 주소 등 9개입니다.",
+          "source_ids": [
+            "ip-sanction"
+          ],
+          "status": "처분 발표"
+        },
+        {
+          "label": "공격 경로",
+          "text": "민관합동조사단은 해커가 스피어피싱으로 직원 PC를 감염시킨 뒤 DB서버에 접근할 수 있는 개인정보취급자 PC의 제어권을 얻었다고 발표했습니다. 회원정보 26,658,753건이 담긴 파일은 16개로 나뉘어 직원 PC를 거쳐 외부로 유출됐습니다.",
+          "source_ids": [
+            "ip-invest"
+          ],
+          "status": "조사 결과"
+        },
+        {
+          "label": "배후에 대한 수사기관 판단",
+          "text": "경찰청은 중간 수사 결과에서 인터파크 개인정보 해킹·공갈 사건을 북한 소행으로 판단한다고 발표했습니다. 이 기록은 이를 수사기관의 당시 판단으로 인용합니다.",
+          "source_ids": [
+            "ip-police"
+          ],
+          "status": "수사기관 판단"
+        }
+      ],
+      "milestones": [
+        {
+          "date": "2016-05-03",
+          "label": "해킹·유출 발생",
+          "text": "조사단은 인터파크 침해사고가 5월 3일부터 6일까지 발생했다고 밝혔습니다.",
+          "source_ids": [
+            "ip-invest"
+          ]
+        },
+        {
+          "date": "2016-07-28",
+          "label": "경찰 중간 수사 결과",
+          "text": "경찰청이 북한 소행으로 판단한다는 중간 수사 결과를 발표했습니다.",
+          "source_ids": [
+            "ip-police"
+          ]
+        },
+        {
+          "date": "2016-08-31",
+          "label": "민관합동조사단 조사 결과",
+          "text": "미래창조과학부와 방송통신위원회가 해킹 경로와 유출 방식에 대한 조사 결과를 발표했습니다.",
+          "source_ids": [
+            "ip-invest"
+          ]
+        },
+        {
+          "date": "2016-12-06",
+          "label": "방송통신위원회 과징금 부과",
+          "text": "방송통신위원회가 제68차 전체회의에서 과징금 44억 8,000만 원과 과태료 2,500만 원, 시정명령을 의결했습니다.",
+          "source_ids": [
+            "ip-sanction"
+          ]
+        }
+      ],
+      "related_ids": []
     }
   ]
 }

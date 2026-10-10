@@ -1,28 +1,29 @@
 """Publish reviewed incident records and collect private review candidates, offline."""
 
 import argparse
+import copy
 import hashlib
 import json
 import os
 import re
 import tempfile
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+import incident_archive_review as review
 
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / "assets" / "incident_archive.json"
 CANDIDATES = ROOT / "state" / "incident_archive_candidates.json"
+DRAFTS = ROOT / "state" / "incident_archive_drafts.json"
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 TRACKING_KEYS = {"fbclid", "gclid", "curPage", "pageIndex", "pWise", "pWiseSub"}
-INCIDENT_RE = re.compile(r"침해\s*사고|개인\s*정보\s*유출|고객\s*정보\s*유출|해킹\s*(?:사고|피해)|디도스|DDoS|랜섬웨어\s*(?:공격|감염|피해)|전산망\s*(?:마비|공격)", re.I)
-DOMESTIC_RE = re.compile(r"국내|한국|대한민국|금융위원회|개인정보위|과기정통부")
-# 사고 보도가 아닌 글 — 칼럼·기고와 주의보는 사고 이름이 들어가도 새 사고가 아니다(실측: 30일
-# 후보 14건 중 칼럼 1건, 피싱 주의보 1건이 섞였다).
-EXCLUDE_RE = re.compile(r"모의\s*훈련|모의\s*해킹|웨비나|세미나|채용|제품\s*출시|칼럼|기고|論하다|주의보")
 PUBLIC_FIELDS = ("id", "title", "organizations", "sector", "category", "date", "date_basis",
                  "occurred", "discovered_at", "disclosed_at", "summary", "scope_note", "facts",
                  "milestones", "related_ids", "visual", "reviewed_at")
+FACT_FIELDS = ("label", "text", "source_ids", "status")
+MILESTONE_FIELDS = ("date", "label", "text", "source_ids")
 
 
 def canonical_url(value):
@@ -38,8 +39,7 @@ def canonical_url(value):
         return ""
 
 
-def load_catalog(path=CATALOG):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+def validate_catalog(data):
     if data.get("schema_version") != 1:
         raise ValueError("Unsupported incident archive schema")
     sources = data.get("sources", [])
@@ -75,11 +75,21 @@ def load_catalog(path=CATALOG):
                 raise ValueError("Empty incident fact")
         if not set(row.get("related_ids", [])) <= ids:
             raise ValueError("Unknown related incident")
+        if row["review_state"] == "published":
+            selection = row.get("selection") or {}
+            if (not selection.get("rationale") or not selection.get("criteria")
+                    or not set(selection["criteria"]) <= set(review.policy()["selection"]["criteria"])
+                    or not selection.get("source_ids") or not set(selection["source_ids"]) <= source_ids):
+                raise ValueError("Published incident requires reviewed selection evidence: " + row["id"])
         visual = row.get("visual", {})
         if visual and (not re.fullmatch(r"assets/news-fallbacks/[a-z-]+\.webp", visual.get("image", ""))
                        or not visual.get("caption") or not canonical_url(visual.get("credit_url"))):
             raise ValueError("Invalid archive image")
     return data
+
+
+def load_catalog(path=CATALOG):
+    return validate_catalog(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def public_payload(catalog):
@@ -89,6 +99,9 @@ def public_payload(catalog):
     published_ids = {row["id"] for row in public}
     for row in public:
         row["related_ids"] = [key for key in row.get("related_ids", []) if key in published_ids]
+        # 검토 메모나 인용 원문이 사실 항목에 남아 있어도 공개 JSON에는 정해진 필드만 싣는다.
+        row["facts"] = [{key: fact[key] for key in FACT_FIELDS if key in fact} for fact in row["facts"]]
+        row["milestones"] = [{key: item[key] for key in MILESTONE_FIELDS if key in item} for item in row["milestones"]]
     return {"schema_version": 1, "start_year": catalog["start_year"],
             "end_year": max(date.today().year, max((int(row["date"][:4]) for row in public), default=2000)),
             "reviewed_at": max((row["reviewed_at"] for row in public), default=""),
@@ -121,79 +134,167 @@ def publish(data_dir, catalog_path=CATALOG):
     return payload
 
 
-def _normalized(value):
-    return re.sub(r"[\W_]+", "", str(value)).casefold()
-
-
 def candidate(event, catalog):
     url = canonical_url(event.get("url"))
-    title = str(event.get("title") or "").strip()
-    if not url or not title or EXCLUDE_RE.search(title):
+    title = review.clean(event.get("title"))
+    if not url or not title:
         return None
-    known_urls = {canonical_url(source["url"]) for source in catalog["sources"]}
-    if url in known_urls:
+    assessment = review.assess(dict(event, url=url), catalog)
+    if not assessment:
         return None
-    summary = str(event.get("summary") or "")[:2500]
-    text = title + " " + summary
-    normalized = _normalized(text)
-    matches, reasons = [], []
-    organization_seen = False
-    for record in catalog["incidents"]:
-        organization = any(_normalized(name) in normalized for name in record.get("organizations", []) if len(name) >= 3)
-        organization_seen = organization_seen or organization
-        alias = next((name for name in record.get("aliases", []) if _normalized(name) in normalized), None)
-        year = record["date"][:4]
-        # An organization name alone cannot identify which of its incidents is discussed.
-        if alias or (organization and re.search(r"(?<!\d)" + year + r"\s*년", text) and INCIDENT_RE.search(text)):
-            matches.append(record["id"])
-            reasons.append("사건명 일치: " + alias if alias else "기관·사고 연도·사고 표현 일치")
-    if not matches and not (INCIDENT_RE.search(title) and (DOMESTIC_RE.search(text) or organization_seen)):
-        return None
-    return {"id": hashlib.sha256(url.encode()).hexdigest()[:20], "url": url, "title": title[:350],
-            "summary": summary, "published_at": str(event.get("published_at") or ""),
-            "source": str(event.get("source") or ""), "event_id": str(event.get("id") or ""),
-            "possible_incident_ids": sorted(set(matches)), "reasons": sorted(set(reasons)) or ["국내 사고 보도 후보"],
-            "kind": "followup" if len(matches) == 1 else "ambiguous" if matches else "new_incident",
-            "review_state": "pending"}
+    item = {"id": hashlib.sha256(url.encode()).hexdigest()[:20], "url": url, "title": title[:350],
+            "summary": review.clean(event.get("summary"))[:2500],
+            "published_at": str(event.get("published_at") or ""),
+            "source_updated_at": str(event.get("source_updated_at") or ""),
+            "source": str(event.get("source") or ""), "event_id": str(event.get("event_id") or event.get("id") or ""),
+            "review_state": "pending", "classifier_version": review.CLASSIFIER_VERSION, **assessment}
+    item["content_fingerprint"] = review.fingerprint(item)
+    return item
 
 
-def update_candidates(events, catalog, path=CANDIDATES):
+def _load_candidates(path):
+    return json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {
+        "schema_version": 2, "candidates": []}
+
+
+def _merge_candidate(old, item, now):
+    if not old:
+        return dict(item, found_at=now)
+    old_hash = old.get("content_fingerprint") or review.fingerprint(old)
+    changed = old_hash != item["content_fingerprint"]
+    if old.get("review_state") in {"accepted", "rejected"}:
+        # A correction must not overwrite the version a reviewer approved.
+        result = copy.deepcopy(old)
+        result["classifier_version"] = review.CLASSIFIER_VERSION
+        result["latest_revision"] = item
+        result["needs_review"] = changed
+        result["changed_fields"] = [key for key in ("title", "summary", "published_at", "source_updated_at")
+                                    if old.get(key, "") != item.get(key, "")]
+        return result
+    result = dict(item, found_at=old.get("found_at", now))
+    result["revisions"] = old.get("revisions", [])
+    if changed:
+        result["revisions"] = result["revisions"] + [{key: old.get(key) for key in (
+            "title", "summary", "published_at", "source_updated_at", "content_fingerprint")}]
+        result["updated_at"] = now
+    elif old.get("updated_at"):
+        result["updated_at"] = old["updated_at"]
+    return result
+
+
+def update_candidates(events, catalog, path=CANDIDATES, scan_state=None):
     path = Path(path)
-    stored = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"schema_version": 1, "candidates": []}
+    stored = _load_candidates(path)
     rows = {row["id"]: row for row in stored["candidates"]}
+    now = datetime.now(timezone.utc).isoformat()
+    # Re-evaluate stale queue entries once when selection rules change.
+    for key, old in list(rows.items()):
+        if old.get("classifier_version") != review.CLASSIFIER_VERSION:
+            current = candidate(old.get("latest_revision") or old, catalog)
+            if current:
+                rows[key] = _merge_candidate(old, current, now)
+            else:
+                rows[key] = dict(old, kind="excluded", classifier_version=review.CLASSIFIER_VERSION,
+                                 exclusion_reason="현행 기준에서 개별 사고 보도가 아님")
     added = 0
     for event in events:
         item = candidate(event, catalog)
-        if item and item["id"] not in rows:
-            item["found_at"] = datetime.now(timezone.utc).isoformat()
-            rows[item["id"]] = item
-            added += 1
-    # Preserve review decisions and the version of the article that was actually reviewed.
+        if item:
+            old = rows.get(item["id"])
+            rows[item["id"]] = _merge_candidate(old, item, now)
+            added += int(old is None)
+        else:
+            key = hashlib.sha256(canonical_url(event.get("url")).encode()).hexdigest()[:20]
+            if key in rows:
+                old = rows[key]
+                replacement = dict(old, title=review.clean(event.get("title")),
+                                   summary=review.clean(event.get("summary"))[:2500], kind="excluded")
+                replacement["content_fingerprint"] = review.fingerprint(replacement)
+                rows[key] = _merge_candidate(old, replacement, now)
+    stored["schema_version"] = 2
     stored["candidates"] = list(rows.values())
+    if scan_state is not None:
+        stored["scan_state"] = scan_state
     write_json(path, stored)
     return added
 
 
-def recent_events(path, days=30, max_lines=8000):
-    from common_utils import iter_lines_reverse
-    cutoff = date.today() - timedelta(days=days)
-    for number, line in enumerate(iter_lines_reverse(Path(path))):
-        if number >= max_lines:
-            break
-        try:
-            event = json.loads(line)
-            fetched = date.fromisoformat(str(event.get("fetched_at") or event.get("published_at") or "")[:10])
-        except (ValueError, TypeError, AttributeError):
-            continue
-        if fetched >= cutoff:
-            yield event
+def read_event_batch(path, previous=None, max_lines=20000):
+    """Resume a byte cursor; replay safely on rotation and defer partial lines."""
+    previous = previous or {}
+    stat = path.stat()
+    offset = previous.get("offset", 0)
+    with path.open("rb") as stream:
+        head_size = min(previous.get("head_size", 4096), stat.st_size)
+        head_hash = hashlib.sha256(stream.read(head_size)).hexdigest()
+        stream.seek(max(0, min(offset, stat.st_size) - 64))
+        tail_hash = hashlib.sha256(stream.read(min(offset, 64))).hexdigest()
+        valid = (previous.get("path") == str(path.resolve()) and previous.get("inode") == stat.st_ino
+                 and offset <= stat.st_size and previous.get("head_hash") == head_hash
+                 and previous.get("tail_hash") == tail_hash)
+        if not valid:
+            offset = 0
+            stream.seek(0)
+            head_size = min(4096, stat.st_size)
+            head_hash = hashlib.sha256(stream.read(head_size)).hexdigest()
+        stream.seek(offset)
+        events = []
+        for _ in range(max_lines):
+            line = stream.readline(max(0, stat.st_size - stream.tell()))
+            if not line or not line.endswith(b"\n"):
+                break
+            offset = stream.tell()
+            try:
+                event = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        stream.seek(max(0, offset - 64))
+        tail_hash = hashlib.sha256(stream.read(min(offset, 64))).hexdigest()
+    return events, {"path": str(path.resolve()), "inode": stat.st_ino, "offset": offset,
+                    "head_size": head_size, "head_hash": head_hash, "tail_hash": tail_hash,
+                    "has_more": offset < stat.st_size, "size": stat.st_size}
 
 
-def discover(events_path=None, candidates_path=CANDIDATES, catalog_path=CATALOG):
+def discover(events_path=None, candidates_path=CANDIDATES, catalog_path=CATALOG,
+             drafts_path=None, max_lines=20000, reset=False, max_batches=10):
     path = Path(events_path) if events_path else ROOT / "data" / "events.jsonl"
     if not path.exists():
         return 0
-    return update_candidates(recent_events(path), load_catalog(catalog_path), candidates_path)
+    catalog = load_catalog(catalog_path)
+    previous = {} if reset else _load_candidates(candidates_path).get("scan_state", {})
+    added = 0
+    # 한 번에 끝까지 따라잡는다 — 한 묶음만 읽으면 첫 실행 뒤 며칠 동안 오래된 기사만 보고
+    # 최신 기사는 늦게 후보에 오른다. 묶음마다 위치를 저장해 중간에 멈춰도 이어서 읽는다.
+    for _ in range(max_batches):
+        events, cursor = read_event_batch(path, previous, max_lines=max_lines)
+        added += update_candidates(events, catalog, candidates_path, scan_state=cursor)
+        if not cursor["has_more"] or cursor["offset"] == previous.get("offset"):
+            break
+        previous = cursor
+    drafts_path = Path(drafts_path) if drafts_path else Path(candidates_path).with_name("incident_archive_drafts.json")
+    write_json(drafts_path, review.build_drafts(_load_candidates(candidates_path), catalog))
+    return added
+
+
+def apply_reviewed(path, catalog_path=CATALOG):
+    """Import explicit reviewed records, never promote a candidate or draft flag."""
+    incoming = json.loads(Path(path).read_text(encoding="utf-8"))
+    catalog = load_catalog(catalog_path)
+    sources = {source["id"]: source for source in catalog["sources"]}
+    incidents = {item["id"]: item for item in catalog["incidents"]}
+    for source in incoming.get("sources", []):
+        if source["id"] in sources and canonical_url(sources[source["id"]]["url"]) != canonical_url(source["url"]):
+            raise ValueError("Source id belongs to a different URL: " + source["id"])
+        sources[source["id"]] = source
+    for item in incoming.get("incidents", []):
+        if item.get("review_state") != "published":
+            raise ValueError("Only explicitly reviewed published records may be imported")
+        incidents[item["id"]] = item
+    catalog["sources"], catalog["incidents"] = list(sources.values()), list(incidents.values())
+    validate_catalog(catalog)
+    write_json(catalog_path, catalog)
 
 
 def main():
@@ -203,10 +304,18 @@ def main():
     parser.add_argument("--discover", action="store_true", help="Collect review candidates from existing events")
     parser.add_argument("--events", type=Path)
     parser.add_argument("--candidates", type=Path, default=CANDIDATES)
+    parser.add_argument("--drafts", type=Path, default=DRAFTS, help="Private evidence bundles; never exported to the dashboard")
+    parser.add_argument("--backfill", action="store_true", help="Replay all saved events, including historical articles")
+    parser.add_argument("--apply-reviewed", type=Path, help="Import reviewed incidents and their sources from a JSON file")
     args = parser.parse_args()
+    if args.apply_reviewed:
+        apply_reviewed(args.apply_reviewed, args.catalog)
     catalog = load_catalog(args.catalog)
-    if args.discover:
-        print("New review candidates:", discover(args.events, args.candidates, args.catalog))
+    if args.discover or args.backfill:
+        added = discover(args.events, args.candidates, args.catalog, args.drafts, reset=args.backfill,
+                         max_batches=1000 if args.backfill else 10)
+        print("New review candidates:", added)
+        print("Private review drafts:", args.drafts)
     if args.output:
         publish(args.output, args.catalog)
     print("Reviewed incidents:", len(public_payload(catalog)["incidents"]))
