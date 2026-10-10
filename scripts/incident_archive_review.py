@@ -11,9 +11,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 POLICY_PATH = Path(__file__).resolve().parent.parent / "assets" / "incident_archive_policy.json"
-CLASSIFIER_VERSION = 4
+CLASSIFIER_VERSION = 5
+# "고객 정보 2만 5천 건 유출"처럼 정보와 유출 사이에 수치가 끼는 제목도 사고 표현으로 본다.
 INCIDENT_RE = re.compile(
-    r"침해\s*사고|정보\s*(?:유출|탈취|판매)|데이터\s*유출|해킹|디도스|DDoS|랜섬웨어|털렸|뚫렸|뚫려|"
+    r"침해\s*사고|정보\s*(?:유출|탈취|판매)|정보[^.…]{0,12}유출|데이터\s*유출|해킹|디도스|DDoS|랜섬웨어|털렸|뚫렸|뚫려|"
     r"전산망\s*(?:마비|공격)|사이버\s*공격|data\s*breach|ransomware", re.I)
 # 사고 보도가 아닌 글: 훈련·행사, 칼럼·기자수첩·연재, 개인 이름을 단 기고 꼭지("[OOO의 …]"), 주간 동향.
 EXCLUDE_RE = re.compile(r"모의\s*훈련|모의\s*해킹|웨비나|세미나|채용|제품\s*출시|칼럼|기고|論하다|주의보|"

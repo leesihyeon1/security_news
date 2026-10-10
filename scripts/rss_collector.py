@@ -826,6 +826,15 @@ def main():
         parser.error("--all 또는 --feed <name>을 지정하세요.")
         return
 
+    if args.all and not args.dry_run:
+        # 국내 속보는 피드 수집(기사마다 AI 요약, 수 분 소요)보다 먼저 갱신한다 — 끝에 두면 그만큼
+        # 늦게 뜬다. 실패해도 기사 수집은 계속한다.
+        try:
+            import breaking_news
+            breaking_news.refresh()
+        except Exception as error:
+            print("[-] 국내 속보 갱신 건너뜀: {}".format(type(error).__name__))
+
     results = []
     for feed in selected:
         # 피드 하나가 죽어도 나머지는 계속 수집한다
