@@ -48,6 +48,7 @@ def test_build_deduplicates_and_sorts():
 
 def test_dashboard_publish_writes_calendar_data(tmp_path, monkeypatch):
     monkeypatch.setattr(publish_web_dashboard, "_rebuild_search_index_from_events", lambda repo: None)
+    monkeypatch.setattr(publish_web_dashboard.featured_sources, "publish", lambda data_dir: None)
     monkeypatch.setattr(publish_web_dashboard, "_rebuild_issue_history", lambda data_dir: None)
     monkeypatch.setattr(publish_web_dashboard, "_run_git", lambda *args, **kwargs: "")
     monkeypatch.setattr(publish_web_dashboard, "_has_staged_changes", lambda *args, **kwargs: True)
