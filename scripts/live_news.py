@@ -88,6 +88,8 @@ def public_article(event):
     if published and collected and published > utc_timestamp(
             datetime.fromisoformat(collected.replace("Z", "+00:00")) + timedelta(hours=6)):
         published = ""
+    import news_media
+    image = public_url(event.get("image_url"))
     return {
         "ref": common_utils.event_ref(event.get("id") or url),
         "title": title[:500],
@@ -98,7 +100,9 @@ def public_article(event):
         "summary": public_text(event_summary(event, 600)),
         "published_at": published,
         "collected_at": collected,
-        "image_url": public_url(event.get("image_url")),
+        "image_url": image,
+        # 기사 사진이 없을 때만 언론사 대표 이미지(저장된 값, 네트워크 없음)를 함께 싣는다.
+        "source_image": "" if image else news_media.cached_outlet_image(url),
     }
 
 
@@ -135,6 +139,8 @@ def from_events_file(path=None, limit=MAX_ITEMS):
     for row in rows:
         if not row["image_url"]:
             row["image_url"] = public_url(images.get(row["url"]))
+            if row["image_url"]:
+                row["source_image"] = ""
     return rows
 
 

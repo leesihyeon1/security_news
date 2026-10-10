@@ -834,6 +834,12 @@ def main():
             breaking_news.refresh()
         except Exception as error:
             print("[-] 국내 속보 갱신 건너뜀: {}".format(type(error).__name__))
+        # 사진 없는 최신 기사 몇 건씩 원문·언론사 대표 이미지를 찾아 실시간 피드에 다시 싣는다.
+        try:
+            import news_media
+            print("[*] 기사 이미지 보강: {}".format(news_media.refresh()))
+        except Exception as error:
+            print("[-] 기사 이미지 보강 건너뜀: {}".format(type(error).__name__))
 
     results = []
     for feed in selected:

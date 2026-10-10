@@ -176,6 +176,7 @@ def build(rows, catalog, now=None):
             "collected_at": _iso(now), "outlets": len(outlets), "outlets_6h": len(recent),
             "outlet_names": outlets[:6], "articles": len(articles), "tags": sorted(group["tags"]),
             "claim_status": "alleged" if group["alleged"] * 2 > len(articles) else "reported", "image_url": "",
+            "source_image": "",
             # 대표 이미지를 찾을 최근 기사들. 발행 전에 attach_media가 지운다.
             "candidates": [{"title": article["title"], "url": article["url"], "outlet": article["outlet"],
                             "published_at": _iso(article["published"])} for article in reversed(articles[-MEDIA_TRIES:])],
@@ -211,31 +212,24 @@ def original_url(google_url):
     return live_news.public_url(json.loads(rows[0][2])[1])
 
 
-def page_image(markup, base):
-    """원문의 대표 이미지(og:image·twitter:image)만 쓴다 — 본문 첫 그림은 로고·광고인 경우가 많다."""
-    from bs4 import BeautifulSoup
-    import live_news
-
-    soup = BeautifulSoup(markup or "", "html.parser")
-    for attrs in ({"property": "og:image"}, {"name": "og:image"}, {"name": "twitter:image"}, {"property": "twitter:image"}):
-        node = soup.find("meta", attrs=attrs)
-        value = live_news.public_url(node.get("content"), base) if node else ""
-        if value:
-            return value
-    return ""
-
-
 def resolve_media(google_url):
+    import news_media
+
     url = original_url(google_url)
-    return (url, page_image(_http(url), url)) if url else ("", "")
+    return (url, news_media.page_image(url)) if url else ("", "")
 
 
-def attach_media(payload, cache, resolve=resolve_media, budget=MEDIA_BUDGET_SECONDS, clock=time.monotonic):
+def attach_media(payload, cache, resolve=resolve_media, budget=MEDIA_BUDGET_SECONDS, clock=time.monotonic,
+                 outlet=None):
     """속보 카드마다 원문 주소와 대표 이미지를 붙인다. 이미 푼 주소는 cache에서 다시 쓴다.
 
     대표 기사에 이미지가 없으면 같은 사고의 다음 최신 기사로 넘어가고, 그 기사를 카드에 쓴다.
-    시간 한도를 넘기면 남은 카드는 다음 갱신 때 이어서 푼다(그동안은 참고 이미지).
+    끝내 없으면 대표 기사 언론사의 홈페이지 대표 이미지(source_image)를 붙인다.
+    시간 한도를 넘기면 남은 카드는 다음 갱신 때 이어서 푼다(그동안은 참고 사진).
     """
+    if outlet is None:
+        import news_media
+        outlet = news_media.outlet_image
     deadline = clock() + budget
     stamp = _iso(_now())
     for item in payload["items"]:
@@ -256,6 +250,11 @@ def attach_media(payload, cache, resolve=resolve_media, budget=MEDIA_BUDGET_SECO
                 break
             if candidate["url"] == item["url"] and hit.get("url"):
                 item["url"] = hit["url"]  # 이미지는 없어도 대표 기사는 원문으로 바로 연다.
+        if not item.get("image_url") and not item["url"].startswith("https://news.google.com/") and clock() <= deadline:
+            try:
+                item["source_image"] = outlet(item["url"]) or ""
+            except Exception:
+                item["source_image"] = ""
     return payload
 
 

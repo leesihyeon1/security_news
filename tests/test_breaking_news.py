@@ -114,6 +114,10 @@ def test_refresh_failure_backs_off_without_raising(tmp_path):
     assert saved["error"] == "OSError" and "secret" not in state.read_text(encoding="utf-8")
 
 
+def _no_outlet(url):
+    raise AssertionError("outlet image is only for cards without an article image")
+
+
 def _payload_with_candidates():
     return {"items": [{"title": "최신 기사", "url": "https://news.google.com/rss/articles/a", "source_label": "A",
                        "published_at": "2026-10-01T02:50:00Z", "image_url": "",
@@ -131,7 +135,7 @@ def test_attach_media_uses_the_original_article_and_its_image():
         calls.append(url)
         return "https://www.example.co.kr/news/1", "https://img.example.co.kr/1.jpg"
 
-    item = breaking.attach_media(_payload_with_candidates(), {}, resolve)["items"][0]
+    item = breaking.attach_media(_payload_with_candidates(), {}, resolve, outlet=_no_outlet)["items"][0]
     assert item["url"] == "https://www.example.co.kr/news/1" and item["image_url"] == "https://img.example.co.kr/1.jpg"
     assert "candidates" not in item and calls == ["https://news.google.com/rss/articles/a"]
 
@@ -139,26 +143,29 @@ def test_attach_media_uses_the_original_article_and_its_image():
 def test_attach_media_falls_back_to_the_next_article_with_an_image():
     found = {"https://news.google.com/rss/articles/a": ("https://a.example/1", ""),
              "https://news.google.com/rss/articles/b": ("https://b.example/2", "https://b.example/2.jpg")}
-    item = breaking.attach_media(_payload_with_candidates(), {}, found.__getitem__)["items"][0]
+    item = breaking.attach_media(_payload_with_candidates(), {}, found.__getitem__, outlet=_no_outlet)["items"][0]
     assert (item["title"], item["source_label"], item["url"]) == ("이전 기사", "B", "https://b.example/2")
     assert item["image_url"] == "https://b.example/2.jpg"
 
 
 def test_attach_media_reuses_cached_lookups_and_respects_the_time_budget():
     cache = {}
-    breaking.attach_media(_payload_with_candidates(), cache, lambda url: ("https://a.example/1", "https://a.example/1.jpg"))
+    breaking.attach_media(_payload_with_candidates(), cache, lambda url: ("https://a.example/1", "https://a.example/1.jpg"),
+                          outlet=_no_outlet)
 
     def never(url):
         raise AssertionError("cached lookups must not hit the network again")
 
-    assert breaking.attach_media(_payload_with_candidates(), cache, never)["items"][0]["image_url"] == "https://a.example/1.jpg"
+    again = breaking.attach_media(_payload_with_candidates(), cache, never, outlet=_no_outlet)
+    assert again["items"][0]["image_url"] == "https://a.example/1.jpg"
     ticks = iter([0, 100, 100, 100])
-    late = breaking.attach_media(_payload_with_candidates(), {}, never, budget=10, clock=lambda: next(ticks))
+    late = breaking.attach_media(_payload_with_candidates(), {}, never, budget=10, clock=lambda: next(ticks),
+                                  outlet=_no_outlet)
     assert late["items"][0]["image_url"] == "" and "candidates" not in late["items"][0]
 
 
-def test_page_image_reads_only_the_representative_image_tags():
-    page = '<html><head><meta content="https://img.example.com/og.jpg" property="og:image"></head>' \
-           '<body><img src="https://img.example.com/logo.png"></body></html>'
-    assert breaking.page_image(page, "https://news.example.com/a") == "https://img.example.com/og.jpg"
-    assert breaking.page_image('<img src="https://img.example.com/logo.png">', "https://news.example.com/a") == ""
+def test_cards_without_any_article_image_use_the_outlet_image():
+    item = breaking.attach_media(_payload_with_candidates(), {}, lambda url: ("https://www.ytn.co.kr/_ln/1", ""),
+                                 outlet=lambda url: "https://www.ytn.co.kr/og.png")["items"][0]
+    assert item["image_url"] == "" and item["source_image"] == "https://www.ytn.co.kr/og.png"
+    assert item["url"] == "https://www.ytn.co.kr/_ln/1"
