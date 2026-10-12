@@ -74,6 +74,71 @@ def test_zero_hits_cannot_close_incident(monkeypatch):
     assert result["plan"][0]["review_gaps"]
 
 
+def test_dns_sinkhole_on_shared_platform_path_needs_review():
+    # 실측 2026-10-12(PoeLLM): 저장소 경로에 DNS 싱크홀을 걸라는 대응이 그대로 나갔다.
+    step = complete_plan(action="확인된 C2 IP 경계 차단 및 GitHub 리포지터리 도메인 싱크홀",
+                         check="github.com/ejejejdfbbebe DNS 싱크홀 적용 후 DNS 쿼리 로그 확인")
+    gaps = analyst_workflow.plan_gaps(step)
+    assert len(gaps) == 1 and gaps[0].startswith("DNS 싱크홀로 경로 차단 불가")
+    assert "github.com/ejejejdfbbebe" in gaps[0] and "프록시" in gaps[0]
+    assert analyst_workflow.display_plan(dict(step, review_gaps=gaps))["readiness"] == "review_required"
+    assert analyst_workflow.plan_gaps(complete_plan(action="raw.githubusercontent.com DNS 차단"))[0].startswith(
+        "공용 플랫폼 DNS 차단 금지")
+
+
+def test_dns_sinkhole_on_attacker_hosts_and_unnamed_targets_is_feasible():
+    for action in ("c2-panel.example DNS 싱크홀 적용", "attacker.github.io DNS 싱크홀",
+                   "evil-bucket.s3.amazonaws.com DNS 차단",
+                   "협조 불가 시 DNS 싱크홀·프록시 차단 규칙 적용만 먼저 진행",
+                   "https://github.com/a/b 저장소는 프록시에서 차단 및 c2-panel.example DNS 싱크홀"):
+        assert analyst_workflow.plan_gaps(complete_plan(action=action)) == [], action
+
+
+def test_placeholder_advisory_number_needs_review():
+    gaps = analyst_workflow.plan_gaps(complete_plan(check="Ivanti 보안 권고(SA-2026-xxx) 확인 후 영향 버전 대조"))
+    assert gaps == ["자리표시 번호(SA-2026-xxx) — 실제 권고·패치 번호를 확인해 채움"]
+    assert analyst_workflow.plan_gaps(complete_plan(check="CVE-2026-1234 패치 확인")) == []
+
+
+def test_evidence_excerpt_keeps_late_indicators_and_question_terms():
+    late_hash = "a" * 64
+    text = ("도입 문단. " * 300 + "\n" + "\n".join("일반 배경 설명 문단 {} ".format(i) * 30 for i in range(40))
+            + "\nThe loader TestAssembly.dll uses CVE-2026-12345 and drops " + late_hash + "\n")
+    excerpt = primary_sources.evidence_excerpt(text, ["TestAssembly.dll은 어떻게 실행되는가"], limit=4000)
+    assert len(excerpt) <= 4000
+    assert excerpt.startswith("도입 문단.")
+    assert late_hash in excerpt and "CVE-2026-12345" in excerpt
+    assert primary_sources.evidence_excerpt("짧은 글", limit=4000) == "짧은 글"
+
+
+def test_extract_html_keeps_the_whole_document_and_hash_rows():
+    paragraphs = "".join("<p>{} {}</p>".format("Background paragraph about the campaign.", i) * 3
+                         for i in range(120))
+    html = ("<html><body><article>" + paragraphs + "<p>Final section: payload contacts late-c2.example "
+            "via port 8443 and keeps persistence through RunOnce entries in the registry.</p></article>"
+            "<table><tr><td>loader</td><td>" + "b" * 64 + "</td></tr></table></body></html>")
+    text = primary_sources.extract_html(html)
+    assert len(text) > primary_sources.MAX_CHARS_PER_SOURCE
+    assert "late-c2.example" in text
+    assert "[원문 해시 표]" in text and "b" * 64 in text
+
+
+def test_same_source_text_under_another_url_counts_once():
+    first = [{"url": "https://vendor.test/blog-post/x", "excerpt_sha256": "same"}]
+    more = [{"url": "https://vendor.test/threat-intelligence/x", "excerpt_sha256": "same"},
+            {"url": "https://other.test/report", "excerpt_sha256": "other"}]
+    merged = primary_sources.merge(first, more)
+    assert [source["url"] for source in merged] == ["https://vendor.test/blog-post/x", "https://other.test/report"]
+
+
+def test_response_prompt_reaches_late_article_details(monkeypatch):
+    monkeypatch.setattr(response_synth.common_utils, "environment_brief", lambda: "")
+    article = "기사 도입. " * 3000 + "\n후반 IOC 표: CVE-2026-55555 / " + "c" * 64
+    prompt = response_synth.build_prompt("t", "analysis", {"questions": ["CVE-2026-55555 영향은?"]}, {},
+                                         article=article)
+    assert "CVE-2026-55555 / " + "c" * 64 in prompt
+
+
 def test_prepared_plan_does_not_append_unqualified_material_actions():
     rows = investigation.merge_actions({"plan": [complete_plan()]}, {"actions": ["해시 3건 즉시 차단"]})
     assert len(rows) == 1

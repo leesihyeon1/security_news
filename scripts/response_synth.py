@@ -33,6 +33,7 @@ import analysis_trace
 import article_kind
 import common_utils
 import analyst_workflow
+import primary_sources
 import source_evidence
 
 # 조회 재료를 프롬프트에 넣을 때의 상한. 전부 넣으면 프롬프트가 수만 자가 되고,
@@ -323,7 +324,9 @@ def build_prompt(title, analysis, targets, investigation, primary="", extra="",
         + ("\n" + common_utils.environment_brief() + "\n"
            if common_utils.environment_brief() else "")
         + "\n[기사 제목]\n" + (title or "")
-        + ("\n\n[기사 원문 — 보도이며 사내 관측은 아님]\n" + article[:12000] if article else
+        # 본문 앞부분만 자르면 후반의 해시 표·기술 상세가 빠진다 — 질문과 기술 구간을 고른다.
+        + ("\n\n[기사 원문 — 보도이며 사내 관측은 아님]\n"
+           + primary_sources.evidence_excerpt(article, questions, limit=12000) if article else
            "\n\n[제약] 기사 원문 미제공: 기존 AI 분석을 독립 검증 근거로 간주하지 마라.")
         + "\n\n[기존 AI 분석 — 원문과 대조할 가설]\n" + (analysis or "")[:4000]
         + "\n\n[이 건의 대응 목표]\n" + (objective or "(설정되지 않음 — 조회 결과로 직접 판단하라)")

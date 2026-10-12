@@ -3,6 +3,7 @@
 import re
 
 import article_kind
+import lure_hunter
 import pattern_synth
 import playbook
 
@@ -19,6 +20,65 @@ INFORMATIONAL_PLAN_FIELDS = ("owner", "trigger", "check", "done")
 NOT_APPLICABLE = "해당 없음"
 ZERO_CLOSE_RE = re.compile(r"0\s*건.{0,75}(?:이면|시|경우).{0,60}(?:종료|종결|안전|감염\s*없)", re.I)
 QUALIFIED_NEGATIVE_RE = re.compile(r"보존\s*기간|수집\s*범위|로그\s*누락|센서|수집\s*상태|커버리지")
+# DNS 싱크홀·차단은 이름 단위다. 저장소 경로에는 걸 수 없고 공용 플랫폼 도메인에 걸면
+# 업무 서비스가 통째로 끊긴다(실측 2026-10-12, PoeLLM 건: "github.com/ejejejdfbbebe
+# DNS 싱크홀 적용", "GitHub 리포지터리 도메인 싱크홀").
+DNS_BLOCK_RE = re.compile(r"(?:DNS|RPZ)\s*(?:싱크홀|sinkhole|차단|블록|block)|싱크홀|sinkhole", re.I)
+CLAUSE_END_RE = re.compile(r"[.;](?=\s|$)|,\s|\s(?:및|후|또는)\s|\n")
+HOST_PATH_RE = re.compile(r"(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[\w\-./%~]*\w)?", re.I)
+PATH_WORD_RE = re.compile(r"URL|경로|리포지[터토]리|저장소|repo(?:sitory)?\b|계정", re.I)
+PLATFORM_RE = re.compile(
+    r"GitHub|GitLab|Bitbucket|Google\s*Drive|구글\s*드라이브|Dropbox|드롭박스|OneDrive|원드라이브|"
+    r"SharePoint|Discord|디스코드|Telegram|텔레그램|Pastebin|Notion|노션|Slack|슬랙|npm\b|PyPI", re.I)
+# 공용 도메인 바로 아래의 공용 호스트(raw.githubusercontent.com 등). 그보다 깊은
+# 테넌트 호스트(evil.s3.amazonaws.com)는 DNS로 그것만 막을 수 있으니 제외한다.
+SHARED_LABELS = {"www", "raw", "api", "gist", "objects", "codeload", "drive", "docs",
+                 "storage", "s3", "cdn", "media", "dl", "files"}
+PLACEHOLDER_RE = re.compile(r"\b[A-Z][A-Za-z]{1,7}(?:-\d{2,4})?-(?:[xX]{3,}|\?{3,})(?![\w?])|"
+                            r"\bKB\d*[xX]{3,}\b")
+
+
+def _shared_host(host):
+    host = host.lower().strip(".")
+    head, _, rest = host.partition(".")
+    return host in lure_hunter.PUBLIC_SERVICE_APEXES or (
+        head in SHARED_LABELS and rest in lure_hunter.PUBLIC_SERVICE_APEXES)
+
+
+def technical_gaps(step):
+    """Deterministic checks for actions that cannot work as written."""
+    paths, platforms, placeholders = [], [], []
+    for key in ("action", "check", "alternative", "done"):
+        text = " ".join(str(step.get(key) or "").split())
+        for token in PLACEHOLDER_RE.findall(text):
+            if token not in placeholders:
+                placeholders.append(token)
+        for match in DNS_BLOCK_RE.finditer(text):
+            starts = [m.end() for m in CLAUSE_END_RE.finditer(text, 0, match.start())]
+            end = CLAUSE_END_RE.search(text, match.end())
+            clause = text[starts[-1] if starts else 0:end.start() if end else len(text)]
+            shared = [(m.group(0), m.group(2)) for m in HOST_PATH_RE.finditer(clause)
+                      if _shared_host(m.group(1))]
+            # attacker.github.io처럼 호스트 안에 든 이름은 그 호스트 판정을 따른다.
+            names = PLATFORM_RE.findall(HOST_PATH_RE.sub(" ", clause))
+            if not shared and not names:
+                continue
+            target = shared[0][0] if shared else names[0]
+            pathy = any(path for _, path in shared) or PATH_WORD_RE.search(clause)
+            bucket = paths if pathy else platforms
+            if target not in bucket:
+                bucket.append(target)
+    gaps = []
+    if paths:
+        gaps.append("DNS 싱크홀로 경로 차단 불가({}) — DNS는 도메인 단위라 공용 플랫폼의 저장소·URL 하나만 "
+                    "막을 수 없음. 프록시·SWG URL 필터(TLS 검사)로 그 경로만 막고 접속 기록을 헌팅".format(
+                        ", ".join(paths[:3])))
+    if platforms:
+        gaps.append("공용 플랫폼 DNS 차단 금지({}) — 도메인 전체가 업무 서비스라 개별 URL만 프록시에서 "
+                    "막고 플랫폼에 악성 자원 신고".format(", ".join(platforms[:3])))
+    if placeholders:
+        gaps.append("자리표시 번호({}) — 실제 권고·패치 번호를 확인해 채움".format(", ".join(placeholders[:3])))
+    return gaps
 
 
 def plan_gaps(step, informational=False):
@@ -27,7 +87,7 @@ def plan_gaps(step, informational=False):
     done = str(step.get("done") or "")
     if ZERO_CLOSE_RE.search(done) and not QUALIFIED_NEGATIVE_RE.search(done):
         gaps.append("0건 결과의 수집 범위·보존 기간 검증")
-    return gaps
+    return gaps + technical_gaps(step)
 
 
 def display_plan(step):

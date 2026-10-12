@@ -160,7 +160,7 @@ def classify(iocs, text="", title="", category="", targets=None, raw_body="",
     hashes = vt_hunter.file_hashes_from_iocs(iocs)
     domains = lure_hunter._seed_domains_from_iocs(iocs)
     targets = targets or {}
-    cves = vuln_hunter.cves_from_text(text, iocs)
+    cves = vuln_hunter.cves_from_text(raw_body or text, iocs)
     for cve in targets.get("cves") or []:
         if cve.upper() not in [c.upper() for c in cves]:
             cves.append(cve.upper())
@@ -195,7 +195,7 @@ def classify(iocs, text="", title="", category="", targets=None, raw_body="",
         tracks.append("supply_chain")
     # 저장소 주소가 있으면 그 저장소·계정·파일을 직접 본다. 예전에는 도메인만 보고
     # github.com이 정상 인프라라는 것만 확인하고 끝냈다.
-    if github_hunter.refs_from(iocs, text, targets):
+    if github_hunter.refs_from(iocs, text + "\n" + raw_body, targets):
         tracks.append("github")
     # 확장 프로그램 ID가 본문에 있으면 스토어에 직접 조회한다. 공급망 기사인데
     # 패키지 레지스트리에는 없는 통로라, 이게 없으면 조사가 빈손으로 끝난다.
@@ -668,7 +668,7 @@ INVESTIGATION_SOFT_BUDGET_SECONDS = 180
 
 def _collect_primary(links, **kwargs):
     client, ref = worker_progress.current()
-    digest = worker_progress.fingerprint(links, kwargs)
+    digest = worker_progress.fingerprint(links, kwargs, primary_sources.EXTRACTION_VERSION)
     cached = worker_progress.load(client, ref, "sources:" + digest[:12], digest)
     if cached is not None:
         return cached
@@ -1010,8 +1010,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             chosen = lookup_plan.plan(targets.get("objective"), targets.get("questions"),
                                       [{"key": l["key"], "label": l["label"],
                                         "consumes": l["consumes"]} for l in LOOKUPS],
-                                      route, targets=targets, evidence=body[:4000] + "\n" + primary_text[:3500]
-                                      + "\n[원문 후반·표]\n" + primary_text[-3000:])
+                                      route, targets=targets, evidence=primary_sources.evidence_excerpt(
+                                          body + "\n" + primary_text, targets.get("questions") or [], limit=11000))
             route["tracks"] = chosen["tracks"]
             block["question_lookups"] = chosen.get("question_lookups") or []
             if chosen.get("hashes") or route.get("hashes"):
@@ -1021,7 +1021,9 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 # 목표도 무시하게 된다.
                 all_hashes = list(route.get("hashes") or [])
                 requested_hashes = chosen.get("hashes") or all_hashes
-                evidence_for_samples = "\n".join([body[:5000], primary_text[:5000]])
+                evidence_for_samples = "\n".join([body, primary_text])
+                # Model ordering is a preference, not a reason to lose the final payload.
+                requested_hashes = list(dict.fromkeys(requested_hashes + all_hashes))
                 route["hashes"] = research_entities.sample_order(
                     requested_hashes, evidence=evidence_for_samples, limit=2)
                 steps.append({"track": "조회 계획",
@@ -1141,12 +1143,15 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             # 기사가 인용하지 않은 자료라 여기서만 얻을 수 있다.
             intel_refs = (((block.get("intel") or {}).get("references") or [])
                           + ((block.get("web") or {}).get("references") or []))
+            seen_sources = {source_evidence.canonical_url(source.get("url"))
+                            for source in (primary.get("sources") or []) + (primary.get("attempts") or [])}
+            intel_refs = [u for u in intel_refs if source_evidence.canonical_url(u) not in seen_sources]
             if intel_refs:
                 try:
                     more = _collect_primary(
                         [{"url": u} for u in intel_refs], article_url=article_url,
                         limit=1, origin="search")
-                    primary["sources"] = (primary.get("sources") or []) + more["sources"]
+                    primary["sources"] = primary_sources.merge(primary.get("sources"), more["sources"])
                     block.setdefault("lookup_status", []).extend(more.get("attempts") or [])
                     steps.extend({"track": "원문 확인", "text": line}
                                  for line in more.get("steps") or [])
@@ -1179,7 +1184,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                 steps.append({"track": "과거 분석", "text": "조회 실패: {}".format(error)})
             evidence = primary_sources.as_evidence([
                 source for source in primary.get("sources") or []
-                if source.get("origin", "article") == "article"])
+                if source.get("origin", "article") == "article"], targets.get("questions") or [])
             block["source_urls"] = list(dict.fromkeys(source_urls + [
                 source["url"] for source in primary.get("sources") or []
                 if source.get("url") and source.get("origin", "article") == "article"]))
@@ -1239,6 +1244,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
             round_num = 1
             followup_count = 0
             research_state = {"ran": False}
+            followup_started = time.monotonic()
 
             def _run_hashes(values):
                 found, hash_steps = _run_followups(
@@ -1259,7 +1265,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                         block.get("seeds"), block.get("negative_controls"))
                 return found
             while verdict and round_num < MAX_INVESTIGATION_ROUNDS:
-                if time.monotonic() - started >= INVESTIGATION_SOFT_BUDGET_SECONDS:
+                if time.monotonic() - followup_started >= INVESTIGATION_SOFT_BUDGET_SECONDS:
                     steps.append({"track": "조사 반복", "text":
                                   "시간 예산에 도달해 추가 외부 조회를 멈췄습니다. 남은 질문은 미확인으로 보존합니다."})
                     break
@@ -1348,7 +1354,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                                 more = {"sources": [], "steps": [
                                     "후속 검색 참고 원문 조회 실패: {}".format(type(error).__name__)],
                                     "attempts": []}
-                            primary["sources"] = (primary.get("sources") or []) + (more.get("sources") or [])
+                            primary["sources"] = primary_sources.merge(primary.get("sources"),
+                                                                       more.get("sources"))
                             primary["attempts"] = (primary.get("attempts") or []) + (more.get("attempts") or [])
                             block.setdefault("lookup_status", []).extend(more.get("attempts") or [])
                             steps.extend({"track": "후속 원문 확인", "text": line}
@@ -1362,7 +1369,8 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                                     ("url", "host", "chars", "origin", "retrieved_at",
                                      "excerpt_sha256")}
                                     for source in primary["sources"]]}
-                                evidence = primary_sources.as_evidence(primary["sources"])
+                                evidence = primary_sources.as_evidence(
+                                    primary["sources"], targets.get("questions") or [])
                                 extra_lines.append("후속 검색 원문 {}건을 실제로 읽었습니다.".format(
                                     len(new_sources)))
                                 fresh_iocs = source_evidence.extract_report_iocs(
@@ -1443,11 +1451,16 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
                     steps.append({"track": "목표별 재조사", "text":
                                   "재조사 결과는 조사 기록과 목표별 증거 판정에 반영했고, 종합 판단 "
                                   "문장은 다시 받지 않았습니다."})
-            if verdict is not None and executed_pending is not None:
+            if verdict is not None:
                 # 실행한 것만 남긴다 — 화면에서 "요청한 것과 다른 것을 조회했다"로
                 # 읽히지 않게(마지막으로 실제 돌린 라운드의 목록만).
-                verdict["followups"] = executed_pending
+                proposed = verdict.get("followups") or []
+                executed = {(row.get("type"), row.get("value")) for row in executed_pending or []}
+                verdict["pending_followups"] = [row for row in proposed
+                                               if (row.get("type"), row.get("value")) not in executed]
+                verdict["followups"] = executed_pending or []
             if verdict:
+                block["synthesis"] = verdict
                 if block.get("research_plan"):
                     lookup_plan.reconcile_task_graph(block["research_plan"], block)
                 # 검색식은 결과가 나왔다는 것만으로 탐지 근거가 아니다 — 조회용·확장 후보·

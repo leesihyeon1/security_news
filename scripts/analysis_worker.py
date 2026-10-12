@@ -43,6 +43,7 @@ import common_utils
 import campaign_radar
 import dashboard_text
 import investigation
+import primary_sources
 import response_synth
 import network_safety
 import source_evidence
@@ -742,7 +743,7 @@ def analyze_one(job):
         log("    관련 캠페인 단락 분리: 주기사 {:,}자 / 별도 사례 {:,}자".format(
             len(focused_body), len(body) - len(focused_body)))
     body, links = focused_body, focused_links
-    analysis_body = body[:BODY_MAX_CHARS]
+    analysis_body = primary_sources.evidence_excerpt(body, limit=BODY_MAX_CHARS)
     if fallback_url:
         analysis_body = ("Dark Reading 기사 본문은 접근이 제한되어, 해당 기사가 직접 인용한 "
                          "{}의 연구 원문을 분석 근거로 사용합니다. 이 자료의 내용만 원문 "
@@ -844,7 +845,7 @@ def analyze_one(job):
     investigation_block = None
     try:
         investigation_digest = worker_progress.fingerprint(
-            title, analysis, targets, iocs, body[:BODY_MAX_CHARS],
+            title, analysis, targets, iocs, body, primary_sources.EXTRACTION_VERSION,
             os.environ.get("BROWSER_RESEARCH_ENABLED"),
             os.environ.get("BROWSER_RESEARCH_ISOLATED_WORKER"))
         investigation_block = worker_progress.load(
@@ -856,7 +857,7 @@ def analyze_one(job):
         if investigation_block is None:
             investigation_block = investigation.build_for_article(
                 iocs, text=analysis, title=title, category=category or "",
-                body=body[:BODY_MAX_CHARS], targets=targets, links=links, article_url=url)
+                body=body, targets=targets, links=links, article_url=url)
             if investigation_block and (investigation_block.get("synthesis_status") or {}).get("status") != "failed":
                 worker_progress.save(stage_client, job.get("ref"), "investigation",
                                      investigation_digest, investigation_block)

@@ -99,6 +99,25 @@ class Trace:
                     if key in row and len(json.dumps(row[key], ensure_ascii=False)) > 180:
                         row[key] = _counts_only(row[key])
                         row["detail_limited"] = True
+        excess = size() - PUBLIC_BYTES
+        if excess > 0:
+            # 같은 작업의 반복 호출부터 줄인다. 가운데를 통째로 버리면 조회 단계가 사라졌다
+            # (실측 2026-10-12, UAT-11587 건: 108건 중 05:10~05:15 조회 52건이 생략됐다).
+            dropped = set()
+            for row in _repeats_last_first(events):
+                if excess <= 0:
+                    break
+                dropped.add(id(row))
+                excess -= len(json.dumps(row, ensure_ascii=False).encode("utf-8")) + 2
+            events[:] = [row for row in events if id(row) not in dropped]
+            data["omitted_events"] += len(dropped)
+        if size() > PUBLIC_BYTES:
+            # Every remaining operation keeps its label, status and timing.
+            for row in events:
+                if row.get("kind") == "llm_attempt":
+                    continue  # provider·model만 담겨 작고, 화면이 요청 줄에 쓴다.
+                if [row.pop(key) for key in ("inputs", "output") if key in row]:
+                    row["detail_limited"] = True
         while events and size() > PUBLIC_BYTES:
             events.pop(len(events) // 2)
             data["omitted_events"] += 1
@@ -109,6 +128,23 @@ def _counts_only(value):
     if isinstance(value, dict):
         return {key: _counts_only(item) for key, item in value.items() if key != "sample"}
     return value
+
+
+def _repeats_last_first(events):
+    """Repeated runs of one operation, trimming the longest series evenly.
+
+    The first run of each operation and failed or partial runs stay visible.
+    """
+    groups = {}
+    for position, row in enumerate(events):
+        key = (row.get("stage"), row.get("kind"), row.get("function") or row.get("label"))
+        groups.setdefault(key, []).append((position, row))
+    ranked = [(-index, -len(rows), -position, row)
+              for rows in groups.values()
+              for index, (position, row) in enumerate(rows)
+              if index and row.get("status") not in ("failed", "partial")]
+    ranked.sort(key=lambda item: item[:3])
+    return [item[3] for item in ranked]
 
 
 @contextlib.contextmanager

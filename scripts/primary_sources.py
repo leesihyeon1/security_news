@@ -39,6 +39,8 @@ import network_safety
 HEAD_CHARS = 4000
 IOC_CHARS = 3000
 MAX_CHARS_PER_SOURCE = HEAD_CHARS + IOC_CHARS
+MAX_DOCUMENT_CHARS = 120000
+EXTRACTION_VERSION = 2
 MAX_SOURCES = 2
 FETCH_TIMEOUT_SECONDS = 20
 # 이보다 짧으면 본문을 못 읽은 것으로 본다(동의 배너·로그인 벽).
@@ -67,6 +69,7 @@ SKIP_HOSTS = {
     "twitter.com", "x.com", "linkedin.com", "facebook.com", "youtube.com",
     "youtu.be", "reddit.com", "t.me", "mastodon.social", "bsky.app",
     "click-tracker-two.vercel.app",
+    "wikipedia.org", "news.google.com",
 }
 SKIP_PATH_RE = re.compile(
     r"/(?:tag|tags|category|categories|topic|topics|author|authors|about|"
@@ -205,6 +208,38 @@ def _excerpt(text):
     return head + " … " + "".join(parts)
 
 
+def evidence_excerpt(text, questions=(), limit=12000):
+    """Keep technical paragraphs for prompts; extraction uses the full document."""
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    head_size = min(2500, limit // 3)
+    terms = set(re.findall(r"[A-Za-z][A-Za-z0-9_.-]{3,}|[가-힣]{2,}", " ".join(questions)))
+    technical = re.compile(r"CVE-\d{4}-\d+|\b[a-f0-9]{64}\b|\.dll\b|\.elf\b|"
+                           r"endpoint|command|registry|RunOnce|parse|dictionary|hard-coded|"
+                           r"Graph API|permission|scope|port[s]?\b|request|POST|GET|"
+                           r"sample|payload|IOC|indicator|backdoor", re.I)
+    chunks = []
+    start = head_size
+    while start < len(text):
+        end = min(start + 900, len(text))
+        boundary = text.rfind("\n", start + 400, end)
+        if boundary > start:
+            end = boundary + 1
+        chunk = text[start:end]
+        score = 3 * len(technical.findall(chunk)) + _indicator_count(chunk)
+        score += sum(2 for term in terms if term.lower() in chunk.lower())
+        chunks.append((score, start, chunk))
+        start = end
+    selected, remaining = [], max(0, limit - head_size - 120)
+    for _, start, chunk in sorted(chunks, key=lambda row: (-row[0], row[1])):
+        if len(chunk) <= remaining:
+            selected.append((start, chunk))
+            remaining -= len(chunk) + 7
+    return (text[:head_size] + "\n[...]\n" + "\n[...]\n".join(
+        chunk for _, chunk in sorted(selected)))[:limit]
+
+
 def extract_html(html):
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
@@ -228,7 +263,7 @@ def extract_html(html):
         if re.search(r"\b[a-fA-F0-9]{40,64}\b", line) and line not in seen:
             rows.append(line)
             seen.add(line)
-    return _excerpt(text) + ("\n[원문 해시 표]\n" + "\n".join(rows)[:6000] if rows else "")
+    return text[:MAX_DOCUMENT_CHARS] + ("\n[원문 해시 표]\n" + "\n".join(rows)[:12000] if rows else "")
 
 
 @analysis_trace.step("선정한 자료 본문 수집", kind="lookup", inputs=("url",))
@@ -288,7 +323,18 @@ def collect(links, article_url="", limit=MAX_SOURCES, origin="article"):
     return {"sources": sources, "steps": steps, "attempts": attempts}
 
 
-def as_evidence(sources):
+def merge(sources, more):
+    """같은 본문을 다른 주소로 또 읽어도 근거는 한 건이다.
+
+    실측 2026-10-12(UAT-11587): security.com의 blog-post·threat-intelligence 두 경로가
+    같은 글이라 1차 자료가 두 건으로 잡혔다.
+    """
+    seen = {source.get("excerpt_sha256") for source in sources or []}
+    return list(sources or []) + [source for source in more or []
+                                  if source.get("excerpt_sha256") not in seen]
+
+
+def as_evidence(sources, questions=()):
     """프롬프트에 넣을 형태. 어디서 온 글인지 밝혀 둔다."""
     blocks = []
     for source in sources or []:
@@ -296,5 +342,5 @@ def as_evidence(sources):
                  else "기사 인용 원문")
         blocks.append("--- {}: {} ({}) ---\n{}".format(
             label, source.get("host") or "", source.get("url") or "",
-            source.get("text") or ""))
+            evidence_excerpt(source.get("text"), questions)))
     return "\n\n".join(blocks)

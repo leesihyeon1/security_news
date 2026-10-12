@@ -265,6 +265,8 @@ def test_round_loop_runs_a_second_round_on_followups_and_keeps_only_executed_one
     # 2차 판단이 새로 요청한 bbb는 실행되지 않았으니 최종 followups에 안 남는다 —
     # "실행한 것만 남긴다" 불변식.
     assert block["synthesis"]["followups"] == [{"type": "hash", "value": "aaa", "question": "q"}]
+    # 요청됐지만 예산 안에서 못 돌린 조회는 지우지 않고 미실행으로 남긴다.
+    assert block["synthesis"]["pending_followups"] == [{"type": "hash", "value": "bbb", "question": "q2"}]
 
 
 def test_round_loop_chains_iocs_from_a_same_campaign_related_report(monkeypatch):

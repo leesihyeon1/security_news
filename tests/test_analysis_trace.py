@@ -80,6 +80,27 @@ def test_public_size_limit_is_explicit_and_keeps_real_totals():
     assert data["total_events"] == len(data["events"]) + data["omitted_events"]
 
 
+def test_size_limit_trims_repeated_runs_before_losing_a_stage():
+    # 실측 2026-10-12(UAT-11587): 가운데부터 버려 조회·후속 조회 단계가 통째로 빠졌다.
+    with analysis_trace.session() as trace:
+        analysis_trace.note("기사 수집", "source", query="article")
+        for index in range(120):
+            analysis_trace.note("해시 조회 " * 8, "lookup", "lookup", value="hash-{}".format(index))
+        analysis_trace.note("후속 조회", "followup", "lookup", value="next")
+        analysis_trace.note("목표 재검증", "verify", "validation", status="failed", question="answered?")
+        for index in range(120):
+            analysis_trace.note("차단 후보 검증 " * 8, "actions", "validation", value="ioc-{}".format(index))
+        analysis_trace.note("최종 판단", "synthesis", "llm", verdict="done")
+    data = trace.export()
+    assert len(json.dumps(data, ensure_ascii=False).encode()) <= analysis_trace.PUBLIC_BYTES
+    assert data["total_events"] == len(data["events"]) + data["omitted_events"]
+    stages = {row["stage"] for row in data["events"]}
+    assert {"source", "lookup", "followup", "verify", "actions", "synthesis"} <= stages
+    kept = {stage: sum(row["stage"] == stage for row in data["events"]) for stage in ("lookup", "actions")}
+    assert abs(kept["lookup"] - kept["actions"]) <= 1  # 긴 반복은 고르게 줄인다
+    assert any(row["status"] == "failed" for row in data["events"])
+
+
 def test_url_credentials_are_removed_and_trace_attaches_to_record():
     @analysis_trace.capture
     def run():
