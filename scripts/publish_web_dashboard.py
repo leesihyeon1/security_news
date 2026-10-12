@@ -376,7 +376,10 @@ def _write_and_commit(repo, payload, period, date_stamp, data_dir):
             json.dump(payload, file, ensure_ascii=False, indent=2)
     _rebuild_search_index_from_events(repo)
     live_news.write_snapshot(data_dir / "latest-news.json")
-    featured_sources.publish(data_dir)
+    try:
+        featured_sources.publish(data_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("[!] 보안 블로그 목록 발행 보류: {}".format(type(error).__name__))
     _rebuild_issue_history(data_dir)
     calendar_path = data_dir / "calendar-events.json"
     with calendar_path.open("w", encoding="utf-8") as file:
