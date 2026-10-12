@@ -81,12 +81,70 @@ def test_primary_report_separates_malware_from_campaign():
     assert result["novelty_label"] == "신규 캠페인 여부 미확인"
 
 
+def test_primary_direct_attack_headline_qualifies_without_observed_keyword():
+    result = radar.assess_evidence([event(title="ExampleRat malware infects exposed servers",
+                                          summary="Technical analysis of the infection chain.")], ["ExampleRat"])
+    assert result["activity"] == "reported"
+    assert result["auto_eligible"] is True
+
+
 def test_secondary_ai_claim_is_not_primary_attack_confirmation():
     e = event(url="https://news.example/1", summary="ExampleRat malware report")
     e["ai_summary"] = "실제 공격에 사용됨"
     result = radar.assess_evidence([e], ["ExampleRat"])
     assert result["activity"] == "unknown"
     assert result["auto_eligible"] is False
+
+
+def test_two_direct_technical_reports_can_be_investigated_without_primary_source():
+    first = event(url="https://news-one.example/1", source="one",
+                  title="PoeLLM malware infects exposed servers", malware_family="PoeLLM")
+    second = event("two", url="https://news-two.example/2", source="two",
+                   title="PoeLLM botnet compromises AI hosts", malware_family="PoeLLM")
+    result = radar.assess_evidence([first, second], ["PoeLLM"])
+    assert result["activity"] == "unknown"  # Reporting is not first-party confirmation.
+    assert result["auto_eligible"] is True
+    assert "원출처" in result["activity_label"]
+    assert all(entry["basis"].startswith("복수 매체") for entry in result["evidence"])
+
+
+def test_secondary_reports_do_not_qualify_on_roundups_or_arrest_news():
+    direct = event(url="https://news-one.example/1", source="one",
+                   title="PoeLLM malware infects exposed servers", malware_family="PoeLLM")
+    roundup = event("two", url="https://news-two.example/2", source="two",
+                    title="Week in review: PoeLLM malware infects servers", malware_family="PoeLLM")
+    arrest = event("three", url="https://news-three.example/3", source="three",
+                   title="Police arrest PoeLLM malware operator", malware_family="PoeLLM")
+    assert not radar.assess_evidence([direct, roundup, arrest], ["PoeLLM"])["auto_eligible"]
+    assert not radar.assess_evidence([direct, event("copy", source="one",
+                                                   url="https://news-one.example/copy", title=direct["title"])],
+                                     ["PoeLLM"])["auto_eligible"]
+
+
+def test_secondary_headlines_without_specific_technical_detail_are_held():
+    reports = [event(str(index), url="https://news-{}.example/story".format(index),
+                     source="outlet-{}".format(index), title="ShinyHunters breach reported",
+                     malware_family="ShinyHunters", attack_techniques=["T1190"], iocs=[])
+               for index in range(2)]
+    assert not radar.assess_evidence(reports, ["ShinyHunters"])["auto_eligible"]
+
+
+def test_explicit_negative_report_blocks_secondary_auto_analysis():
+    first = event(url="https://news-one.example/1", source="one",
+                  title="PoeLLM malware infects exposed servers", malware_family="PoeLLM")
+    second = event("two", url="https://news-two.example/2", source="two",
+                   title="PoeLLM botnet compromises AI hosts", malware_family="PoeLLM",
+                   summary="No evidence of in-the-wild deployment.")
+    assert not radar.assess_evidence([first, second], ["PoeLLM"])["auto_eligible"]
+
+
+def test_primary_poc_status_is_not_overridden_by_secondary_attack_headlines():
+    primary = event("primary", exploitation_status="poc", title="PoeLLM proof of concept",
+                    malware_family="PoeLLM")
+    reports = [event(str(index), url="https://news-{}.example/story".format(index),
+                     source="outlet-{}".format(index), title="PoeLLM malware infects servers",
+                     malware_family="PoeLLM") for index in range(2)]
+    assert not radar.assess_evidence([primary] + reports, ["PoeLLM"])["auto_eligible"]
 
 
 @pytest.mark.parametrize("negative", [
@@ -171,6 +229,17 @@ def test_completed_related_article_prevents_new_representative_reanalysis(client
     assert radar.queue_deep_analysis([candidate], now=NOW) == 0
     assert candidate["analysis_ref"] == "old"
     assert candidate["auto_analysis"]["status"] == "completed"
+
+
+def test_queue_uses_direct_attack_article_instead_of_unrelated_first_item(client):
+    candidate = row()
+    candidate["items"].insert(0, {
+        "ref": "roundup", "url": "https://news.example/roundup", "title": "Weekly roundup",
+        "body_available": True, "research_source": False, "auto_candidate": False,
+    })
+    candidate["items"][1].update(research_source=False, auto_candidate=True)
+    assert radar.queue_deep_analysis([candidate], now=NOW) == 1
+    assert json.loads(client.queue[0])["ref"] == "ref-one"
 
 
 @pytest.mark.parametrize("cache", [{"analysis": "partial", "partial": True},

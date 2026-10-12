@@ -82,6 +82,13 @@ OBSERVED_RE = re.compile(
     r"(?:observed|detected|identified).{0,90}(?:attack|intrusion|campaign)|"
     r"(?:실제|표적).{0,20}(?:침해|공격)|감염된|침해된", re.I)
 BLOCKED_RE = re.compile(r"captcha|verify you are human|access denied|just a moment|캡차", re.I)
+DIRECT_ATTACK_RE = re.compile(
+    r"\b(?:attack\w*|exploit\w*|compromis\w*|infect\w*|deploy\w*|steal\w*|"
+    r"breach\w*|hijack\w*|botnet|ransomware|malware|target\w*)\b|"
+    r"유포|악용|침해|공격|탈취|감염", re.I)
+LAW_ENFORCEMENT_RE = re.compile(
+    r"\b(?:arrest\w*|detain\w*|extradit\w*|police|seiz\w*|dismantl\w*|"
+    r"charg\w*|sentenc\w*)\b|체포|검거|압수|송환|기소", re.I)
 
 
 def research_source(event):
@@ -101,9 +108,24 @@ def usable_body(event):
             and not BLOCKED_RE.search(event.get("summary") or ""))
 
 
+def direct_attack_report(event, names):
+    """An article about this named attack, not a roundup or law-enforcement update."""
+    title = event.get("title") or ""
+    return (usable_body(event) and not is_roundup(event)
+            and not LAW_ENFORCEMENT_RE.search(title)
+            and DIRECT_ATTACK_RE.search(title)
+            and any(re.search(r"(?<![0-9A-Za-z])" + re.escape(name) + r"(?![0-9A-Za-z])", title, re.I)
+                    for name in names)
+            and event.get("exploitation_status") == "active"
+            and (len(event.get("attack_techniques") or []) >= 2 or bool(event.get("iocs"))))
+
+
 def assess_evidence(events, names):
     """저장된 근거의 수준을 표시한다. LLM의 new/active만으로 신규 공격을 확정하지 않는다."""
     primary = [e for e in events if research_source(e) and usable_body(e)]
+    direct = [e for e in events if direct_attack_report(e, names)]
+    secondary = [e for e in direct if not research_source(e)]
+    corroborated = len({e.get("source") for e in secondary if e.get("source")}) >= 2
     name_keys = {n.lower() for n in names}
     typed = [e for e in primary if e.get("malware_family") or e.get("threat_actor")]
     typed = typed or [e for e in events if usable_body(e)]
@@ -115,7 +137,7 @@ def assess_evidence(events, names):
     labels = {"malware": "악성코드·도구", "actor": "공격 조직 활동", "threat_report": "위협 연구·보도"}
     negative = [e for e in events if UNCONFIRMED_RE.search(_mention_blob(e))]
     observed = [e for e in primary if e.get("exploitation_status") == "active"
-                and OBSERVED_RE.search(" ".join([e.get("title") or "", e.get("summary") or ""]))
+                and (e in direct or OBSERVED_RE.search(" ".join([e.get("title") or "", e.get("summary") or ""])))
                 and not UNCONFIRMED_RE.search(_mention_blob(e))]
     if negative and observed:
         activity, activity_label = "conflicting", "실전 사용 근거 상충"
@@ -125,26 +147,31 @@ def assess_evidence(events, names):
         activity, activity_label = "reported", "실제 공격 보고 있음"
     else:
         activity, activity_label = "unknown", "실제 공격 확인 필요"
-    evidence_events = (negative + observed) or primary or events[:1]
+    evidence_events = (negative + observed) or primary or (secondary[:3] if corroborated else events[:1])
     evidence = [{"title": e.get("title") or "", "url": e.get("url") or "",
                  "source": common_utils.source_label(e.get("source")),
                  "basis": "수집 요약에 실전 사용 미확인 문구 · 원문 재확인 필요" if e in negative else
-                          "연구기관의 공격 관측 보도" if e in observed else "유형·본문 확인 대상",
+                          "연구기관의 공격 관측 보도" if e in observed else
+                          "복수 매체의 공격 보도 · 원출처 확인 필요" if e in secondary else "유형·본문 확인 대상",
                  "excerpt": ((e.get("ai_summary") or e.get("summary") or "") if e in negative
                              else (e.get("summary") or ""))[:250]}
                 for e in evidence_events[:3]]
     reasons = []
-    if not primary:
-        reasons.append("본문이 확보된 연구기관 보고서 없음")
-    if activity != "reported":
+    if not primary and not corroborated:
+        reasons.append("본문이 확보된 연구기관 보고서 또는 복수 기술 보도 없음")
+    if activity != "reported" and not (corroborated and activity == "unknown"):
         reasons.append(activity_label)
-    if not any(e.get("attack_techniques") or e.get("iocs") or e.get("recommended_actions") for e in primary):
+    if not any(e.get("attack_techniques") or e.get("iocs") for e in primary + secondary):
         reasons.append("조사에 사용할 기술 근거 부족")
+    if corroborated and activity == "unknown":
+        activity_label = "복수 매체의 공격 보도 · 원출처 확인 필요"
     return {
         "kind": kind, "kind_label": labels[kind], "activity": activity,
         "activity_label": activity_label, "primary_count": len(primary),
         "novelty_label": "신규 캠페인 여부 미확인", "evidence": evidence,
-        "auto_eligible": not reasons, "auto_reason": " · ".join(reasons) or "공격 관측·기술 근거가 있는 연구기관 보고서",
+        "auto_eligible": not reasons, "auto_reason": " · ".join(reasons) or (
+            "복수 매체의 기술 보도 · 분석에서 원출처 확인" if corroborated and not observed else
+            "공격 관측·기술 근거가 있는 연구기관 보고서"),
     }
 
 
@@ -435,6 +462,11 @@ def _build_rows(groups, events_file=None):
                     "ref": common_utils.event_ref(e.get("id")),
                     "research_source": research_source(e),
                     "body_available": usable_body(e),
+                    "auto_candidate": direct_attack_report(e, group["names"]) or (
+                        research_source(e) and usable_body(e) and not is_roundup(e) and
+                        e.get("exploitation_status") == "active" and
+                        OBSERVED_RE.search(" ".join([e.get("title") or "", e.get("summary") or ""])) and
+                        bool(e.get("attack_techniques") or e.get("iocs"))),
                 }
                 for e in ordered
             ],
@@ -597,7 +629,7 @@ def _queue_rows(client, rows, now):
         elif active:
             outcome = {"status": "queued" if active in pending_refs else "running", "ref": active, "reason": "기존 분석 요청 처리 중"}
         else:
-            item = candidates[0]
+            item = next((i for i in candidates if i.get("auto_candidate")), candidates[0])
             ref = item.get("ref")
             failed = any(s.get("status") == "failed" for s in states.values()) or previous.get("status") in {"queued", "running", "failed"}
             attempts = int(previous.get("attempts") or 0)
@@ -607,8 +639,9 @@ def _queue_rows(client, rows, now):
                 outcome = {"status": "failed", "reason": "자동 재시도 한도 도달 · 수동 재분석 가능" if attempts >= MAX_AUTO_ATTEMPTS else "실패 후 24시간 재시도 대기"}
             elif not (row.get("assessment") or {}).get("auto_eligible"):
                 pass
-            elif not ref or not item.get("url") or not item.get("body_available") or not item.get("research_source"):
-                outcome["reason"] = "조사 가능한 연구기관 대표 기사 필요"
+            elif not ref or not item.get("url") or not item.get("body_available") or not (
+                    item.get("research_source") or item.get("auto_candidate")):
+                outcome["reason"] = "조사 가능한 대표 기사 필요"
             elif queued >= MAX_QUEUED_PER_RUN or used >= MAX_QUEUED_PER_DAY or len(pending) >= MAX_QUEUE_DEPTH:
                 outcome["reason"] = "일일 자동 분석 한도 또는 대기열 여유 확인 필요"
             else:
