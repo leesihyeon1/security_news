@@ -155,7 +155,7 @@
     "name": "google_security",
     "label": "Google Security Blog",
     "reliability": "B",
-    "rss_url": "https://security.googleblog.com/feeds/posts/default",
+    "rss_url": "https://blog.google/security/rss/",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 3,
