@@ -2015,7 +2015,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                cluster=None, pirs=None, content_depth="", body_chars=None,
                recommended_actions=None, affected_versions=None, novelty="", category_reason="",
                analyst_review=None, affected_packages=None, image_url="", body_source="",
-               classification_quality="", source_updated_at=""):
+               classification_quality="", source_updated_at="", cvss_vector="", cwes=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -2065,6 +2065,9 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "analyst_review": analyst_review or None,
         "recommended_actions": _clean_str_list(recommended_actions or [], 3),
         "references": [r for r in (references or []) if r],
+        # 취약점 인시던트의 '원격 공격 가능' 판정 근거(AV:N 등). 예전에는 파싱 후 버렸다.
+        "cvss_vector": clean_text(cvss_vector),
+        "cwes": [c for c in (cwes or []) if c][:5],
         "fix_available": fix_available,
         "remediation": clean_text(remediation),
         "due_date": clean_text(due_date),

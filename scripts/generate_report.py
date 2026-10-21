@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 import campaign_radar
 import common_utils
 import publish_web_dashboard
+import vuln_incidents
 from dashboard_text import event_summary, summary_excerpt, public_text, public_evidence, data_status, public_narrative, is_korean_text
 from entity_names import count_entities
 
@@ -2693,7 +2694,8 @@ def refresh_public_summary(payload):
 
 
 def build_dashboard_payload(title, period, period_label, stats, narrative, highlights, cards, trend_reads,
-                             keywords=None, weekly_trends=None, campaigns=None, cve_items=None):
+                             keywords=None, weekly_trends=None, campaigns=None, cve_items=None,
+                             vuln_incidents=None):
     """boannews_vercel 웹 대시보드용 JSON 페이로드.
 
     이메일/슬랙/텍스트 리포트는 지면이 한정돼 있어 highlights·cards를 상위 N개로
@@ -2851,6 +2853,9 @@ def build_dashboard_payload(title, period, period_label, stats, narrative, highl
         "cards": [serialize_card(card) for card in cards],
         # CVE 탭 아래쪽 "수집된 CVE" — 카드(복수 소스 교차)에 들지 못한 CVE까지 전부.
         "cve_items": cve_items or [],
+        # CVE 탭 맨 위 "취약점 인시던트" — 보유 제품에 해당하는 CVE를 기준 4개로 판정한 결과.
+        # 공개 화면에 싣기로 했다(2026-10-21). 자산 ID·호스트·IP는 애초에 만들지 않는다.
+        "vuln_incidents": vuln_incidents or {},
         "domestic": {"highlights": highlight_domestic, "trend_reads": trend_domestic},
         "overseas": {"highlights": highlight_overseas, "trend_reads": trend_overseas},
         "keywords": keywords or [],
@@ -2989,9 +2994,18 @@ def main():
         print("[-] 신규 공격 캠페인 탐지 실패(리포트에는 영향 없음): {}".format(error))
         campaigns = []
 
+    # 취약점 인시던트 — 상태 파일에 누적되므로 일간 기간 밖의 열린 건도 이어진다.
+    try:
+        incidents = vuln_incidents.run(events)
+        print("[+] 취약점 인시던트: {}".format(json.dumps(incidents["counts"], ensure_ascii=False)))
+    except Exception as error:
+        print("[-] 취약점 인시던트 판정 실패(리포트에는 영향 없음): {}".format(error))
+        incidents = {}
+
     dashboard_payload = build_dashboard_payload(
         title, args.period, period_label, stats, "", all_highlights, cards, all_trend_reads, keywords,
         weekly_trends=weekly_trends, campaigns=campaigns, cve_items=build_cve_items(events, cards),
+        vuln_incidents=incidents,
     )
     try:
         refresh_public_summary(dashboard_payload)

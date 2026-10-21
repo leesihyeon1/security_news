@@ -174,6 +174,17 @@ def extract_references(cve, limit=3):
     return links
 
 
+def extract_cwes(cve):
+    """NVD weaknesses의 CWE 번호(NVD-CWE-Other 같은 자리표시는 뺀다)."""
+    out = []
+    for weakness in cve.get("weaknesses") or []:
+        for row in weakness.get("description") or []:
+            value = clean_text(row.get("value"))
+            if value.startswith("CWE-") and value not in out:
+                out.append(value)
+    return out
+
+
 def extract_affected_packages(cve, limit=20):
     """NVD CPE 조건에서 명시된 영향 버전만 추출한다. 상한을 수정 버전으로 추정하지 않는다."""
     rows = []
@@ -253,6 +264,7 @@ def parse_nvd_vulnerabilities(vulnerabilities):
             "link": nvd_link(cve_id),
             "references": extract_references(cve),
             "affected_packages": extract_affected_packages(cve),
+            "cwes": extract_cwes(cve),
         }
 
     return list(cves.values())
@@ -685,6 +697,8 @@ def main():
                 cves=[item["id"]],
                 references=item.get("references"),
                 affected_packages=item.get("affected_packages"),
+                cvss_vector=item.get("vector") or "",
+                cwes=item.get("cwes"),
                 published_at=item["published"],
                 source_updated_at=item.get("last_modified") or "",
                 email_sent=email_sent and item["id"] in emailed_nvd_ids,
