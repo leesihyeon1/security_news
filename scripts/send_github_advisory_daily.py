@@ -367,6 +367,7 @@ def main():
                 summary=item["description"],
                 severity=item["severity"],
                 score=score,
+                cvss_vector=item.get("cvss_vector") or "",
                 cves=[item["cve_id"]],
                 affected_products=affected_product_names(item),
                 affected_packages=[{
