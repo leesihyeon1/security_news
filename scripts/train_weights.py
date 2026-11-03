@@ -173,7 +173,7 @@ def main():
         ))
         if not args.dry_run:
             maybe_remind_slack(len(dataset), useful, noise)
-        sys.exit(1)
+        sys.exit(0)  # 라벨 부족은 고장이 아니다 — 작업 스케줄러에 실패(1)로 찍히면 진짜 실패가 묻힌다
 
     feature_names = list(common_utils.IMPORTANCE_FEATURE_LABELS)
     weights, bias = train(dataset, feature_names)
