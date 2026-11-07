@@ -397,6 +397,9 @@ def summarize(cve, events):
         for name in event.get("affected_products") or []:
             if name and name not in item["products"] and len(item["products"]) < 3:
                 item["products"].append(name)
+    scores = [float(e["epss"]) for e in events if isinstance(e.get("epss"), (int, float))]
+    if scores:
+        item["epss"] = max(scores)
     if not item["summary"]:
         item["summary"] = item["summary_en"] or next((e.get("summary") for e in events if e.get("summary")), "")
     item["summary"] = " ".join(str(item["summary"]).split())[:600]
@@ -577,8 +580,96 @@ def public_view(state, now=None):
     }
 
 
+# ── ELK 내보내기 ──────────────────────────────────────────────────────────────
+# 판정은 여기서 하고, 결과는 JSONL 파일로만 남긴다. security_lab의 Logstash가 이 폴더를
+# 읽기 전용으로 마운트해 vuln-cves·vuln-exposure 인덱스에 문서 ID 고정으로 넣는다 —
+# 이 프로젝트에 ELK 자격증명을 두지 않고, ELK가 꺼져 있어도 파일이 남아 이어 받는다.
+EXPORT_DIR = common_utils.DATA_DIR / "vuln"
+CVES_EXPORT = EXPORT_DIR / "vuln_cves.jsonl"
+EXPOSURE_EXPORT = EXPORT_DIR / "vuln_exposure.jsonl"
+EXPORT_MAX_BYTES = 50 * 1024 * 1024
+SEVERITY = {"긴급": ("critical", 99), "높음": ("high", 73), "보통": ("medium", 47), "낮음": ("low", 21)}
+
+
+def _digest(value):
+    import hashlib
+    return hashlib.sha1(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _append(path, docs):
+    if not docs:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size > EXPORT_MAX_BYTES:
+        # Logstash가 이미 읽은 옛 줄은 필요 없다. 파일을 새로 시작하면 tail이 처음부터 다시 읽는다.
+        path.replace(path.with_suffix(".jsonl.old"))
+    with path.open("a", encoding="utf-8") as file:
+        for doc in docs:
+            file.write(json.dumps(doc, ensure_ascii=False) + "\n")
+
+
+def cve_doc(item, vector_source=""):
+    av = (AV_RE.search(item.get("vector") or "") or [None, ""])[1]
+    return {
+        "cve": item["cve"], "title": item["title"], "summary": item["summary"], "cvss": item["cvss"],
+        "severity": item["severity"], "vector": item.get("vector") or "", "attack_vector": av,
+        "vector_source": vector_source, "cwes": item["cwes"], "epss": item.get("epss"),
+        "epss_percentile": item.get("epss_percentile"), "kev": item["kev"], "kev_added": item["kev_added"] or None,
+        "kev_due": item["kev_due"] or None, "ransomware": item["ransomware"],
+        "published": item["published"] or None, "vendor_published": item["vendor_published"] or None,
+        "products": item["products"], "sources": item["sources"], "references": item["references"],
+    }
+
+
+def exposure_doc(key, case):
+    gates = case.get("gates") or {}
+    level, risk = SEVERITY.get(case.get("grade"), ("low", 21))
+    return {
+        "case_key": key, "case_id": case.get("id") or "", "cve": case.get("cve"), "product": case.get("product"),
+        "kind": case.get("kind"), "grade": case.get("grade"), "severity": level, "risk_score": risk,
+        "due": case.get("due") or None, "title": case.get("title") or "",
+        "first_seen": case.get("first_seen") or None, "opened_at": case.get("opened_at") or None,
+        "gate": {name: (gates.get(name) or {}).get("state") or "unknown" for name, _ in GATES},
+        "questions": [g.get("question") for g in gates.values() if isinstance(g, dict) and g.get("question")],
+        "exploited": bool(((case.get("analysis") or {}).get("scores") or {}).get("kev")),
+        "analysis": case.get("analysis") or {},
+    }
+
+
+def export_for_elk(state, events, now=None):
+    """바뀐 CVE·판정만 덧붙인다. @timestamp는 내용이 바뀐 시각이라 탐지 규칙이 새 변화만 본다."""
+    now = now or _now()
+    stamp = _iso(now)
+    seen = state.setdefault("exported", {"cves": {}, "exposure": {}})
+    vector_cache = _load_json(VECTOR_CACHE_PATH, {})
+    cve_docs = []
+    for cve, cve_events in collect_cves(events).items():
+        item = summarize(cve, cve_events)
+        item["vector"], source = _vector_of(cve, cve_events, vector_cache)
+        body = cve_doc(item, source)
+        digest = _digest(body)
+        if seen["cves"].get(cve) != digest:
+            seen["cves"][cve] = digest
+            cve_docs.append({"@timestamp": stamp, "doc_id": cve, "vuln": body})
+    exposure_docs = []
+    for key, case in (state.get("cases") or {}).items():
+        body = exposure_doc(key, case)
+        digest = _digest({k: v for k, v in body.items() if k != "analysis"})
+        if seen["exposure"].get(key) != digest:
+            seen["exposure"][key] = digest
+            exposure_docs.append({"@timestamp": stamp, "doc_id": key.replace("|", "__"), "vuln": body})
+    _append(CVES_EXPORT, cve_docs)
+    _append(EXPOSURE_EXPORT, exposure_docs)
+    return len(cve_docs), len(exposure_docs)
+
+
 def run(events, lookups=True):
     state, view = evaluate(events, lookups=lookups)
+    try:
+        exported = export_for_elk(state, events)
+        print("[+] ELK 내보내기: CVE {}건, 판정 {}건".format(*exported))
+    except OSError as error:
+        print("[-] ELK 내보내기 실패(판정은 저장됨): {}".format(error))
     _save_json(STATE_PATH, state)
     return view
 

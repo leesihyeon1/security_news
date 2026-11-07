@@ -123,3 +123,20 @@ def test_public_view_has_no_internal_identifiers():
     raw = str(view)
     for word in ("asset_id", "hostname", "owner", "ip_address"):
         assert word not in raw
+
+
+def test_elk_export_writes_only_changed_docs(monkeypatch, tmp_path):
+    monkeypatch.setattr(vi, "CVES_EXPORT", tmp_path / "vuln_cves.jsonl")
+    monkeypatch.setattr(vi, "EXPOSURE_EXPORT", tmp_path / "vuln_exposure.jsonl")
+    monkeypatch.setattr(vi, "VECTOR_CACHE_PATH", tmp_path / "vectors.json")
+    events = [nvd("CVE-2026-2001"), kev("CVE-2026-2001")]
+    state, _ = run(events, [product(version="7.2.8", exposure="internet")])
+    assert vi.export_for_elk(state, events, now=NOW) == (1, 1)
+    import json as _json
+    exposure = _json.loads((tmp_path / "vuln_exposure.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert exposure["doc_id"] == "CVE-2026-2001__Fortigate"
+    assert exposure["vuln"]["gate"] == {"in_use": "met", "remote": "met", "vulnerable": "met", "exposed": "met"}
+    assert exposure["vuln"]["severity"] == "critical" and exposure["vuln"]["exploited"] is True
+    cve = _json.loads((tmp_path / "vuln_cves.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert cve["vuln"]["attack_vector"] == "N" and cve["vuln"]["kev"] is True
+    assert vi.export_for_elk(state, events, now=NOW) == (0, 0)  # 바뀐 게 없으면 다시 쓰지 않는다
