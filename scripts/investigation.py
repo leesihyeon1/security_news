@@ -895,7 +895,6 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
     앞에 "[라벨]"을 붙여, 여러 사건의 결과를 하나로 합쳤을 때 어느 사건 것인지
     구분할 수 있게 한다.
     """
-    started = time.monotonic()
     targets = targets or {}
     article_url = source_evidence.article_url(article_url)
     source_urls = [article_url] if article_url else []

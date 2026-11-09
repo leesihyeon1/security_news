@@ -1,7 +1,6 @@
 import html
 import os
 import re
-import smtplib
 import sys
 import urllib.error
 import urllib.request
@@ -10,8 +9,6 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
 

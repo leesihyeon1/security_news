@@ -1,6 +1,5 @@
 import json
 from collections import Counter
-from pathlib import Path
 
 import generate_report as gr
 import publish_web_dashboard as pwd

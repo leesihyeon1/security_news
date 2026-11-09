@@ -22,7 +22,6 @@ import re
 import analysis_trace
 import urllib.parse
 
-import requests
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 

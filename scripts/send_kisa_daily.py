@@ -1,8 +1,6 @@
 import html
-import json
 import os
 import re
-import smtplib
 import sys
 import time
 import urllib.request
@@ -10,8 +8,6 @@ import xml.etree.ElementTree as ET
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
 

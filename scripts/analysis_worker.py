@@ -32,7 +32,7 @@ from pathlib import Path
 
 from urllib.parse import urlsplit
 
-import requests
+import requests  # noqa: F401  (tests/test_analysis_grounding.py가 analysis_worker.requests.get을 바꿔 끼운다)
 from bs4 import BeautifulSoup
 
 import analysis_targets
