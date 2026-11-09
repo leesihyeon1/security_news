@@ -14,6 +14,14 @@ def _no_real_search_log(monkeypatch):
     monkeypatch.setattr(common_utils, "load_recent_search_terms", lambda **kwargs: [])
 
 
+@pytest.fixture(autouse=True)
+def _no_real_hn_lookup(monkeypatch):
+    """pick_trend_reads()의 Hacker News 화제성 조회가 실제 네트워크·캐시를 타지 않게 한다.
+    테스트 URL(http://x/1 등)에 그날그날 다른 포인트가 붙으면 동점 순서가 뒤집혀
+    결과가 실행 환경마다 달라진다."""
+    monkeypatch.setattr(common_utils, "check_hn_buzz", lambda url: None)
+
+
 def _make_event(event_id, hours_ago, url=None, source="asec"):
     return {
         "id": "{}:{}".format(source, event_id),
