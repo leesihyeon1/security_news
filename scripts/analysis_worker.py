@@ -28,6 +28,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from urllib.parse import urlsplit
 
@@ -1034,13 +1035,16 @@ def process_summary_job(client):
 
     lock_key = "report-summary:lock:" + report_id
     error_key = "report-summary:error:" + report_id
+    retry_queued = False
     try:
-        base_url = os.environ.get("REPORT_DASHBOARD_URL", "https://boannews-vercel.vercel.app").rstrip("/")
-        response = requests.get(base_url + "/data/daily-latest.json", timeout=15)
-        response.raise_for_status()
-        report = response.json()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", report_id):
+            raise ValueError("보고서 식별자가 올바르지 않습니다.")
+        report_dir = Path(os.environ.get("REPORT_DATA_DIR") or
+                          Path(__file__).resolve().parents[2] / "boannews_vercel_deploy" / "dashboard" / "data")
+        report_path = report_dir / ("daily-" + report_id[:10] + ".json")
+        report = json.loads(report_path.read_text(encoding="utf-8"))
         if report.get("period") != "daily" or report.get("generated_at") != report_id:
-            raise ValueError("보고서가 갱신되어 이전 요청을 처리하지 않았습니다.")
+            raise ValueError("요청한 일일보고서를 찾을 수 없습니다.")
         from report_briefing import narrative_problem
         if not narrative_problem(report.get("narrative")):
             raise ValueError("현재 보고서에는 이미 AI 요약이 있습니다.")
@@ -1057,9 +1061,17 @@ def process_summary_job(client):
         log("[+] 일일 AI 요약 재생성 완료: {}".format(report_id))
     except Exception as error:
         log("[-] 일일 AI 요약 재생성 실패: {}".format(error))
+        attempts = job.get("attempts", 0)
+        retryable = not isinstance(error, (ValueError, FileNotFoundError, json.JSONDecodeError))
+        if retryable and attempts < 1:
+            client.rpush(SUMMARY_QUEUE_KEY, json.dumps({"id": report_id, "attempts": attempts + 1}))
+            retry_queued = True
+            log("[*] 일일 AI 요약 재생성 다음 회차 재시도 예약: {}".format(report_id))
+            return True
         client.set(error_key, "요약 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.", ex=300)
     finally:
-        client.delete(lock_key)
+        if not retry_queued:
+            client.delete(lock_key)
     return True
 
 
