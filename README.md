@@ -1,7 +1,7 @@
 # boannews_mail
 
 Security news clipping and notification scripts for email and Slack.
-
+https://boannews-vercel.vercel.app/#latest
 ## Setup
 
 1. Create a Python virtual environment.
