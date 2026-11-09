@@ -313,7 +313,7 @@ def response_material(track):
     """취약점 대응 — 패치 우선순위와 노출 자산 확인 쿼리."""
     if not track:
         return None
-    from response_builder import _kql_list, LOOKBACK
+    from response_builder import _kql_list
 
     entries = track.get("cves") or []
     if not entries:

@@ -1,13 +1,10 @@
 import html
 import json
 import os
-import smtplib
 import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 from bs4 import BeautifulSoup
 import common_utils

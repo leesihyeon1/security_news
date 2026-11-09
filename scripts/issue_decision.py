@@ -211,7 +211,6 @@ def _fallback_case(incident, label, article, analysis, targets, steps, single):
     if article_kind.is_informational(targets):
         return _informational_fallback_case(incident, article, analysis)
     issues = []
-    source = article + "\n" + analysis
     if single:
         for pattern, title, kind, question in SIGNALS:
             match = pattern.search(article)
