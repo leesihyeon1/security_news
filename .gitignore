@@ -18,3 +18,6 @@ env/
 .playwright-cli/
 /output/
 /tmp/
+
+# 사내 자산(제품) 목록 — 공개 저장소에 올리지 않는다. 형식은 assets/inventory.example.yml 참고.
+/assets/inventory.yml

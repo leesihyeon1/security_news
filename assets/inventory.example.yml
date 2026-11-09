@@ -1,0 +1,10 @@
+# 사내 자산(제품) 목록 예시. 실제 목록은 assets/inventory.yml에 두고 커밋하지 않는다(.gitignore).
+# 파일이 없으면 자산 매칭 없이 동작한다(자산 관련 판정은 모두 "미확인").
+#
+# criticality: high(기본 — 노출·핵심 자산) | low(내부·저중요 자산)
+products:
+  - name: ExampleFirewall
+    aliases: [ExampleFirewall, Example Networks, ExampleOS]
+  - name: ExampleWebServer
+    aliases: [ExampleWebServer, ExampleHTTPD]
+    criticality: low
