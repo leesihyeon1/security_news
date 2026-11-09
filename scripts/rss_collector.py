@@ -23,15 +23,18 @@ import argparse
 import html
 import json
 import os
+import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import requests
 from bs4 import BeautifulSoup
 
 import common_utils
+import feed_health
+from live_news import article_image
 
 # Windows 콘솔(cp949)에서 기사 제목의 특수문자(— 등) 출력이 죽지 않도록 UTF-8로 강제
 for stream in (sys.stdout, sys.stderr):
@@ -39,8 +42,15 @@ for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
 FEEDS_FILE = common_utils.ASSETS_DIR / "feeds.json"
-MAX_STORED_SENT_IDS = 500
+# 기사 1건당 식별 키를 여러 개(link/guid) 기억하므로, 기존과 같은 "기사 수"를
+# 기억하려면 그만큼 여유가 필요하다 (article_identity_keys 참고).
+MAX_STORED_SENT_IDS = 1500
+# AI 분석 실패 시 같은 기사를 몇 번까지 재시도할지. 수집 주기가 5분이라 3회면
+# 약 15분 안에 결론이 난다 — 그 안에 NVIDIA가 복구되면 정상 분석되고, 아니면
+# 분석 없이 적재하되 알림은 보류한다.
+ENRICH_MAX_ATTEMPTS = 3
 BODY_MAX_CHARS = 20000
+MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION = 300
 DEFAULT_MAX_ITEMS = 5
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -61,6 +71,11 @@ def load_feeds():
             continue
         valid.append(feed)
     return valid
+
+
+# 발행된 지 이보다 오래된 항목은 새로 보이더라도 수집하지 않는다. 피드가 따로
+# max_age_days를 지정하면 그 값이 우선한다(0이면 나이 제한 없음).
+DEFAULT_MAX_AGE_DAYS = 14
 
 
 def state_file(feed):
@@ -92,6 +107,28 @@ def html_to_text(raw_html):
     return common_utils.clean_text(BeautifulSoup(raw_html, "html.parser").get_text(" ", strip=True))
 
 
+class FeedNotServedError(RuntimeError):
+    """HTTP 200인데 돌아온 것이 피드가 아닐 때.
+
+    왜 예외로 올리나
+        조용한 실패가 제일 찾기 어렵다. 실측(2026-09-16): Google Security Blog 요청에
+        피드 대신 가로채기 페이지가 200으로 돌아왔다 — meta refresh로 feedburner를
+        가리키고 iframe이 IP 리터럴을 열도록 되어 있었다(재시도하면 정상 XML 513KB가
+        온다). 파서는 항목 0건을 돌려주고, 수집기는 그것을 "신규 기사가 없습니다"로
+        찍고 넘어갔다. 새 글이 없는 것과 피드를 못 받은 것이 화면에서 구별되지 않았다.
+
+        항목이 0건인 것 자체는 정상일 수 있다(그날 글이 없는 피드). 그래서 항목 수가
+        아니라 문서의 뿌리를 본다 — rss·feed·channel·RDF 중 아무것도 없으면 피드가
+        아니다.
+    """
+
+
+# 피드 문서의 뿌리. 이 중 하나라도 있으면 항목이 0건이어도 "빈 피드"로 본다.
+FEED_ROOT_TAGS = ("rss", "feed", "channel", "RDF")
+# 실패 메시지에 본문 앞부분을 조금 남긴다 — 차단 페이지인지 리다이렉트인지 바로 보인다.
+NOT_FEED_SNIPPET_CHARS = 160
+
+
 def fetch_feed_items(feed):
     resp = requests.get(feed["rss_url"], headers=REQUEST_HEADERS, timeout=20)
     resp.raise_for_status()
@@ -107,11 +144,14 @@ def fetch_feed_items(feed):
         items.append(
             {
                 "id": guid or link,
+                "guid": guid,
                 "title": title,
                 "link": link or guid,
                 "summary_html": item_text(item, "description"),
                 "content_html": item_text(item, "encoded"),
                 "pub_date": item_text(item, "pubDate"),
+                "image_url": article_image(item, link or guid) or article_image(
+                    item_text(item, "encoded") or item_text(item, "description"), link or guid),
             }
         )
     if items:
@@ -128,21 +168,80 @@ def fetch_feed_items(feed):
         items.append(
             {
                 "id": entry_id or link,
+                "guid": entry_id,
                 "title": title,
                 "link": link or entry_id,
                 "summary_html": item_text(entry, "summary"),
                 "content_html": item_text(entry, "content"),
                 "pub_date": item_text(entry, "published") or item_text(entry, "updated"),
+                "image_url": article_image(entry, link) or article_image(
+                    item_text(entry, "content") or item_text(entry, "summary"), link),
             }
         )
+    if not items and not any(soup.find(tag) for tag in FEED_ROOT_TAGS):
+        snippet = " ".join((resp.text or "")[:NOT_FEED_SNIPPET_CHARS * 3].split())
+        raise FeedNotServedError(
+            "HTTP {}인데 피드가 아닙니다(최종 URL {}): {}".format(
+                resp.status_code, resp.url[:80], snippet[:NOT_FEED_SNIPPET_CHARS]))
     return items
+
+
+CVSS_SCORE_RE = re.compile(
+    r"CVSS(?:\s*v?[23](?:\.\d)?)?\s*(?:base\s*)?(?:score)?\s*[:=]?\s*(\d{1,2}(?:\.\d)?)", re.I)
+CVSS_OF_RE = re.compile(r"CVSS[^.\n]{0,20}?\bof\s+(\d{1,2}(?:\.\d)?)", re.I)
+SEVERITY_LABEL_RE = re.compile(r"severity\s*[:=]\s*(critical|high|medium|moderate|low)", re.I)
+# 벤더가 CVSS 수치 없이 등급만 줄 때 쓰는 대표값 — 밴드 하한이라 과대평가되지 않는다.
+SEVERITY_TO_SCORE = {"critical": 9.0, "high": 7.5, "medium": 5.0, "moderate": 5.0, "low": 3.0}
+
+
+def parse_cvss_score(*texts):
+    """제목·본문에서 CVSS 점수를 뽑는다. 없으면 심각도 등급을 대표값으로 환산.
+
+    벤더 PSIRT는 심각도가 CVSS로 표현되는데(Fortinet 본문 "CVSSv3 Score: 7.5",
+    Palo Alto 제목 "(Severity: HIGH)"), 이걸 안 넘기면 classify_urgency가
+    impact를 키워드로만 판단해 경미한 것과 심각한 것이 같은 점수를 받는다.
+    """
+    text = " ".join(t for t in texts if t)
+    for pattern in (CVSS_SCORE_RE, CVSS_OF_RE):
+        match = pattern.search(text)
+        if match:
+            try:
+                value = float(match.group(1))
+            except ValueError:
+                continue
+            if 0.0 <= value <= 10.0:
+                return value
+    match = SEVERITY_LABEL_RE.search(text)
+    if match:
+        return SEVERITY_TO_SCORE.get(match.group(1).lower())
+    return None
+
+
+def title_matches_any(title, patterns):
+    return any(re.search(pattern, title or "", re.I) for pattern in (patterns or []))
+
+
+def article_identity_keys(item):
+    """이미 처리한 기사인지 판정할 때 쓸 후보 키 전부.
+
+    어느 쪽이 안정적인지가 피드마다 다르다 — CrowdStrike는 guid가 조회할 때마다
+    바뀌고(`?p=556469` -> `?p=516742`) link가 고정인 반면, 피드버너류는 그 반대다.
+    guid만 믿었더니 같은 기사를 49번 수집·발송한 사례가 있어(2026-08 실측),
+    둘 다 기억해두고 하나라도 맞으면 이미 본 기사로 취급한다.
+    """
+    keys = []
+    for value in (item.get("link"), item.get("guid"), item.get("id")):
+        value = (value or "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    return keys
 
 
 ARTICLE_FETCH_RETRIES = 2
 ARTICLE_FETCH_RETRY_DELAY_SECONDS = 3
 
 
-def fetch_article_body(feed, url):
+def fetch_article_body(feed, url, article=None):
     """기사 페이지에서 본문 텍스트 추출. 실패 시 ""(RSS 내용으로 대체).
 
     일부 사이트(예: CrowdStrike)는 RSS에 본문 요약이 아예 없어 이 스크래핑이
@@ -170,6 +269,8 @@ def fetch_article_body(feed, url):
         return ""
 
     soup = BeautifulSoup(resp.content, "html.parser")
+    if article is not None:
+        article["image_url"] = article_image(soup, url) or article.get("image_url", "")
 
     # body_selector가 본문을 여러 조각(문단/섹션 div)으로 나눠 반환하는 사이트가 있다
     # (예: CrowdStrike 블로그 — 이미지·인용구 사이사이로 본문이 여러 div에 쪼개져 있음).
@@ -187,12 +288,46 @@ def fetch_article_body(feed, url):
 
 
 def resolve_body(feed, article):
-    """본문 우선순위: 기사 페이지(설정 시) → RSS 전문(content:encoded) → RSS 요약"""
+    """기사 본문을 우선하되 짧은 차단/안내문은 RSS 전문보다 우선하지 않는다."""
+    scraped = ""
     if feed.get("fetch_body"):
-        body = fetch_article_body(feed, article["link"])
-        if body:
+        scraped = fetch_article_body(feed, article["link"], article)
+        if len(scraped) >= MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+            article["body_source"] = "article"
+            return scraped
+    for field, source in (("content_html", "rss_content"), ("summary_html", "rss_summary")):
+        body = html_to_text(article.get(field))[:BODY_MAX_CHARS]
+        if len(body) >= MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+            article["body_source"] = source
             return body
-    return html_to_text(article["content_html"] or article["summary_html"])[:BODY_MAX_CHARS]
+    if scraped:
+        article["body_source"] = "article"
+        return scraped
+    for field, source in (("content_html", "rss_content"), ("summary_html", "rss_summary")):
+        body = html_to_text(article.get(field))[:BODY_MAX_CHARS]
+        if body:
+            article["body_source"] = source
+            return body
+    article["body_source"] = "title_only"
+    return ""
+
+
+def classification_quality(article):
+    if article.get("category_fallback"):
+        return "title_rule"
+    if not (article.get("enrichment") or {}).get("category"):
+        return "unclassified"
+    if len(article.get("body") or "") < MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+        return "limited"
+    return "full"
+
+
+def fallback_category(title):
+    """Only classify explicit vulnerability headlines when enrichment is unavailable."""
+    if re.search(r"\bCVE-\d{4}-\d{4,7}\b|취약점|제로데이|\bzero[ -]day\b|"
+                 r"\bvulnerabilit(?:y|ies)\b|\bsecurity flaw\b", title or "", re.I):
+        return "취약점"
+    return ""
 
 
 def alert_summary(article):
@@ -363,8 +498,41 @@ def collect_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
     sent_ids = set(state["sent_ids"])
 
     items = fetch_feed_items(feed)
+
+    # 벤더 PSIRT 피드는 몇 년 전 어드바이저리까지 그대로 들고 있다(Fortinet 실측: 2022년
+    # 항목 포함). 나중에 걸러도 소용없다 — max_items 몫을 옛 항목이 먼저 차지해버리므로
+    # 신규 판정 전에 잘라낸다. 날짜를 못 읽은 항목은 버리지 않는다(피드마다 형식이 달라서).
+    # 기본값을 둔다. 예전에는 피드가 지정한 경우에만 걸러서, 아카이브를 통째로 들고
+    # 있는 피드가 회차마다 옛 글을 새 글로 흘려보냈다(실측 2026-09-09: Elastic Security
+    # Labs에서 2025-05까지의 글 38건이 하루에 신규로 수집돼 일간 리포트에 섞였다).
+    # 발행일을 못 읽는 항목은 아래에서 그대로 남으므로, 형식이 특이한 피드가 통째로
+    # 사라지지는 않는다.
+    # 취약점·어드바이저리 피드는 기본 제한을 걸지 않는다 — 거기서 발행일은 "기사가
+    # 나온 날"이 아니라 "취약점이 공개된 날"이고, 늦게 올라와도 대응 가치가 그대로다.
+    default_age = 0 if feed["name"] in common_utils.NON_NEWS_SOURCES else DEFAULT_MAX_AGE_DAYS
+    max_age_days = feed.get("max_age_days", default_age)
+    if max_age_days:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(max_age_days))).isoformat()
+        fresh = [item for item in items if (parse_rss_datetime(item["pub_date"]) or cutoff) >= cutoff]
+        if len(fresh) != len(items):
+            print("[*] {}: {}일 이전 항목 {}건 제외".format(
+                feed["label"], max_age_days, len(items) - len(fresh)))
+        items = fresh
+
+    # 발행 예고 공지처럼 취약점 정보가 없는 항목은 아예 수집하지 않는다
+    # (예: "Cisco Advance Notification for Publication of ...").
+    skip_patterns = feed.get("skip_title_patterns")
+    if skip_patterns:
+        kept = [item for item in items if not title_matches_any(item["title"], skip_patterns)]
+        if len(kept) != len(items):
+            print("[*] {}: 제외 패턴에 걸린 항목 {}건 제외".format(feed["label"], len(items) - len(kept)))
+        items = kept
+
     max_items = limit or int(feed.get("max_items_per_run", DEFAULT_MAX_ITEMS))
-    new_articles = [item for item in items if item["id"] not in sent_ids][:max_items]
+    new_articles = [
+        item for item in items
+        if not any(key in sent_ids for key in article_identity_keys(item))
+    ][:max_items]
 
     if not new_articles:
         print("[-] {}: 신규 기사가 없습니다.".format(feed["label"]))
@@ -384,16 +552,39 @@ def collect_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
     )
     for article in new_articles:
         epss_values = [epss_scores[cve] for cve in article["cves"] if cve in epss_scores]
+        # 벤더 PSIRT는 제목에 제품명이 없는 경우가 많다(Fortinet 실측: 제목만으로
+        # 자산 매칭 0%). 소스 자체가 "그 벤더 제품"이라는 신호이므로, 피드가
+        # implies_assets를 선언하면 그 용어를 매칭 대상 텍스트에 함께 넣어준다.
+        match_values = [article["title"], article["body"]]
+        if feed.get("implies_assets"):
+            match_values.append(" ".join(feed["implies_assets"]))
+
         article["triage"] = common_utils.classify_urgency(
-            [article["title"], article["body"]],
+            match_values,
+            cvss_score=parse_cvss_score(article["title"], article["body"]) if feed.get("parse_cvss") else None,
             epss=max(epss_values) if epss_values else None,
             exclude_assets=feed.get("ignore_asset_terms"),
         )
         if enrich_enabled and feed.get("enrich", True):
             print("[*] AI enrichment 생성 중: {}".format(article["title"][:60]))
             article["enrichment"] = common_utils.ai_enrich_article(article["title"], article["body"]) or {}
+            # LLM 실패는 대개 일시적(NVIDIA 503)이다. 실패한 채로 진행하면 키워드
+            # 트리아지를 LLM이 검증하지 못해 오히려 알림이 늘어난다(실측: 분석 실패
+            # 기사의 알림 통과율 23.8% vs 정상 3.3%). 여기서는 표시만 하고,
+            # 아래에서 이번 회차 처리를 보류해 다음 실행에서 다시 시도한다.
+            article["enrichment_ok"] = bool(article["enrichment"])
         else:
             article["enrichment"] = {}
+            article["enrichment_ok"] = True  # 애초에 분석을 안 하기로 한 피드
+        if len(article["body"] or "") < MIN_BODY_CHARS_FOR_FULL_CLASSIFICATION:
+            if article["enrichment"].get("confidence") in ("high", "medium"):
+                article["enrichment"]["confidence"] = "low"
+            # 제목·짧은 RSS 요약만으로 새 악용 사실을 확정해 긴급도를 올리지 않는다.
+            if (article["enrichment"].get("exploitation") in ("active", "poc")
+                    and article["triage"].get("exploitation") == "none"
+                    and article["triage"].get("exploitation_basis") != "fact"):
+                article["enrichment"]["exploitation"] = None
+        article["classification_quality"] = classification_quality(article)
         # 정규식 추출(명시된 ID) + LLM 매핑(서술형, 공식 카탈로그로 검증됨) 병합
         for technique in article["enrichment"].get("attack_techniques") or []:
             if technique not in article["attack_techniques"]:
@@ -419,6 +610,26 @@ def collect_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
         article["alert"] = common_utils.should_alert(
             article["importance"], triage=article["triage"], min_score=feed.get("min_score"),
         )
+        # 여러 CVE를 한 문서에 묶은 정기 릴리스·월간 업데이트는 키워드를 쓸어담아
+        # 개별 취약점보다 높은 등급을 받는다(실측: "Security Hardening Release"가 P1 76점,
+        # 실제 개별 취약점은 P3 33점). 리포트에는 남기고 즉시 알림만 막는다.
+        # 벤더가 스스로 낮은 등급으로 매긴 취약점은 즉시 알림 대상이 아니다. 다만
+        # 등급을 못 읽었을 때(cvss=None, 예: Cisco RSS는 CVSS를 안 실음) 억제하면
+        # 정보 부족을 안전 신호로 착각하는 것이므로, 실제로 읽힌 경우에만 적용한다.
+        min_cvss = feed.get("min_cvss_for_alert")
+        if article["alert"] and min_cvss and article["triage"].get("exploitation") == "none":
+            cvss = parse_cvss_score(article["title"], article["body"])
+            if cvss is not None and cvss < float(min_cvss):
+                article["alert"] = False
+                article["importance"]["reasons"].append(
+                    "벤더 등급 CVSS {} < {} 이고 악용 정황 없음 — 즉시 알림 제외(리포트만)".format(cvss, min_cvss)
+                )
+                print("[*] 벤더 등급 미달로 알림 제외(CVSS {}): {}".format(cvss, article["title"][:55]))
+
+        if article["alert"] and title_matches_any(article["title"], feed.get("no_alert_title_patterns")):
+            article["alert"] = False
+            article["importance"]["reasons"].append("묶음/정기 공지 — 즉시 알림 제외(리포트만)")
+            print("[*] 묶음 공지로 알림 제외: {}".format(article["title"][:60]))
         cluster["suppressed"] = bool(
             article["alert"] and cluster["already_alerted"] and not cluster["escalated"]
         )
@@ -433,6 +644,60 @@ def collect_feed(feed, dry_run=False, enrich_enabled=True, limit=None):
 
     if dry_run:
         print_dry_run(feed, new_articles)
+        return None
+
+    # LLM 분석에 실패한 기사는 이번 회차 처리를 통째로 보류한다 — 알림도, 이벤트
+    # 적재도, 발송 기록도 남기지 않으므로 다음 실행에서 신규 기사로 다시 잡힌다.
+    # 다만 NVIDIA 장애가 길어질 때 같은 기사가 영원히 앞을 막지 않도록 시도 횟수를
+    # 제한하고, 한도를 넘기면 분석 없이 진행하되 알림은 하지 않는다(리포트에는 적재).
+    attempts = dict(state.get("enrich_attempts") or {})
+    deferred = []
+    kept = []
+    for article in new_articles:
+        if article.get("enrichment_ok", True):
+            for key in article_identity_keys(article):
+                attempts.pop(key, None)
+            kept.append(article)
+            continue
+
+        key = article_identity_keys(article)[0]
+        count = attempts.get(key, 0) + 1
+        if count < ENRICH_MAX_ATTEMPTS:
+            attempts[key] = count
+            deferred.append((article, count))
+        else:
+            attempts.pop(key, None)
+            category = fallback_category(article["title"])
+            if category:
+                article["enrichment"] = {
+                    "category": category,
+                    "category_reason": "AI 분석 실패: 제목에 명시된 취약점 단서로 임시 분류(검토 필요)",
+                    "confidence": "low",
+                }
+                article["category_fallback"] = True
+            article["classification_quality"] = classification_quality(article)
+            article["alert"] = False
+            article["importance"]["reasons"].append(
+                "AI 분석 {}회 실패 — 검증 불가로 알림 보류(리포트만)".format(ENRICH_MAX_ATTEMPTS)
+            )
+            print("[-] {}: AI 분석 {}회 실패, 알림 없이 적재합니다: {}".format(
+                feed["label"], ENRICH_MAX_ATTEMPTS, article["title"][:60]))
+            kept.append(article)
+
+    for article, count in deferred:
+        print("[*] {}: AI 분석 실패({}/{}) — 다음 실행에서 재시도합니다: {}".format(
+            feed["label"], count, ENRICH_MAX_ATTEMPTS, article["title"][:60]))
+
+    if attempts != (state.get("enrich_attempts") or {}):
+        state["enrich_attempts"] = attempts
+        common_utils.save_json_state(
+            state_file(feed), state,
+            max_items=MAX_STORED_SENT_IDS, keys_to_trim=["sent_ids"],
+        )
+
+    new_articles = kept
+    if not new_articles:
+        print("[-] {}: 처리할 기사가 없습니다(전부 재시도 대기).".format(feed["label"]))
         return None
 
     # 중요도 미달 기사는 알림 없이 events.jsonl에만 적재한다 (일간 리포트에서 확인).
@@ -475,6 +740,7 @@ def finalize_feed(result, email_sent):
                 article["id"],
                 article["title"],
                 url=article["link"],
+                image_url=article.get("image_url", ""),
                 summary=(html_to_text(article["summary_html"]) or article["body"])[:500],
                 severity=enrichment.get("severity") or "",
                 cves=article["cves"],
@@ -499,6 +765,8 @@ def finalize_feed(result, email_sent):
                 analyst_review=enrichment.get("analyst_review"),
                 novelty=enrichment.get("novelty") or "",
                 body_chars=len(article["body"] or ""),
+                body_source=article.get("body_source") or "",
+                classification_quality=article.get("classification_quality") or classification_quality(article),
                 recommended_actions=enrichment.get("recommended_actions"),
                 affected_versions=enrichment.get("affected_versions"),
                 fix_available=enrichment.get("fix_available"),
@@ -513,9 +781,12 @@ def finalize_feed(result, email_sent):
         print("[-] {}: 메일/슬랙 발송이 모두 실패하여 알림 상태를 저장하지 않습니다(이벤트는 적재됨, 다음 실행에서 재시도).".format(feed["label"]))
         return
 
-    updated_ids = state["sent_ids"] + [article["id"] for article in new_articles]
+    updated_ids = state["sent_ids"] + [
+        key for article in new_articles for key in article_identity_keys(article)
+    ]
+    state["sent_ids"] = updated_ids  # enrich_attempts 등 다른 키를 덮어쓰지 않는다
     common_utils.save_json_state(
-        state_file(feed), {"sent_ids": updated_ids},
+        state_file(feed), state,
         max_items=MAX_STORED_SENT_IDS, keys_to_trim=["sent_ids"],
     )
     print("[+] {}: 신규 기사 {}건 처리 완료 (알림 {}건, 리포트만 {}건)".format(
@@ -555,15 +826,40 @@ def main():
         parser.error("--all 또는 --feed <name>을 지정하세요.")
         return
 
+    if args.all and not args.dry_run:
+        # 국내 속보는 피드 수집(기사마다 AI 요약, 수 분 소요)보다 먼저 갱신한다 — 끝에 두면 그만큼
+        # 늦게 뜬다. 실패해도 기사 수집은 계속한다.
+        try:
+            import breaking_news
+            breaking_news.refresh()
+        except Exception as error:
+            print("[-] 국내 속보 갱신 건너뜀: {}".format(type(error).__name__))
+        # 사진 없는 최신 기사 몇 건씩 원문·언론사 대표 이미지를 찾아 실시간 피드에 다시 싣는다.
+        try:
+            import news_media
+            print("[*] 기사 이미지 보강: {}".format(news_media.refresh()))
+        except Exception as error:
+            print("[-] 기사 이미지 보강 건너뜀: {}".format(type(error).__name__))
+
     results = []
     for feed in selected:
         # 피드 하나가 죽어도 나머지는 계속 수집한다
         try:
             result = collect_feed(feed, dry_run=args.dry_run, enrich_enabled=not args.no_enrich, limit=args.limit)
+            if not args.dry_run:
+                try:
+                    feed_health.record_success(feed)
+                except Exception as health_error:
+                    print("[-] 피드 상태 기록 실패({}): {}".format(feed["name"], health_error))
             if result:
                 results.append(result)
         except Exception as error:
             print("[-] {} 처리 중 오류: {}".format(feed.get("label") or feed.get("name"), error))
+            if not args.dry_run:
+                try:
+                    feed_health.record_failure(feed, error)
+                except Exception as health_error:
+                    print("[-] 피드 상태 기록 실패({}): {}".format(feed["name"], health_error))
 
     if args.dry_run or not results:
         return

@@ -1,0 +1,33 @@
+{
+  "category": "공격캠페인",
+  "targets": {"article_kind": "threat"},
+  "source_url": "https://example.test/user-provided-clickfix-details",
+  "body": "공격자는 Plus 5.6 Custom GPT 두 개를 생성하고 Google 검색 스폰서 링크로 노출시켰다. 피해자가 Custom GPT와 상호작용하면 서비스 가용성 알림을 띄워 백업 Google Sites 페이지로 유도한다. Google Sites 페이지는 가짜 Cloudflare CAPTCHA를 표시하고, 피해자가 악성 PowerShell 명령을 복사·실행하도록 유도한다. PowerShell 명령은 ISOSimple.msi 설치자를 내려받아 실행한다. MSI는 정상 서명된 Canon 바이너리 COTFileReadApp.exe를 이용해 변조된 ceiinfolog.dll을 사이드로딩하고, 이어서 서명되지 않은 rdCore.dll을 로드한다. rdCore.dll은 Common.Integrator.Preview\\.wav 오디오 파일에 숨겨진 암호화 로더를 추출·실행한다. 로더 셸코드는 monitor.raw 암호화 파일 시스템에서 RAT 본체와 지속화 스크립트를 언팩하기 전, AMSI 우회, ntdll.dll 언훅, CPU 벤더 문자열 검사 기반 안티-VM 검사를 수행한다. RAT는 백신/Defender 상태 수집, 원격 데스크톱·화면 브로드캐스트, 카메라·마이크·시스템 오디오 캡처, 17종 브라우저 인식, 파일 검색, 2차 페이로드(.EXE/.DLL/.MSI) 및 스크립트 드롭·실행 기능을 제공한다. C2(Gate) 탐색을 위해 Cloudflare, Google, Quad9 리졸버를 경유하는 DNS-over-HTTPS를 사용해 로컬 DNS 로그에 남기지 않는다. RAT는 정상 서명된 GOMCam2024.exe를 드롭해 %TEMP% 디렉터리의 일회용 Chrome 프로파일을 실행한다.",
+  "candidate": {
+    "kind": "attack",
+    "scope": "single",
+    "nodes": [
+      {"id":"n1","phase":0,"role":"event","label":"검색 광고와 Custom GPT","detail":["Google 검색 스폰서 링크","Plus 5.6 Custom GPT 2개","정상 플랫폼 내 콘텐츠 악용"],"evidence":"공격자는 Plus 5.6 Custom GPT 두 개를 생성하고 Google 검색 스폰서 링크로 노출시켰다."},
+      {"id":"n2","phase":0,"role":"event","label":"서비스 알림으로 외부 유도","detail":["서비스 가용성 알림 표시","백업 Google Sites 페이지로 이동"],"evidence":"피해자가 Custom GPT와 상호작용하면 서비스 가용성 알림을 띄워 백업 Google Sites 페이지로 유도한다."},
+      {"id":"n3","phase":0,"role":"event","label":"가짜 CAPTCHA와 ClickFix","detail":["Cloudflare 인증 화면 사칭","PowerShell 명령 복사·실행","사용자 직접 실행"],"evidence":"Google Sites 페이지는 가짜 Cloudflare CAPTCHA를 표시하고, 피해자가 악성 PowerShell 명령을 복사·실행하도록 유도한다."},
+      {"id":"n4","phase":1,"role":"event","label":"MSI 다운로드·실행","detail":["PowerShell","ISOSimple.msi"],"evidence":"PowerShell 명령은 ISOSimple.msi 설치자를 내려받아 실행한다."},
+      {"id":"n5","phase":1,"role":"event","label":"DLL 사이드로딩","detail":["COTFileReadApp.exe (정상 서명)","ceiinfolog.dll (변조)","rdCore.dll (서명 없음)"],"evidence":"MSI는 정상 서명된 Canon 바이너리 COTFileReadApp.exe를 이용해 변조된 ceiinfolog.dll을 사이드로딩하고, 이어서 서명되지 않은 rdCore.dll을 로드한다."},
+      {"id":"n6","phase":1,"role":"event","label":"오디오 내 로더 추출","detail":["rdCore.dll","Common.Integrator.Preview\\.wav","암호화 로더 추출·실행"],"evidence":"rdCore.dll은 Common.Integrator.Preview\\.wav 오디오 파일에 숨겨진 암호화 로더를 추출·실행한다."},
+      {"id":"n7","phase":1,"role":"event","label":"방어 회피 후 RAT 언팩","detail":["AMSI 우회 · ntdll.dll 언훅","CPU 벤더 기반 안티-VM 검사","monitor.raw에서","RAT·지속화 스크립트 언팩"],"evidence":"로더 셸코드는 monitor.raw 암호화 파일 시스템에서 RAT 본체와 지속화 스크립트를 언팩하기 전, AMSI 우회, ntdll.dll 언훅, CPU 벤더 문자열 검사 기반 안티-VM 검사를 수행한다."},
+      {"id":"n8","phase":2,"role":"capability","label":"수집·원격 제어 기능","detail":["백신·Defender 상태 수집","원격 화면 · 카메라 · 마이크 · 오디오","브라우저 17종 인식 · 파일 검색","추가 EXE·DLL·MSI·스크립트 실행"],"evidence":"RAT는 백신/Defender 상태 수집, 원격 데스크톱·화면 브로드캐스트, 카메라·마이크·시스템 오디오 캡처, 17종 브라우저 인식, 파일 검색, 2차 페이로드(.EXE/.DLL/.MSI) 및 스크립트 드롭·실행 기능을 제공한다."},
+      {"id":"n9","phase":2,"role":"event","label":"C2(Gate) 탐색","detail":["DNS-over-HTTPS 사용","Cloudflare · Google · Quad9 리졸버","일반 DNS 로그 가시성 제한","리졸버는 C2 서버가 아님"],"evidence":"C2(Gate) 탐색을 위해 Cloudflare, Google, Quad9 리졸버를 경유하는 DNS-over-HTTPS를 사용해 로컬 DNS 로그에 남기지 않는다."},
+      {"id":"n10","phase":2,"role":"event","label":"서명 바이너리 활용","detail":["정상 서명 GOMCam2024.exe 드롭","%TEMP% 일회용 Chrome 프로파일 실행"],"evidence":"RAT는 정상 서명된 GOMCam2024.exe를 드롭해 %TEMP% 디렉터리의 일회용 Chrome 프로파일을 실행한다."}
+    ],
+    "edges": [
+      {"from":"n1","to":"n2","relation":"sequence","evidence":"피해자가 Custom GPT와 상호작용하면 서비스 가용성 알림을 띄워 백업 Google Sites 페이지로 유도한다."},
+      {"from":"n2","to":"n3","relation":"sequence","evidence":"Google Sites 페이지는 가짜 Cloudflare CAPTCHA를 표시하고, 피해자가 악성 PowerShell 명령을 복사·실행하도록 유도한다."},
+      {"from":"n3","to":"n4","relation":"sequence","evidence":"PowerShell 명령은 ISOSimple.msi 설치자를 내려받아 실행한다."},
+      {"from":"n4","to":"n5","relation":"sequence","evidence":"MSI는 정상 서명된 Canon 바이너리 COTFileReadApp.exe를 이용해 변조된 ceiinfolog.dll을 사이드로딩하고, 이어서 서명되지 않은 rdCore.dll을 로드한다."},
+      {"from":"n5","to":"n6","relation":"sequence","evidence":"rdCore.dll은 Common.Integrator.Preview\\.wav 오디오 파일에 숨겨진 암호화 로더를 추출·실행한다."},
+      {"from":"n6","to":"n7","relation":"sequence","evidence":"로더 셸코드는 monitor.raw 암호화 파일 시스템에서 RAT 본체와 지속화 스크립트를 언팩하기 전, AMSI 우회, ntdll.dll 언훅, CPU 벤더 문자열 검사 기반 안티-VM 검사를 수행한다."},
+      {"from":"n7","to":"n8","relation":"branch","evidence":"RAT는 백신/Defender 상태 수집, 원격 데스크톱·화면 브로드캐스트, 카메라·마이크·시스템 오디오 캡처, 17종 브라우저 인식, 파일 검색, 2차 페이로드(.EXE/.DLL/.MSI) 및 스크립트 드롭·실행 기능을 제공한다."},
+      {"from":"n7","to":"n9","relation":"branch","evidence":"C2(Gate) 탐색을 위해 Cloudflare, Google, Quad9 리졸버를 경유하는 DNS-over-HTTPS를 사용해 로컬 DNS 로그에 남기지 않는다."},
+      {"from":"n7","to":"n10","relation":"branch","evidence":"RAT는 정상 서명된 GOMCam2024.exe를 드롭해 %TEMP% 디렉터리의 일회용 Chrome 프로파일을 실행한다."}
+    ]
+  }
+}

@@ -163,7 +163,7 @@ def main() -> None:
     subject = f"[보안뉴스] 오늘의 TOP 3 기사 ({today})"
     html_body = build_html_body(articles)
 
-    print(f"\nOutlook으로 메일 발송 중...")
+    print("\nOutlook으로 메일 발송 중...")
     send_via_naver(subject, html_body)
 
 

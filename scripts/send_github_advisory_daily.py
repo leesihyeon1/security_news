@@ -1,13 +1,10 @@
 import html
 import json
 import os
-import smtplib
 import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
 
@@ -110,7 +107,7 @@ def extract_vulnerabilities(advisory, limit=5):
                 "ecosystem": clean_text(package.get("ecosystem")),
                 "package": clean_text(package.get("name")),
                 "vulnerable_range": clean_text(vulnerability.get("vulnerable_version_range")),
-                "patched_versions": clean_text(vulnerability.get("patched_versions")),
+                "patched_versions": clean_text(vulnerability.get("first_patched_version")),
             }
         )
 
@@ -367,8 +364,14 @@ def main():
                 summary=item["description"],
                 severity=item["severity"],
                 score=score,
+                cvss_vector=item.get("cvss_vector") or "",
                 cves=[item["cve_id"]],
                 affected_products=affected_product_names(item),
+                affected_packages=[{
+                    "product": entry["package"],
+                    "affected": entry["vulnerable_range"],
+                    "fixed": entry["patched_versions"],
+                } for entry in item["affected"] if entry["package"]],
                 fix_available=has_patched_version(item),
                 remediation=build_remediation(item),
                 published_at=item["published"],

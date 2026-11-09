@@ -1,6 +1,5 @@
 import json
 from collections import Counter
-from pathlib import Path
 
 import generate_report as gr
 import publish_web_dashboard as pwd
@@ -105,39 +104,46 @@ def test_publish_skips_when_repo_path_does_not_exist(tmp_path, monkeypatch):
 
 
 def test_publish_writes_json_and_commits(tmp_path, monkeypatch):
+    import subprocess
+
+    def git(*args, cwd):
+        subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
+
+    # publish()는 origin이 대시보드 저장소인지 확인하고 원격 HEAD에 맞춘 뒤 push한다 —
+    # 같은 이름의 로컬 bare 저장소를 origin으로 둬서 네트워크 없이 전 과정을 탄다.
+    remote = tmp_path / "leesihyeon1" / "boannews_vercel.git"
+    remote.mkdir(parents=True)
+    git("init", "--bare", "-b", "main", cwd=remote)
     repo = tmp_path / "repo"
     repo.mkdir()
-    import subprocess
-    # publish()가 이제 매 시도 전 origin으로 fetch+reset --hard 동기화를 하므로,
-    # 실제로 fetch할 수 있는 로컬 bare 저장소를 origin으로 둔다(원격 URL 문자열이
-    # EXPECTED_REMOTE_REPO와 안 맞을 것이므로 _validate_publish_repo는 우회한다 —
-    # 이 테스트의 목적은 write/commit/push 동작 검증이지 원격 URL 매칭 검증이 아니다).
-    origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "--bare", str(origin)], capture_output=True, check=True)
-
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=repo, capture_output=True, check=True)
-    # 커밋할 브랜치가 있어야 하니 초기 커밋 하나 생성 후 origin에 푸시해 origin/<branch>를 만든다
+    git("init", "-b", "main", cwd=repo)
+    git("config", "user.email", "test@example.com", cwd=repo)
+    git("config", "user.name", "Test", cwd=repo)
     (repo / "README.md").write_text("init", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
-    branch = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    subprocess.run(["git", "push", "-u", "origin", branch], cwd=repo, capture_output=True, check=True)
+    git("add", "README.md", cwd=repo)
+    git("commit", "-m", "init", cwd=repo)
+    git("remote", "add", "origin", str(remote), cwd=repo)
+    git("push", "-u", "origin", "main", cwd=repo)
 
-    monkeypatch.setattr(pwd, "_validate_publish_repo", lambda repo: True)
+    # 발행 때 함께 만드는 부가 파일(검색 색인·최신 기사·블로그·일정·사고 아카이브)은
+    # 실제 수집 데이터를 읽으므로 여기서는 비운다 — 이 테스트는 보고서 JSON 발행만 본다.
+    monkeypatch.setattr(pwd, "_rebuild_search_index_from_events", lambda repo: None)
+    monkeypatch.setattr(pwd.live_news, "write_snapshot", lambda path, rows=None: None)
+    monkeypatch.setattr(pwd.featured_sources, "publish", lambda data_dir, **kwargs: None)
+    monkeypatch.setattr(pwd.event_calendar, "from_collected_events", lambda *args, **kwargs: [])
+    monkeypatch.setattr(pwd.incident_archive, "publish", lambda data_dir, **kwargs: None)
+    monkeypatch.setattr(pwd.incident_archive, "discover", lambda *args, **kwargs: 0)
 
     payload = {"period": "daily", "generated_at": "2026-01-02T00:00:00Z", "title": "t"}
-    result = pwd.publish(payload, repo_path=str(repo))
-    assert result is True
+    assert pwd.publish(payload, repo_path=str(repo)) is True
 
     latest = json.loads((repo / "dashboard" / "data" / "daily-latest.json").read_text(encoding="utf-8"))
     history = json.loads((repo / "dashboard" / "data" / "daily-2026-01-02.json").read_text(encoding="utf-8"))
     assert latest == payload
     assert history == payload
+    pushed = subprocess.run(["git", "log", "-1", "--format=%s", "main"], cwd=remote,
+                            capture_output=True, text=True, check=True).stdout.strip()
+    assert pushed == "Update daily report (2026-01-02)"
 
 
 def test_publish_returns_false_on_git_error(tmp_path, monkeypatch):

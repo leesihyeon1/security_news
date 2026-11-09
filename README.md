@@ -50,17 +50,17 @@ Optional API tokens:
 
 ## Run
 
-Each `.bat` file can be run from any directory because it resolves paths from its own location.
+Scheduled-task `.bat` files live in `tasks/`. Each can be run from any directory because it changes to the repository root first. `tasks/move_tasks_to_folder.ps1` (run as administrator) points existing scheduled tasks at this folder.
 
 ```bat
-rss_collector.bat
-asec_notifier.bat
-send_boannews.bat
-run_cve.bat
-github_advisory.bat
-send_kisa.bat
-microsoft_patch.bat
-curator_digest.bat
+tasks\rss_collector.bat
+tasks\asec_notifier.bat
+tasks\send_boannews.bat
+tasks\run_cve.bat
+tasks\github_advisory.bat
+tasks\send_kisa.bat
+tasks\microsoft_patch.bat
+tasks\curator_digest.bat
 ```
 
 `rss_collector.bat` runs all enabled feeds in `assets/feeds.json` (`--all`). For manual testing, run
@@ -86,8 +86,8 @@ sends the report via email and Slack (`SLACK_WEBHOOK_REPORT`, falling back to
 `SLACK_WEBHOOK_URL`).
 
 ```bat
-daily_report.bat
-weekly_report.bat
+tasks\daily_report.bat
+tasks\weekly_report.bat
 python scripts\generate_report.py --period weekly --dry-run
 ```
 
@@ -260,7 +260,7 @@ The processed files are committed so everything works out of the box.
 Refresh them quarterly (or when needed) with:
 
 ```bat
-update_intel_data.bat
+tasks\update_intel_data.bat
 ```
 
 If a file is missing, the related feature silently disables (alias names

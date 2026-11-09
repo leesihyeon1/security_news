@@ -50,13 +50,13 @@
     "name": "therecord",
     "label": "The Record",
     "reliability": "C",
-    "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
     "rss_url": "https://therecord.media/feed",
     "fetch_body": true,
     "enrich": true,
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "securityweek",
@@ -73,13 +73,13 @@
     "name": "darkreading",
     "label": "Dark Reading",
     "reliability": "C",
-    "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신 확인해 복구. 기사 페이지는 403으로 막혀 본문 수집을 켤 수 없다(2026-09-16 기사 4건 모두 403) — RSS 요약 200자 안팎만 들어온다.",
     "rss_url": "https://www.darkreading.com/rss.xml",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "talos",
@@ -88,7 +88,9 @@
     "note": "ignore_asset_terms: 'Cisco Talos' 자기 언급으로 자산 매칭이 상시 발동하는 것 방지. 실제 Cisco 취약점은 severity/악용 신호로 점수 확보.",
     "rss_url": "https://blog.talosintelligence.com/rss/",
     "fetch_body": false,
-    "ignore_asset_terms": ["Cisco"],
+    "ignore_asset_terms": [
+      "Cisco"
+    ],
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
@@ -100,7 +102,11 @@
     "reliability": "B",
     "rss_url": "https://unit42.paloaltonetworks.com/feed/",
     "fetch_body": true,
-    "ignore_asset_terms": ["Paloalto", "Palo Alto", "Palo Alto Networks"],
+    "ignore_asset_terms": [
+      "Paloalto",
+      "Palo Alto",
+      "Palo Alto Networks"
+    ],
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
@@ -112,7 +118,10 @@
     "reliability": "B",
     "rss_url": "https://research.checkpoint.com/feed/",
     "fetch_body": true,
-    "ignore_asset_terms": ["Checkpoint", "Check Point"],
+    "ignore_asset_terms": [
+      "Checkpoint",
+      "Check Point"
+    ],
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
@@ -122,31 +131,31 @@
     "name": "thedfirreport",
     "label": "The DFIR Report",
     "reliability": "B",
-    "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
     "rss_url": "https://thedfirreport.com/feed/",
     "fetch_body": true,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "securelist",
     "label": "Securelist (Kaspersky)",
     "reliability": "B",
-    "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). REQUESTS_CA_BUNDLE 설정 또는 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
     "rss_url": "https://securelist.com/feed/",
     "fetch_body": true,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "google_security",
     "label": "Google Security Blog",
     "reliability": "B",
-    "rss_url": "https://security.googleblog.com/feeds/posts/default",
+    "rss_url": "https://blog.google/security/rss/",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 3,
@@ -202,13 +211,14 @@
     "name": "welivesecurity",
     "label": "ESET WeLiveSecurity",
     "reliability": "B",
-    "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신 확인해 복구. RSS 요약이 100자 안팎이라 본문 수집을 켰다 — 기사 3건에서 5,483~6,173자 추출 확인.",
     "rss_url": "https://www.welivesecurity.com/en/rss/feed/",
-    "fetch_body": false,
+    "fetch_body": true,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true,
+    "body_selector": "div[class*='article-body']"
   },
   {
     "name": "sophos",
@@ -238,13 +248,13 @@
     "name": "rapid7",
     "label": "Rapid7 Blog",
     "reliability": "B",
-    "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
     "rss_url": "https://blog.rapid7.com/rss/",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "elastic_security",
@@ -305,13 +315,13 @@
     "name": "theregister_security",
     "label": "The Register Security",
     "reliability": "C",
-    "note": "사내망에서 SSL 인증서 검증 실패(2026-07 확인). 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
     "rss_url": "https://www.theregister.com/security/headlines.atom",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "helpnetsecurity",
@@ -395,13 +405,13 @@
     "name": "nshc_threatrecon",
     "label": "NSHC ThreatRecon",
     "reliability": "B",
-    "note": "사내망에서 SSL 차단(2026-07 확인) — 집 네트워크에서는 정상 동작 확인(2026-07-20)되어 재활성화. 사내망에서 스케줄이 돌면 다시 SSL 오류가 날 수 있으니 최초 실행 로그 확인 권장.",
+    "note": "2026-02-10 이후 새 글이 없다(2026-09-16 확인 — 218일). 소스가 사실상 멈춘 것이라 비활성. 갱신이 재개되면 enabled로 전환.",
     "rss_url": "https://threatrecon.nshc.net/feed/",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": true
+    "enabled": false
   },
   {
     "name": "genians",
@@ -443,13 +453,13 @@
     "name": "reddit_netsec",
     "label": "Reddit r/netsec",
     "reliability": "C",
-    "note": "커뮤니티 게시물이라 출처가 다양(원문 기사 링크·자체 분석·질문 등 혼재) — RSS 정상 확인(2026-07-25). 사내망에서 SSL 인증서 검증 실패, 집 환경에서 enabled로 전환.",
+    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
     "rss_url": "https://www.reddit.com/r/netsec/.rss",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "reddit_cybersecurity",
@@ -498,5 +508,72 @@
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
     "enabled": false
+  },
+  {
+    "name": "cisco_psirt",
+    "label": "Cisco PSIRT",
+    "reliability": "A",
+    "rss_url": "https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "max_age_days": 30,
+    "parse_cvss": true,
+    "implies_assets": [
+      "Cisco"
+    ],
+    "skip_title_patterns": [
+      "Advance Notification for Publication"
+    ],
+    "no_alert_title_patterns": [
+      "Security Hardening Release",
+      "Bundled Publication",
+      "Summary of"
+    ],
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true,
+    "min_cvss_for_alert": 7.0
+  },
+  {
+    "name": "fortinet_psirt",
+    "label": "Fortinet PSIRT",
+    "reliability": "A",
+    "rss_url": "https://filestore.fortinet.com/fortiguard/rss/ir.xml",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "max_age_days": 30,
+    "parse_cvss": true,
+    "implies_assets": [
+      "Fortigate"
+    ],
+    "no_alert_title_patterns": [
+      "Monthly",
+      "Roundup"
+    ],
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true,
+    "min_cvss_for_alert": 7.0
+  },
+  {
+    "name": "paloalto_psirt",
+    "label": "Palo Alto PSIRT",
+    "reliability": "A",
+    "rss_url": "https://security.paloaltonetworks.com/rss.xml",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "max_age_days": 30,
+    "parse_cvss": true,
+    "implies_assets": [
+      "Paloalto"
+    ],
+    "no_alert_title_patterns": [
+      "Monthly Vulnerability Update",
+      "Chromium"
+    ],
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true,
+    "min_cvss_for_alert": 7.0
   }
 ]

@@ -70,7 +70,8 @@ def load_all_events(events_file=None, legacy_file=None, include_legacy=True):
                 except json.JSONDecodeError:
                     continue
                 event = normalize_legacy_boannews(raw) if legacy else raw
-                key = "{}|{}".format(event.get("source"), event.get("url") or event.get("id"))
+                # generate_report.load_events_between과 같은 규칙 — id 우선(그 근거는 거기 주석 참고)
+                key = event.get("id") or "{}|{}".format(event.get("source"), event.get("url"))
                 events.setdefault(key, event)
     return list(events.values())
 

@@ -1,0 +1,7 @@
+# CI 코드 검사. 처음에는 실제 버그로 이어지는 규칙(문법 오류, 정의되지 않은 이름,
+# 쓰지 않는 import·변수)만 켠다. 규칙을 넓히려면 여기 select에 추가하고 같은 PR에서 정리한다.
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E9", "F"]

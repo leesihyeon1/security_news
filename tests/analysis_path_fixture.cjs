@@ -1,0 +1,51 @@
+const base = require('./report_pdf_fixture.cjs');
+const questions = ['공유 콘텐츠에서 유포 페이지로 이어지는 경로를 확인할 수 있는가?', '샘플의 실제 실행 행위를 확인할 수 있는가?'];
+const threat = {
+  ...base, ref: 'analysis-path-local-test', title: '분석 경로 검증: 공유 콘텐츠 악용 공격 (가상 데이터)',
+  targets: { article_kind: 'threat', primary: 'user_action', decision_status: 'completed',
+    objective: '유입 경로와 실행 행위를 확인하고 추가 조사·대응안을 구분한다.', questions,
+    issues: questions.map((question, i) => ({ id: 'issue-' + i, title: ['공유 콘텐츠에서 외부 페이지로 이동', '샌드박스 행위 미확인'][i],
+      question, disposition: 'investigate', reason: '설명만으로는 실제 동작을 확정할 수 없다.' })),
+    criteria: ['동일 유포 흐름 관측', '샌드박스 행위 확보'] },
+  investigation: {
+    route: { primary: 'user_action', explain: '사용자 실행 유도 경로와 후속 파일 행위를 확인한다.' },
+    research_plan: questions.map((goal, i) => ({ id: 'goal-' + i, issue_id: 'issue-' + i, goal,
+      lookup_keys: [i ? 'malware' : 'user_action'], status: 'planned',
+      expected_evidence: i ? '샘플 실행에 따른 프로세스·통신 관측' : '공유 콘텐츠와 외부 URL의 실제 연결',
+      next_if_missing: i ? '동일 샘플의 외부 샌드박스 보고 확보' : '정확한 콘텐츠 URL에서 외부 연결을 추가 확인',
+      attempts: i ? [] : [{ task_id: 'goal-0', label: '외부 연결 추적', status: 'observed',
+        reason: '플랫폼 공통 주소만으로 캠페인을 구별할 수 없다.', result: '연결 후보를 얻었으나 실행 명령은 미확인.',
+        observations: ['저장된 스캔에서 외부 링크 후보 1건 확인 (가상 기록)'] }] })),
+    question_lookups: questions.map((question, i) => ({ question, lookups: [{ key: i ? 'malware' : 'user_action',
+      why: i ? '해시별 외부 샌드박스 보고에서 실행 여부 확인' : 'urlscan 저장 DOM과 HTTP 연결 대조' }] })),
+    lookup_status: [{ key: 'user_action', status: 'returned', started_at: '2026-10-04T01:00:00Z' },
+      { key: 'malware', status: 'unavailable', detail: '해시는 확보했으나 행위 보고가 없음' },
+      { key: 'primary', status: 'returned', detail: '참고 원문 확보' }],
+    goal_evidence: [{ question: questions[0], status: 'partial', ceiling: 'partial', basis: '저장된 외부 연결 후보', missing: '현재 페이지의 실행 명령과 연결 미확인' },
+      { question: questions[1], status: 'open', ceiling: 'open', basis: '샌드박스 행위 보고 없음', missing: '실제 프로세스·통신 행위 필요' }],
+    synthesis: { headline: '경로는 일부 확인했으며 실제 샘플 실행 행위는 확인하지 못했다.', verdict: '부분 확인',
+      question_status: [{ question: questions[0], status: 'partial', answer: '외부 연결 후보를 확인했으나 ClickFix 실행 명령과 후속 MSI는 미확인이다.', plan_index: 1 },
+        { question: questions[1], status: 'open', answer: '샘플 메타데이터만 수집했으며 동적 분석 결과가 없다.', plan_index: 2 }],
+      plan: [{ action: '해당 콘텐츠 접근 이후 PowerShell 실행 이력을 확인한다.', done: '조회 범위와 결과 기록' },
+        { action: '격리 분석 담당자에게 샘플 행위 보고 확보를 요청한다.', done: '샘플 해시와 보고서 매칭' }] },
+    synthesis_status: { status: 'completed' },
+    malware: base.investigation.malware,
+    steps: [{ track: '조회 계획', text: '유포 경로 및 샘플 행위 자료를 확인한다.' },
+      { track: '악성코드 조회', text: '샌드박스 보고가 없어 실행 행위를 미해결로 남겼다.' }],
+  },
+};
+const infoQuestion = '발표된 서비스의 적용 범위와 도입 조건은 무엇인가?';
+const informational = {
+  ref: 'info-path-test', title: '분석 경로 검증: 서비스 발표 (가상 데이터)',
+  category: '기술동향', analysis: '[핵심 요약]\n서비스 발표 자료를 이해하기 위한 검증용 예시입니다.',
+  targets: { article_kind: 'informational', objective: '적용 범위와 선수 지식을 확인한다.', questions: [infoQuestion] },
+  investigation: { article_kind: 'informational', question_lookups: [{ question: infoQuestion, lookups: [{ key: 'web', why: '공식 개념 설명 확인' }] }],
+    lookup_status: [{ key: 'web', status: 'returned' }],
+    synthesis: { question_status: [{ question: infoQuestion, status: 'answered', answer: '공식 설명의 적용 범위를 정리했다.', plan_index: 1 }],
+      plan: [{ action: '제품의 공식 개념 문서와 도입 조건을 검토한다.' }] } },
+};
+module.exports = { threat, informational, questions,
+  legacy: { ref: 'legacy-path-test', title: '분석 경로 검증: 이전 기록', analysis: '[핵심 요약]\n기본 분석만 저장된 기록입니다.' },
+  failed: { ref: 'failed-path-test', title: '분석 경로 검증: 수집 실패', collection_failed: true,
+    analysis: '[원문 수집 실패]\n본문을 확보하지 못했습니다.' },
+};

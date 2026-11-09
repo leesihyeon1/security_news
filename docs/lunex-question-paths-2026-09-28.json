@@ -1,0 +1,33 @@
+{
+  "ref": "3f62dde156",
+  "question_lookups": [
+    {
+      "question": "PDFWKRNL.sys 변종의 정확한 SHA256 해시는 무엇인가",
+      "lookups": [
+        {"key": "primary", "why": "Ontinue 원문에 제시된 PDFWKRNL.sys 샘플 표에서 해시를 확인"},
+        {"key": "malware", "why": "같은 해시의 VT 파일 보고서와 동적 관측 여부를 대조"}
+      ]
+    },
+    {
+      "question": "HVCI·취약 드라이버 차단 목록 우회가 가능한 구체적 조건(윈도우 빌드, 드라이버 버전)은 무엇인가",
+      "lookups": [
+        {"key": "primary", "why": "Ontinue의 우회 관측과 AMD 공식 권고의 영향·수정 버전을 구분해 확인"},
+        {"key": "vulnerability", "why": "CVE-2023-20598의 공개 취약점 정보와 패치 근거를 대조"}
+      ]
+    },
+    {
+      "question": "동일 MaaS 패널 인프라를 공유하는 추가 샘플과 공통 행위·IOC는 무엇인가",
+      "lookups": [
+        {"key": "intel", "why": "확보한 IP·해시의 공개 인텔 관측과 연관 지표를 조회"},
+        {"key": "web", "why": "MaaS 패널 관련 공개 분석에서 추가 샘플·공통 행위 근거를 탐색"}
+      ]
+    },
+    {
+      "question": "크롬 웹스토어에 등록된 악성 확장 ID와 개발자 계정은 무엇인가",
+      "lookups": [
+        {"key": "primary", "why": "Arctic Wolf 원문의 확장 ID가 악성 확장인지 탈취 대상인지 구분"},
+        {"key": "web", "why": "악성 확장 ID·개발자 계정의 독립적인 공개 근거를 탐색"}
+      ]
+    }
+  ]
+}

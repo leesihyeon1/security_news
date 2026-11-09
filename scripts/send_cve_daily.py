@@ -1,15 +1,13 @@
 import html
 import json
 import os
-import smtplib
 import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
+import nvd_details
 
 # Windows 콘솔(cp949)에서 특수문자 출력이 죽지 않도록 UTF-8로 강제
 for stream in (sys.stdout, sys.stderr):
@@ -173,6 +171,53 @@ def extract_references(cve, limit=3):
     return links
 
 
+def extract_cwes(cve):
+    """NVD weaknesses의 CWE 번호(NVD-CWE-Other 같은 자리표시는 뺀다)."""
+    out = []
+    for weakness in cve.get("weaknesses") or []:
+        for row in weakness.get("description") or []:
+            value = clean_text(row.get("value"))
+            if value.startswith("CWE-") and value not in out:
+                out.append(value)
+    return out
+
+
+def extract_affected_packages(cve, limit=20):
+    """NVD CPE 조건에서 명시된 영향 버전만 추출한다. 상한을 수정 버전으로 추정하지 않는다."""
+    rows = []
+    seen = set()
+
+    def visit(node):
+        if node.get("negate"):
+            return
+        for match in node.get("cpeMatch") or []:
+            if not match.get("vulnerable"):
+                continue
+            parts = (match.get("criteria") or "").split(":")
+            if len(parts) < 6 or parts[2] not in ("a", "o", "h"):
+                continue
+            product = "{} {}".format(parts[3], parts[4]).replace("_", " ")
+            bounds = []
+            for key, symbol in (("versionStartIncluding", ">="), ("versionStartExcluding", ">"),
+                                ("versionEndIncluding", "<="), ("versionEndExcluding", "<")):
+                if match.get(key):
+                    bounds.append("{} {}".format(symbol, match[key]))
+            affected = ", ".join(bounds) or (parts[5] if parts[5] not in ("*", "-") else "")
+            if not affected:
+                continue
+            row = (product, affected)
+            if row not in seen and len(rows) < limit:
+                seen.add(row)
+                rows.append({"product": product, "affected": affected, "fixed": ""})
+        for child in node.get("nodes") or []:
+            visit(child)
+
+    for config in cve.get("configurations") or []:
+        for node in config.get("nodes") or []:
+            visit(node)
+    return rows
+
+
 def fetch_nvd_cves_by_date(start_param, end_param):
     now = datetime.utcnow()
     start = now - timedelta(hours=LOOKBACK_HOURS)
@@ -215,12 +260,14 @@ def parse_nvd_vulnerabilities(vulnerabilities):
             "description": extract_description(cve),
             "link": nvd_link(cve_id),
             "references": extract_references(cve),
+            "affected_packages": extract_affected_packages(cve),
+            "cwes": extract_cwes(cve),
         }
 
     return list(cves.values())
 
 
-def fetch_new_nvd_cves():
+def fetch_nvd_cves_with_updates():
     try:
         published_raw = fetch_nvd_cves_by_date("pubStartDate", "pubEndDate")
     except Exception as error:
@@ -275,7 +322,11 @@ def fetch_new_nvd_cves():
 
 
     filtered_cves.sort(key=lambda item: item["published"], reverse=True)
-    return filtered_cves
+    return filtered_cves, modified_cves
+
+
+def fetch_new_nvd_cves():
+    return fetch_nvd_cves_with_updates()[0]
 
 
 def fetch_cisa_kev():
@@ -576,8 +627,12 @@ def main():
     sent_nvd_ids = set(state["sent_nvd_ids"])
     sent_kev_ids = set(state["sent_kev_ids"])
 
-    nvd_items = filter_important_nvd_items(fetch_new_nvd_cves())
+    recent_nvd, modified_nvd = fetch_nvd_cves_with_updates()
+    nvd_items = filter_important_nvd_items(recent_nvd)
     kev_items = fetch_cisa_kev()
+    updated_details = nvd_details.update_cache(modified_nvd, sent_nvd_ids)
+    if updated_details:
+        print("NVD 수정 정보 {}건을 기존 CVE 상세에 반영했습니다.".format(updated_details))
 
     # 이메일/슬랙(상위 N건, 알림 스팸 방지용 캡)과 이벤트 로그(대시보드 CVE 탭이
     # 그 기간 CVE를 빠짐없이 보여줘야 하므로 캡 없이 전체)를 분리한다 — 예전엔
@@ -638,7 +693,11 @@ def main():
                 score=cvss_score_value(item),
                 cves=[item["id"]],
                 references=item.get("references"),
+                affected_packages=item.get("affected_packages"),
+                cvss_vector=item.get("vector") or "",
+                cwes=item.get("cwes"),
                 published_at=item["published"],
+                source_updated_at=item.get("last_modified") or "",
                 email_sent=email_sent and item["id"] in emailed_nvd_ids,
                 slack_sent=slack_sent and item["id"] in emailed_nvd_ids,
                 triage=item.get("triage"),

@@ -1,16 +1,14 @@
 import html
 import os
 import re
-import smtplib
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 import common_utils
 
@@ -22,7 +20,13 @@ for stream in (sys.stdout, sys.stderr):
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name.lower() == "scripts" else SCRIPT_DIR
-RSS_URL = "https://www.boannews.com/media/news_rss.xml"
+# 보안뉴스가 2026-08에 media/news_rss.xml을 폐기했다(404 -> 이후 홈페이지 HTML 응답).
+# 한쪽이 또 사라져도 메일러가 멈추지 않도록 순서대로 시도한다.
+# cdn 쪽을 우선하는 이유: guid를 주고 pubDate가 RFC822라 article_id/날짜 파싱이 안정적이다.
+RSS_URLS = [
+    "https://cdn.boannews.com/rss/gn_rss_allArticle.xml",
+    "https://www.boannews.com/rss/allArticle.xml",
+]
 TO_EMAIL = common_utils.DEFAULT_TO_EMAIL
 
 SMTP_SERVER = common_utils.SMTP_SERVER
@@ -36,7 +40,8 @@ MAX_STORED_SENT_IDS = 200
 XML_DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>", re.IGNORECASE)
 
 ARTICLE_BODY_MAX_CHARS = 4000
-ARTICLE_DATE_RE = re.compile(r"입력\s*:?\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})")
+# 개편 후 레이아웃은 "등록 · 2026.08.30 13:05", 구 레이아웃은 "입력 : 2026-08-30 13:05"
+ARTICLE_DATE_RE = re.compile(r"(?:입력|등록)\s*[·:]?\s*(\d{4}[.\-]\d{2}[.\-]\d{2}\s+\d{2}:\d{2})")
 
 
 def clean_text(text):
@@ -53,7 +58,17 @@ def parse_rss_datetime(value):
         return None
 
 
-def fetch_article_body(url):
+def decode_page(raw):
+    """개편 페이지(utf-8)와 구 페이지(cp949)를 모두 읽을 수 있도록 순서대로 시도."""
+    for encoding in ("utf-8", "cp949"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return raw.decode("utf-8", errors="replace")
+
+
+def fetch_article_body(url, article=None):
     """기사 페이지에서 본문 텍스트와 입력 일시(KST)를 추출. 실패 시 ("", None)."""
     try:
         resp = requests.get(
@@ -61,23 +76,35 @@ def fetch_article_body(url):
             headers={"User-Agent": "Mozilla/5.0 boannews-daily-mailer/1.0"},
             timeout=15,
         )
-        page_text = resp.content.decode("cp949", errors="replace")
+        # 개편된 기사 페이지는 utf-8, 구 media/view.asp 페이지는 cp949다
+        page_text = decode_page(resp.content)
     except Exception as error:
         print("[-] 기사 본문 수집 실패({}): {}".format(url, error))
         return "", None
 
     soup = BeautifulSoup(page_text, "html.parser")
+    if article is not None:
+        from live_news import article_image
+        article["image_url"] = article_image(soup, url)
 
+    # 개편 레이아웃은 ISO8601(+09:00)을 메타로 그대로 준다 — 화면 표기 파싱보다 안정적
     published_at = None
-    date_match = ARTICLE_DATE_RE.search(soup.get_text(" ", strip=True))
-    if date_match:
-        try:
-            published_at = datetime.strptime(date_match.group(1), "%Y-%m-%d %H:%M").isoformat() + "+09:00"
-        except ValueError:
-            pass
+    meta_published = soup.find("meta", attrs={"property": "article:published_time"})
+    if meta_published and meta_published.get("content"):
+        published_at = meta_published["content"].strip()
+
+    if not published_at:
+        date_match = ARTICLE_DATE_RE.search(soup.get_text(" ", strip=True))
+        if date_match:
+            try:
+                published_at = datetime.strptime(
+                    date_match.group(1).replace(".", "-"), "%Y-%m-%d %H:%M"
+                ).isoformat() + "+09:00"
+            except ValueError:
+                pass
 
     container = None
-    for container_id in ("news_content", "news_contents", "con_Article"):
+    for container_id in ("article-view-content-div", "news_content", "news_contents", "con_Article"):
         container = soup.find(id=container_id)
         if container is not None:
             break
@@ -126,21 +153,57 @@ def decode_xml(xml_data, charset):
     return XML_DECLARATION_RE.sub("", xml_text, count=1)
 
 
+def looks_like_xml(xml_data):
+    """피드가 내려가면 200 + HTML 홈페이지가 돌아온다 — 그걸 파싱하려다 ParseError로
+    죽는 대신 다음 후보로 넘어가기 위한 선검사."""
+    head = xml_data[:512].lstrip().lower()
+    return head.startswith(b"<?xml") or head.startswith(b"<rss") or head.startswith(b"<feed")
+
+
+def fetch_rss_channel():
+    """RSS_URLS를 순서대로 시도해 첫 번째로 성공한 channel 엘리먼트를 반환."""
+    failures = []
+
+    for url in RSS_URLS:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 boannews-daily-mailer/1.0"},
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                xml_data = response.read()
+                charset = response.headers.get_content_charset()
+        except (urllib.error.URLError, TimeoutError) as error:
+            failures.append("{} -> 요청 실패: {}".format(url, error))
+            continue
+
+        if not looks_like_xml(xml_data):
+            failures.append("{} -> XML이 아닌 응답({}바이트)".format(url, len(xml_data)))
+            continue
+
+        try:
+            root = ET.fromstring(decode_xml(xml_data, charset))
+        except ET.ParseError as error:
+            failures.append("{} -> XML 파싱 실패: {}".format(url, error))
+            continue
+
+        channel = root.find("channel")
+        if channel is None:
+            failures.append("{} -> RSS channel을 찾을 수 없습니다".format(url))
+            continue
+
+        if failures:
+            print("[!] 폴백 피드로 수집합니다: {}".format(url))
+            for failure in failures:
+                print("    - {}".format(failure))
+        return channel
+
+    raise RuntimeError("보안뉴스 RSS를 읽지 못했습니다:\n  " + "\n  ".join(failures))
+
+
 def fetch_latest_security_news(limit=10):
-    request = urllib.request.Request(
-        RSS_URL,
-        headers={"User-Agent": "Mozilla/5.0 boannews-daily-mailer/1.0"},
-    )
-
-    with urllib.request.urlopen(request, timeout=15) as response:
-        xml_data = response.read()
-        charset = response.headers.get_content_charset()
-
-    root = ET.fromstring(decode_xml(xml_data, charset))
-    channel = root.find("channel")
-
-    if channel is None:
-        raise RuntimeError("RSS channel을 찾을 수 없습니다.")
+    channel = fetch_rss_channel()
 
     news_items = []
 
@@ -292,7 +355,7 @@ def main():
 
     # 기사 본문까지 수집해 CVE 추출·EPSS 연계 긴급도 분류(P1/P2/P3)의 정확도를 높인다
     for news in new_articles:
-        news["body"], news["article_published_at"] = fetch_article_body(news["link"])
+        news["body"], news["article_published_at"] = fetch_article_body(news["link"], news)
         news["extracted_cves"] = common_utils.extract_cves(news["title"], news["summary"], news["body"])
         news["iocs"] = common_utils.extract_iocs(news["body"])
         news["attack_techniques"] = common_utils.extract_attack_techniques(news["title"], news["summary"], news["body"])
@@ -372,6 +435,7 @@ def main():
                 article["id"],
                 article["title"],
                 url=article["link"],
+                image_url=article.get("image_url", ""),
                 summary=article["summary"],
                 severity=enrichment.get("severity") or "",
                 cves=article.get("extracted_cves"),

@@ -1,4 +1,5 @@
 import hashlib
+import analysis_trace
 import ipaddress
 import math
 import os
@@ -36,6 +37,9 @@ SOURCE_LABELS = {
     "kisa": "KISA/KrCERT",
     "asec": "안랩 ASEC",
     "msrc": "Microsoft 패치",
+    "cisco_psirt": "Cisco PSIRT",
+    "fortinet_psirt": "Fortinet PSIRT",
+    "paloalto_psirt": "Palo Alto PSIRT",
     "github_advisory": "GitHub Advisory",
     "boannews": "보안뉴스",
     "thehackernews": "The Hacker News",
@@ -97,7 +101,13 @@ def source_label(source):
 # 똑같은 성격의 기사 헤드라인이라(CVE-ID 나열이 아님) 이 그룹의 제외 사유가
 # 적용되지 않는다. 예전엔 여기 포함돼 있어서 주요 뉴스·검색 인덱스에서
 # 통째로 안 보였다.
-NON_NEWS_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "exploit_db"}
+# 기사가 아니라 카탈로그·어드바이저리형 소스. 대시보드 국내/해외 기사 목록과 검색
+# 인덱스에서 빠지고, CVE 상관관계 카드의 근거로만 등장한다 — 벤더 PSIRT는 건당
+# 정보량이 적고 발행량이 많아 기사 목록에 섞이면 목록을 잠식한다.
+NON_NEWS_SOURCES = {
+    "nvd", "cisa_kev", "msrc", "github_advisory", "exploit_db",
+    "cisco_psirt", "fortinet_psirt", "paloalto_psirt",
+}
 
 def load_env_file(dotenv_path=None):
     if dotenv_path is None:
@@ -133,6 +143,15 @@ SLACK_WEBHOOK_URGENT = os.environ.get("SLACK_WEBHOOK_URGENT")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
+# 폴백 체인을 명시적으로 지정한다(쉼표 구분, 예: "nvidia" / "nvidia,ollama").
+# 미지정이면 기존 동작 유지. 로컬 Ollama를 안 띄우는 환경에서 체인에 남겨두면
+# 호출마다 연결 거부 예외를 맞고 그 사이 기사 분석이 통째로 유실된다
+# (실측: NVIDIA 실패 748회 = Ollama 실패 748회로, 폴백이 한 번도 성공한 적 없음).
+LLM_PROVIDERS = [
+    name.strip().lower()
+    for name in os.environ.get("LLM_PROVIDERS", "").split(",")
+    if name.strip()
+]
 NVIDIA_API_URL = os.environ.get("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
@@ -197,6 +216,102 @@ def _load_inventory_items(path):
     if current and current["name"]:
         items.append(current)
     return items
+
+
+def inventory_canonical_map(inventory_file=None):
+    """정규화된 자산 용어(이름·별칭) → 제품 대표명 매핑.
+
+    match_inventory_terms()는 매칭된 별칭을 전부 돌려준다(예: "Palo Alto Networks
+    PAN-OS GlobalProtect" → Palo Alto / Palo Alto Networks / PAN-OS / GlobalProtect).
+    판정에는 그게 맞지만 집계에 그대로 쓰면 제품 하나가 별칭 수만큼 부풀려진다
+    (실측 주간: Palo Alto Networks 20건 / Palo Alto 20건 / Paloalto 12건이 같은 제품).
+    """
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    if not path.exists():
+        return {}
+    mapping = {}
+    for item in _load_inventory_items(path):
+        for term in [item["name"]] + item["aliases"]:
+            normalized = clean_text(term).lower()
+            if normalized:
+                mapping.setdefault(normalized, item["name"])
+    return mapping
+
+
+def inventory_product_terms(inventory_file=None):
+    """인벤토리의 제품명·별칭을 원래 표기 그대로(소문자화 없이) 펼쳐서 돌려준다.
+
+    dashboard_text.redact_asset_mentions()가 "이 문장에 우리가 실제로 보유한 제품
+    이름이 나오는가"를 정규식으로 가릴 때 쓴다 — inventory_canonical_map()은 판정용
+    정규화(소문자)라서 그대로 쓰면 "IOS XR"·"BIG-IP" 같은 대소문자·기호 표기가
+    깨진다.
+    """
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    terms = []
+    try:
+        for item in _load_inventory_items(path):
+            for term in [item.get("name")] + list(item.get("aliases") or []):
+                term = str(term or "").strip()
+                if term and term not in terms:
+                    terms.append(term)
+    except Exception:
+        terms = []
+    return terms
+
+
+def environment_brief(inventory_file=None, max_products=40):
+    """모델에게 줄 "우리 환경" 요약 — 보유 제품군과 정보 요구.
+
+    왜 필요한가
+        분석 프롬프트는 "우리 쪽에서 무엇이 위험한가"를 묻는데, 정작 우리가 무엇을
+        쓰는지는 한 번도 알려 주지 않았다(실측 2026-09-17: 인벤토리를 분석 프롬프트에
+        넣는 코드가 0곳). 자산 목록은 이미 파일에 있고 CVE 매칭에만 쓰고 있었다.
+
+    왜 출력에는 못 쓰게 하는가
+        대시보드는 공개된 곳이다. "우리가 Citrix를 쓴다"가 카드에 실리면 그것 자체가
+        자산 정보 유출이다. 그래서 판단의 재료로만 주고, 결과 문장에는 제품명을
+        나열하지 못하게 한다 — pirs·assets를 페이로드에서 빼는 것과 같은 원칙이다.
+    """
+    path = Path(inventory_file) if inventory_file else INVENTORY_FILE
+    names = []
+    try:
+        for item in _load_inventory_items(path):
+            name = str(item.get("name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+    except Exception:
+        names = []
+    pirs = load_pirs() or {}
+    if not (names or pirs):
+        return ""
+
+    lines = ["[우리 환경 — 판단의 재료로만 쓰라]"]
+    if names:
+        lines.append("보유·운영 중인 제품군: " + ", ".join(names[:max_products]))
+    if pirs:
+        lines.append("우리가 우선해서 알고자 하는 것:")
+        for pid in sorted(pirs):
+            question = (pirs[pid] or {}).get("question") or ""
+            if question:
+                lines.append("  - {} {}".format(pid, question))
+    lines.append("이 목록은 우리 내부 정보다. 기사가 지목한 제품이 여기 있으면 그 사실을 "
+                 "판단에 반영하되, 결과 문장에 우리 제품명을 나열하거나 '우리는 무엇을 "
+                 "쓴다'고 쓰지 마라 — 결과는 공개되는 화면에 실린다. "
+                 "'사내 자산 목록과 대조가 필요한 제품' 정도로 쓰면 된다.")
+    return chr(10).join(lines)
+
+
+def canonical_assets(terms, inventory_file=None):
+    """매칭된 자산 용어들을 제품 대표명 기준으로 중복 제거해 반환 (등장 순서 유지)."""
+    mapping = inventory_canonical_map(inventory_file)
+    seen = set()
+    result = []
+    for term in terms or []:
+        name = mapping.get(clean_text(term).lower(), clean_text(term))
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
 
 
 def inventory_criticality_map(inventory_file=None):
@@ -278,6 +393,83 @@ def normalize_threat_actor(name):
         return ""
     aliases = (_load_intel("threat_actor_aliases") or {}).get("aliases") or {}
     return aliases.get(name.lower(), name)
+
+# ATT&CK 전술(킬체인 단계) — 공격 순서대로. 기법 ID 20~24개를 한 줄에 나열하면
+# 아무도 못 읽는다. 전술로 묶어 "어느 단계에 무엇이 있는지"로 보여준다.
+TACTIC_ORDER = [
+    "reconnaissance", "resource-development", "initial-access", "execution",
+    "persistence", "privilege-escalation", "stealth", "defense-impairment",
+    "credential-access", "discovery", "lateral-movement", "collection",
+    "command-and-control", "exfiltration", "impact",
+]
+TACTIC_LABELS = {
+    "reconnaissance": "정찰",
+    "resource-development": "자원 확보",
+    "initial-access": "초기 침투",
+    "execution": "실행",
+    "persistence": "지속성",
+    "privilege-escalation": "권한 상승",
+    "stealth": "방어 회피",
+    "defense-impairment": "보안 기능 무력화",
+    "credential-access": "자격증명 접근",
+    "discovery": "내부 정찰",
+    "lateral-movement": "내부 이동",
+    "collection": "수집",
+    "command-and-control": "C2 통신",
+    "exfiltration": "유출",
+    "impact": "영향·파괴",
+}
+
+
+def attack_technique_name(technique_id):
+    """기법 ID의 공식 이름. 카탈로그에 없으면 빈 문자열."""
+    catalog = (_load_intel("attack_techniques") or {}).get("techniques") or {}
+    return catalog.get(str(technique_id).upper().strip(), "")
+
+
+def attack_tactics(technique_id):
+    """기법이 속한 전술 목록(공격 순서대로). 매핑이 없으면 빈 목록."""
+    mapping = (_load_intel("attack_techniques") or {}).get("tactics") or {}
+    stages = mapping.get(str(technique_id).upper().strip()) or []
+    return sorted(stages, key=lambda stage: TACTIC_ORDER.index(stage)
+                  if stage in TACTIC_ORDER else len(TACTIC_ORDER))
+
+
+def group_attack_techniques(technique_ids, labels=None):
+    """기법 ID를 전술별로 묶는다.
+
+    한 기법이 여러 전술에 속하면 공격 순서상 가장 앞선 전술에만 넣는다 — 같은 항목이
+    두 번 보이면 개수를 오해한다. 전술 매핑이 없는 기법은 마지막에 따로 모은다.
+    """
+    labels = labels or {}
+    buckets = {}
+    unmapped = []
+    for raw in technique_ids or []:
+        # 옛 기록은 "T1566.001 (피싱: 표적형)"처럼 설명까지 한 문자열로 저장돼 있다.
+        # ID만 떼어내고, 괄호 안 설명이 있으면 라벨로 쓴다.
+        text = str(raw).strip()
+        match = ATTACK_TECHNIQUE_RE.search(text.upper())
+        if not match:
+            continue
+        technique_id = match.group(0)
+        inline = re.search(r"\(([^)]{2,90})\)", text)
+        stages = attack_tactics(technique_id)
+        entry = {"id": technique_id,
+                 "label": (labels.get(technique_id)
+                           or (inline.group(1).strip() if inline else "")
+                           or attack_technique_name(technique_id))}
+        if stages:
+            buckets.setdefault(stages[0], []).append(entry)
+        else:
+            unmapped.append(entry)
+
+    grouped = [{"tactic": stage, "label": TACTIC_LABELS.get(stage, stage),
+                "items": buckets[stage]}
+               for stage in TACTIC_ORDER if stage in buckets]
+    if unmapped:
+        grouped.append({"tactic": "", "label": "분류 없음", "items": unmapped})
+    return grouped
+
 
 def validate_attack_techniques(candidates):
     """LLM이 제시한 ATT&CK 기법 ID 후보를 공식 카탈로그로 검증해 환각을 차단.
@@ -389,6 +581,86 @@ DEFANGED_DOMAIN_RE = re.compile(
 )
 HXXP_URL_RE = re.compile(r"\bhxxps?://[^\s\"'<>]+", re.IGNORECASE)
 
+# 16진수 덩어리가 해시가 아니라 도메인의 한 조각인 경우가 있다.
+#
+# 실측(2026-09-18, Anthropic 위협 보고서 기사): 1차 자료에 적힌
+# soraki-proxy[.]20245aad98d27b1b1a2f0f103e1d7ee0[.]workers[.]dev에서 가운데 조각이
+# MD5로 잡혔다. 그 값으로 VT를 조회해 "미등록 해시"라는 결론이 났고, 조치 항목의
+# 차단 대상 "파일 해시 3건"에도 그대로 올라갔다. 실재하지 않는 해시를 차단 목록에
+# 넣는 것은 목록을 못 믿게 만든다.
+#
+# 다만 해시 뒤에 확장자가 붙는 표기(be99….exe, ….tar.gz)는 해시가 맞다 — 파일명으로
+# 쓴 것뿐이다. 그래서 마지막 조각이 확장자면 그대로 둔다.
+HASH_TAIL_RE = re.compile(r"(?:\.[A-Za-z0-9-]+)+", re.ASCII)
+HASH_LEAD_RE = re.compile(r"[A-Za-z0-9-]\.$", re.ASCII)
+FILE_EXTENSIONS = {
+    "7z", "apk", "bat", "bin", "cab", "cmd", "dat", "dll", "dmg", "doc", "docx",
+    "exe", "gz", "hta", "img", "iso", "jar", "js", "lnk", "log", "msi", "pdf",
+    "ps1", "rar", "scr", "sys", "tar", "tmp", "txt", "vbs", "xls", "xlsx", "zip",
+}
+
+
+# 호스트명의 마지막 조각(TLD)으로는 쓰이지 않는 파일 확장자. FILE_EXTENSIONS와 달리
+# zip·mov처럼 실제 TLD인 것은 넣지 않는다 — 진짜 .zip 도메인을 버리면 안 된다.
+NON_TLD_FILE_EXTENSIONS = {
+    "php", "asp", "aspx", "jsp", "cgi", "html", "htm", "js", "css", "json", "xml",
+    "png", "jpg", "jpeg", "gif", "svg", "ico", "txt", "log", "exe", "dll", "msi",
+    "ps1", "bat", "cmd", "vbs", "hta", "lnk", "scr", "sys", "jar", "apk", "dmg",
+    "iso", "img", "doc", "docx", "xls", "xlsx", "pdf", "rar", "7z", "gz", "tar", "tmp",
+}
+HOSTNAME_RE = re.compile(
+    r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$", re.I)
+
+
+def host_from_indicator(value):
+    """IOC 값에서 호스트(도메인·IP)를 꺼낸다. 호스트가 없으면(경로·파일명) "".
+
+    실측(2026-09-26, ClickFix·Psychedelic Stealer 건): 모델이 URL 칸에 경로만 적었다
+    ("admin777111777.php", "/api/v1/agent/"). 그걸 호스트로 받아 유포지 조사 칸 3개를
+    다 채우는 바람에, 정작 악성 도메인 uasputnik.com은 조사되지 않았다. 파일명
+    ("tracker.js")도 디팽 표기라 도메인으로 잡혔다.
+    """
+    text = str(value or "").strip().replace("[.]", ".").replace("[:]", ":")
+    text = re.sub(r"^hxxp", "http", text, flags=re.I)
+    if not text or text.startswith(("/", "\\")):
+        return ""
+    if "://" in text:
+        try:
+            host = urllib.parse.urlsplit(text).hostname or ""
+        except ValueError:
+            return ""
+    else:
+        host = re.split(r"[/?#]", text, maxsplit=1)[0].split("@")[-1]
+        if host.count(":") == 1:
+            host = host.split(":")[0]
+    host = host.strip(".").lower()
+    if not host:
+        return ""
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    if not HOSTNAME_RE.match(host) or host.rsplit(".", 1)[-1] in NON_TLD_FILE_EXTENSIONS:
+        return ""
+    return host
+
+
+def _is_hostname_label(text, start, end):
+    """이 자리의 16진수가 도메인 이름의 한 조각인가.
+
+    앞에 다른 조각이 붙어 있고 뒤로도 이어지면(a.HEX.b) 호스트명이다. 앞이 비어 있어도
+    뒤로 두 조각 이상 이어지면(HEX.workers.dev) 마찬가지다. 뒤가 한 조각뿐이면
+    파일명으로 본다 — 확장자를 붙여 쓴 해시가 훨씬 흔하다.
+    """
+    tail = HASH_TAIL_RE.match(text, end)
+    labels = [piece for piece in (tail.group(0).split(".") if tail else []) if piece]
+    if labels and labels[-1].lower() in FILE_EXTENSIONS:
+        return False
+    if labels and HASH_LEAD_RE.search(text[max(0, start - 64):start]):
+        return True
+    return len(labels) >= 2
+
 _PRIVATE_IP_PREFIXES = ("0.", "10.", "127.", "169.254.", "192.168.", "224.", "255.")
 
 def _is_public_ip(ip):
@@ -429,12 +701,16 @@ def extract_iocs(*texts, limit=50):
             add("url", re.sub(r"^hxxp", "http", match.replace("[.]", "."), flags=re.IGNORECASE))
         # URL로 이미 수집된 구간은 제외하고 디팽된 도메인만 스캔 (중복 방지)
         for match in DEFANGED_DOMAIN_RE.findall(HXXP_URL_RE.sub(" ", text)):
-            add("domain", match.replace("[.]", "."))
+            # "tracker[.]js"처럼 디팽한 파일명은 도메인이 아니다.
+            if host_from_indicator(match):
+                add("domain", match.replace("[.]", "."))
 
         refanged = text.replace("[.]", ".")
         for pattern, ioc_type in ((SHA256_RE, "sha256"), (SHA1_RE, "sha1"), (MD5_RE, "md5")):
-            for match in pattern.findall(refanged):
-                add(ioc_type, match.lower())
+            for match in pattern.finditer(refanged):
+                if _is_hostname_label(refanged, match.start(), match.end()):
+                    continue
+                add(ioc_type, match.group(0).lower())
         for match in IPV4_RE.findall(refanged):
             if _is_public_ip(match):
                 add("ipv4", match)
@@ -481,6 +757,16 @@ THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 NVIDIA_RETRY_DELAY_SECONDS = 5
 NVIDIA_RATE_LIMIT_DELAY_SECONDS = 15
+# 고정 간격으로 재시도하면 몇 초짜리 장애 구간 안에서 시도를 다 소진한다
+# (실측: 주간 총평이 5초 간격 3회 모두 HTTP 404로 실패 → 그 주 리포트에 AI 해석 없음).
+# 시도할수록 간격을 2배로 늘려 장애 구간을 넘긴다.
+NVIDIA_RETRY_BACKOFF_MAX_SECONDS = 120
+# 실패 응답의 본문에 실제 사유가 들어 있는데 그동안 상태 코드만 남겨 원인을 알 수 없었다.
+NVIDIA_ERROR_BODY_LOG_CHARS = 300
+
+
+def _nvidia_retry_delay(base_seconds, attempt):
+    return min(base_seconds * (2 ** (attempt - 1)), NVIDIA_RETRY_BACKOFF_MAX_SECONDS)
 
 # LLM 응답 본문에 U+FFFD(치환 문자)가 섞여 오는 일이 있다 — 프로바이더가 멀티바이트
 # 글자를 토큰 경계에서 쪼갠 뒤 조각별로 디코딩하면 한글 한 음절이 "??"(U+FFFD 2개)로
@@ -497,7 +783,10 @@ def has_broken_chars(text):
     """LLM 응답이 깨진 문자를 포함하는지. 정상 텍스트에 U+FFFD가 들어갈 일은 없다."""
     return REPLACEMENT_CHAR in (text or "")
 
-def _generate_nvidia(prompt, timeout, max_attempts=2):
+NVIDIA_DEFAULT_MAX_TOKENS = 8192
+
+
+def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False, max_tokens=None):
     """예전엔 429(rate limit)만 한 번 재시도하고 그 외(타임아웃·일시적 5xx·연결
     오류)는 즉시 실패 처리했다 — ai_narrative()처럼 큰 digest를 8192 토큰까지
     생성하는 호출은 이런 일시적 문제가 드물지 않은데, 한 번 실패하면 바로
@@ -513,43 +802,74 @@ def _generate_nvidia(prompt, timeout, max_attempts=2):
         "model": NVIDIA_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
-        "max_tokens": 8192,
+        "max_tokens": max_tokens or NVIDIA_DEFAULT_MAX_TOKENS,
         "stream": False,
     }
+    # JSON을 받기로 한 호출에는 형식을 API 차원에서 못박는다. 지금까지는 프롬프트에
+    # "JSON만 출력하라"고 적고 중괄호를 잘라내는 것이 전부였다 — json_format 인자는
+    # 있었지만 Ollama 경로에만 전달돼서, NVIDIA를 쓰는 지금은 한 번도 켜진 적이 없다.
+    # 모델이 지원하지 않으면 400이 오므로, 그때는 이 항목만 빼고 한 번 더 부른다.
+    if json_format:
+        payload["response_format"] = {"type": "json_object"}
     headers = {"Authorization": "Bearer {}".format(NVIDIA_API_KEY)}
 
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
-            response = requests.post(NVIDIA_API_URL, headers=headers, json=payload, timeout=timeout)
+            response = analysis_trace.llm_request(requests.post, NVIDIA_API_URL, headers=headers,
+                                                  payload=payload, timeout=timeout, provider="nvidia")
         except requests.exceptions.RequestException as error:
             last_error = error
             if attempt < max_attempts:
-                print("[-] NVIDIA 호출 실패, 재시도 {}/{}: {}".format(attempt, max_attempts, error))
-                time.sleep(NVIDIA_RETRY_DELAY_SECONDS)
+                delay = _nvidia_retry_delay(NVIDIA_RETRY_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 호출 실패, 재시도 {}/{} ({}초 후): {}".format(
+                    attempt, max_attempts, delay, error))
+                time.sleep(delay)
             continue
 
         if response.status_code == 429:
             # 무료 티어 40 RPM 제한 — 다른 오류보다 더 오래 대기 후 재시도
             last_error = RuntimeError("HTTP 429")
             if attempt < max_attempts:
-                time.sleep(NVIDIA_RATE_LIMIT_DELAY_SECONDS)
+                delay = _nvidia_retry_delay(NVIDIA_RATE_LIMIT_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 호출 제한(429), 재시도 {}/{} ({}초 후)".format(attempt, max_attempts, delay))
+                time.sleep(delay)
+            continue
+
+        if (response.status_code == 400 and "response_format" in payload
+                and "response_format" in (response.text or "")):
+            # 이 모델은 JSON 모드를 안 받는다. 끄고 다시 — 프롬프트의 지시만으로 돌아간다.
+            print("[-] 이 모델은 JSON 모드를 지원하지 않아 끄고 다시 부릅니다.")
+            payload.pop("response_format", None)
             continue
 
         if response.status_code != 200:
-            last_error = RuntimeError("HTTP {}".format(response.status_code))
+            # 상태 코드만으로는 모델명 오류인지 일시 장애인지 구분이 안 된다 — 본문을 남긴다.
+            body = (response.text or "").strip().replace("\n", " ")[:NVIDIA_ERROR_BODY_LOG_CHARS]
+            last_error = RuntimeError("HTTP {}: {}".format(response.status_code, body))
             if attempt < max_attempts:
-                print("[-] NVIDIA 호출 실패, 재시도 {}/{}: {}".format(attempt, max_attempts, last_error))
-                time.sleep(NVIDIA_RETRY_DELAY_SECONDS)
+                delay = _nvidia_retry_delay(NVIDIA_RETRY_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 호출 실패, 재시도 {}/{} ({}초 후): {}".format(
+                    attempt, max_attempts, delay, last_error))
+                time.sleep(delay)
             continue
 
         choices = (response.json() or {}).get("choices") or []
         if not choices:
             last_error = RuntimeError("빈 choices 응답")
             if attempt < max_attempts:
-                time.sleep(NVIDIA_RETRY_DELAY_SECONDS)
+                delay = _nvidia_retry_delay(NVIDIA_RETRY_DELAY_SECONDS, attempt)
+                print("[-] NVIDIA 빈 응답, 재시도 {}/{} ({}초 후)".format(attempt, max_attempts, delay))
+                time.sleep(delay)
             continue
 
+        # 추론 모델은 생각에 쓴 토큰도 max_tokens에서 깎는다. 상한에 닿으면 본문이
+        # 중간에서 잘린 채로 200이 오는데, 예전에는 그걸 알릴 곳이 없어 JSON 파싱
+        # 실패가 "원인 불명"으로만 남았다(실측 2026-09-26: 종합 판단이 추론 15.7k자 +
+        # 본문 7.2k자에서 8192 토큰에 잘려, 로그에 실패 흔적 없이 판단이 비었다).
+        if choices[0].get("finish_reason") == "length":
+            print("[-] NVIDIA 응답이 max_tokens({})에서 잘렸습니다 — 본문이 불완전할 수 있습니다."
+                  .format(payload["max_tokens"]))
         return (choices[0].get("message") or {}).get("content") or ""
 
     raise last_error or RuntimeError("NVIDIA 호출 실패")
@@ -558,12 +878,14 @@ def _generate_ollama(prompt, timeout, json_format):
     payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
     if json_format:
         payload["format"] = "json"
-    response = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+    response = analysis_trace.llm_request(requests.post, OLLAMA_URL, payload=payload,
+                                          timeout=timeout, provider="ollama")
     if response.status_code != 200:
         raise RuntimeError("HTTP {}".format(response.status_code))
     return (response.json() or {}).get("response", "")
 
-def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
+@analysis_trace.step("LLM 결과 생성", kind="llm", inputs=("prompt", "json_format", "max_tokens"), empty="failed")
+def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2, max_tokens=None):
     """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
 
     LLM_PROVIDER=nvidia 이면 NVIDIA NIM을 먼저 시도하고 실패 시 로컬 Ollama로 폴백한다.
@@ -576,7 +898,7 @@ def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
     시도가 깨진 경우에만 마지막 수단으로 깨진 텍스트를 그대로 돌려준다 — 요약이 통째로
     비면 카테고리까지 "기타"로 떨어져서, 한 음절 깨진 요약보다 손해가 크기 때문이다.
     """
-    providers = ["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"]
+    providers = LLM_PROVIDERS or (["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"])
     broken_text = None
     for provider in providers:
         for attempt in range(1, BROKEN_RESPONSE_ATTEMPTS + 1):
@@ -584,7 +906,10 @@ def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2):
                 if provider == "nvidia":
                     if not NVIDIA_API_KEY:
                         raise RuntimeError("NVIDIA_API_KEY 미설정")
-                    text = _generate_nvidia(prompt, timeout, max_attempts=nvidia_max_attempts)
+                    text = _generate_nvidia(prompt, timeout,
+                                           max_attempts=nvidia_max_attempts,
+                                           json_format=json_format,
+                                           max_tokens=max_tokens)
                 else:
                     text = _generate_ollama(prompt, timeout, json_format)
                 text = THINK_TAG_RE.sub("", text).strip()
@@ -641,11 +966,13 @@ ENRICH_PROMPT = """당신은 보안관제(SOC) 조직의 위협 인텔리전스 
 - 공급망공격: 오픈소스 패키지·벤더·업데이트 경로를 통한 공격
 - 공격캠페인: 조직을 노리는 표적형 캠페인·APT 활동
 - 피싱사기: 일반 소비자 대상 스미싱·보이스피싱·사기 (조직 표적 피싱은 공격캠페인)
-- 기술동향: 신기술 담론·연구 보고서·통계·컨퍼런스 논의 (양자보안, AI 보안 등)
-- 제품행사: 제품 홍보·전시회·수상·인터뷰 기사
-- 정책규제: 법·제도·규제·컴플라이언스
+- 기술동향: 신기술 담론·연구·통계·보고서·칼럼·컨퍼런스 논의 (양자보안, AI 보안 등)
+- 제품행사: 기업의 제품·서비스 출시와 홍보, 제휴·MOU·공동사업 발표, 전시회·수상·인터뷰 기사
+- 정책규제: 정부·규제기관·국제기구가 제정·시행·권고하는 법·제도·가이드라인 (주체가 당국일 때만. 기업이 규제 대응 사업·제휴·서비스를 발표하는 기사는 제품행사)
 
 헷갈리기 쉬운 경계 사례 예시:
+- "통신사가 유럽 공급망 규제 대응을 위해 데이터 플랫폼 기업과 협력" → 제품행사 (규제가 배경일 뿐 기사의 본질은 기업의 제휴·사업 발표, 제목에 "공급망"이 있어도 공급망공격이 아님)
+- "각국 사이버 기관이 AI용 SBOM 가이드라인 공동 발표" → 정책규제 (당국이 권고하는 가이드라인)
 - "쇼핑몰 해킹으로 회원 10만 명 개인정보 유출" → 개인정보유출 (시스템 침해가 있었지만 기사의 본질은 유출된 개인정보 그 자체)
 - "쇼핑몰 서버 침해, 관리자 권한 탈취 확인(유출 언급 없음)" → 침해사고 (침해는 있으나 유출이 핵심이 아님)
 - "APT 그룹이 npm 패키지에 악성코드 심어 유포" → 공급망공격 (공격 경로가 오픈소스 패키지)
@@ -1504,6 +1831,19 @@ def _title_tokens(title):
     tokens = re.findall(r"[0-9a-z가-힣]{2,}", clean_text(title).lower())
     return {token for token in tokens if token not in _TITLE_STOPWORDS}
 
+
+def title_tokens(title):
+    """제목 토큰 집합 — 카드 묶기(generate_report)와 클러스터링이 같은 기준을 쓰도록 공개."""
+    return _title_tokens(title)
+
+
+def title_similarity(left, right):
+    """두 제목의 토큰 자카드 유사도(0~1). 한쪽이라도 토큰이 없으면 0."""
+    a, b = _title_tokens(left), _title_tokens(right)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
 def _read_recent_events(hours, events_file=None):
     """events.jsonl 뒤쪽에서 시간 창 안의 이벤트만 파싱 (카탈로그형 소스 제외).
 
@@ -1602,12 +1942,21 @@ def build_cluster_context(related_events, triage=None):
         "escalated": bool(alerted) and current_rank < best_alerted_rank,
     }
 
+# P1/P2/P3는 SSVC 판정 결과를 저장·정렬하는 내부 코드다. 사람이 읽는 자리에서는
+# 코드 대신 무엇을 해야 하는지가 바로 읽히는 문구를 쓴다 — 데이터 값은 그대로 둔다.
+LEVEL_LABELS = {"P1": "긴급 대응", "P2": "주의", "P3": "참고"}
+
+
+def level_label(level):
+    return LEVEL_LABELS.get(level or "", "")
+
+
 def triage_marker(triage):
     level = (triage or {}).get("level")
     if level == "P1":
-        return "🚨 *P1* "
+        return "🚨 *긴급 대응* "
     if level == "P2":
-        return "⚠️ P2 "
+        return "⚠️ 주의 "
     return ""
 
 def triage_note(triage):
@@ -1665,7 +2014,8 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
                ransomware_use=None, confidence="", attack_techniques=None, importance=None,
                cluster=None, pirs=None, content_depth="", body_chars=None,
                recommended_actions=None, affected_versions=None, novelty="", category_reason="",
-               analyst_review=None):
+               analyst_review=None, affected_packages=None, image_url="", body_source="",
+               classification_quality="", source_updated_at="", cvss_vector="", cwes=None):
     """모든 수집 스크립트가 공유하는 통합 이벤트 스키마. 일간/주간 리포트의 입력이 됩니다.
 
     epss/exploitation_status는 명시하지 않으면 triage 결과에서 물려받는다.
@@ -1683,6 +2033,7 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "source": source,
         "title": clean_text(title),
         "url": url,
+        "image_url": image_url,
         "summary": clean_text(summary),
         "severity": clean_text(severity),
         "score": score,
@@ -1704,15 +2055,25 @@ def make_event(source, item_id, title, url="", summary="", severity="", score=No
         "content_depth": clean_text(content_depth).lower(),
         "novelty": clean_text(novelty).lower(),
         "affected_versions": _clean_str_list(affected_versions or [], 10),
+        "affected_packages": [
+            {key: clean_text(entry.get(key) or "") for key in ("product", "affected", "fixed")}
+            for entry in (affected_packages or []) if isinstance(entry, dict) and entry.get("product")
+        ][:20],
         "body_chars": body_chars,
+        "body_source": clean_text(body_source),
+        "classification_quality": clean_text(classification_quality),
         "analyst_review": analyst_review or None,
         "recommended_actions": _clean_str_list(recommended_actions or [], 3),
         "references": [r for r in (references or []) if r],
+        # 취약점 인시던트의 '원격 공격 가능' 판정 근거(AV:N 등). 예전에는 파싱 후 버렸다.
+        "cvss_vector": clean_text(cvss_vector),
+        "cwes": [c for c in (cwes or []) if c][:5],
         "fix_available": fix_available,
         "remediation": clean_text(remediation),
         "due_date": clean_text(due_date),
         "confidence": clean_text(confidence).lower(),
         "published_at": published_at or "",
+        "source_updated_at": source_updated_at or "",
         "fetched_at": utc_now_iso(),
         "ai_summary": ai_summary,
         "triage": triage,
@@ -1729,6 +2090,9 @@ def append_events(events, events_file=None):
     with path.open("a", encoding="utf-8") as file:
         for event in events:
             file.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+    if events_file is None:
+        from live_news import publish_events
+        publish_events(events)
 
 def send_email_message(subject, text_body, html_body=None, to_email=None):
     to_email = to_email or DEFAULT_TO_EMAIL

@@ -10,3 +10,14 @@ venv/
 env/
 .idea/
 .vscode/
+
+# 로컬 미리보기 설정(브라우저로 대시보드를 띄울 때만 쓴다)
+.claude/
+
+# 로컬 브라우저 점검·미리보기 산출물
+.playwright-cli/
+/output/
+/tmp/
+
+# 사내 자산(제품) 목록 — 공개 저장소에 올리지 않는다. 형식은 assets/inventory.example.yml 참고.
+/assets/inventory.yml

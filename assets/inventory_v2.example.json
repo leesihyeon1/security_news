@@ -1,0 +1,19 @@
+{
+  "_comment": "취약점 인시던트용 자산 정보. 실제 파일은 git 밖의 state/inventory_v2.json에 둔다. 키는 assets/inventory.yml의 name.",
+  "products": {
+    "예시 제품": {
+      "cpe": [
+        "vendor:product",
+        "vendor:product_family*"
+      ],
+      "version": "7.2.8",
+      "features": [
+        "ssl-vpn",
+        "admin-https"
+      ],
+      "exposure": "internet | partner_vpn | internal_user | mgmt_segment | isolated",
+      "core": false,
+      "description": "제품이 하는 일 한두 문장"
+    }
+  }
+}

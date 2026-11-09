@@ -1,13 +1,10 @@
 import html
 import json
 import os
-import smtplib
 import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 from bs4 import BeautifulSoup
 import common_utils
@@ -214,12 +211,20 @@ def parse_document(document_id, data):
 
 
 def fetch_microsoft_items():
+    """(items, complete)를 반환. complete는 조회창의 월 문서를 전부 받아왔는지 여부다.
+
+    MSRC는 503을 자주 낸다(실측: 로그에 818회). 일부만 받아온 결과를 "조회창 전체"로
+    착각하면 못 받아온 달의 CVE가 발송 기록에서 통째로 지워지고, 다음 실행에서 전부
+    신규로 판정돼 재발송된다 — 실제로 이 때문에 같은 CVE가 2~4일에 걸쳐 반복 발송됐다.
+    """
     all_items = []
+    complete = True
     for document_id in recent_month_ids():
         try:
             data = request_json(MSRC_CVRF_URL.format(document_id))
         except Exception as error:
             print("Failed to fetch MSRC document {}: {}".format(document_id, error))
+            complete = False
             continue
         all_items.extend(parse_document(document_id, data))
 
@@ -227,7 +232,7 @@ def fetch_microsoft_items():
     for item in all_items:
         deduped[item["cve_id"]] = item
 
-    return sorted(deduped.values(), key=lambda item: item["score"], reverse=True)
+    return sorted(deduped.values(), key=lambda item: item["score"], reverse=True), complete
 
 
 def filter_new_items(items, sent_ids):
@@ -349,14 +354,21 @@ def send_to_slack(items):
 def main():
     state = load_state()
     sent_ids = set(state["sent_ids"])
-    items = fetch_microsoft_items()
+    items, complete = fetch_microsoft_items()
     new_items = filter_new_items(items, sent_ids)
 
     # 조회창(최근 2개월)을 벗어난 CVE는 앞으로 다시 조회될 일이 없으므로 memory에서 정리한다.
     # 카운트 캡에만 의존하면 아직 조회 대상인 CVE가 먼저 밀려나 재발송되는 문제가 생긴다
     # (실측: 2개월 창의 CVSS>=7.0 CVE가 1,023건으로 과거 캡 1,000건을 이미 초과했었다).
-    valid_ids = {item["cve_id"] for item in items}
-    retained_ids = [cve for cve in state["sent_ids"] if cve in valid_ids]
+    #
+    # 단, 이 정리는 조회가 "완전"할 때만 안전하다. 월 문서를 하나라도 못 받아온 실행에서
+    # 정리하면 그 달 CVE가 전부 미발송 상태로 되돌아가 대량 재발송된다.
+    if complete and items:
+        valid_ids = {item["cve_id"] for item in items}
+        retained_ids = [cve for cve in state["sent_ids"] if cve in valid_ids]
+    else:
+        print("[!] MSRC 조회가 불완전하여 발송 기록 정리를 건너뜁니다(재발송 방지).")
+        retained_ids = list(state["sent_ids"])
 
     if not new_items:
         if len(retained_ids) != len(state["sent_ids"]):

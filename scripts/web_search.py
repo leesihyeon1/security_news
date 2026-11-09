@@ -1,0 +1,449 @@
+# -*- coding: utf-8 -*-
+"""보안 연구 자료를 웹에서 검색한다(Brave Search 또는 Google Programmable Search).
+
+무엇을 찾는가
+    아무 웹 검색이 아니라 벤더 연구팀·정부 기관·샌드박스의 1차 자료다. 찾은 링크를
+    primary_sources가 그대로 원문으로 읽으므로, 뉴스 재게시가 섞이면 이미 읽은 기사를
+    또 읽는 낭비가 된다.
+
+    검색 제공자마다 그걸 거르는 방법이 다르다. Google은 검색엔진(CX)에 볼 사이트를
+    등록해 두는 방식이고, Brave는 웹 전체를 보므로 결과에서 걸러야 한다. 거르는
+    기준은 feeds.json의 신뢰도 등급이다 — C등급은 우리가 이미 매일 수집하는 뉴스
+    매체라 검색으로 또 만날 이유가 없고, A·B등급(PSIRT·연구팀)은 그대로 둔다.
+
+왜 둘인가
+    Google Custom Search JSON API가 프로젝트를 바꾸고 키를 새로 발급해도 계속
+    "This project does not have the access"로 거부했다(실측 2026-09-18, 프로젝트
+    748683156627·452668394229 둘 다). 콘솔에는 사용 설정됨으로 보이는데도 그랬다.
+    검색이 목적이지 Google이 목적이 아니므로 제공자를 하나 더 둔다.
+
+한도를 세는 이유
+    무료 한도를 넘으면 과금되거나 조용히 실패한다. 기사당 2회씩 하루 100건을 분석하면
+    200회가 되어 어느 쪽 한도든 넘는다. 그래서 파일로 날짜별 사용량을 세고, 한도에
+    닿으면 검색을 건너뛰되 "한도 소진으로 생략"을 조사 과정에 남긴다.
+
+키가 없으면
+    아무 일도 하지 않고 None을 돌려준다. 키 없이 돌아가는 나머지 조회는 그대로 된다.
+"""
+
+import json
+import os
+import re
+import analysis_trace
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+
+import common_utils
+
+API_URL = ("https://www.googleapis.com/customsearch/v1"
+           "?key={}&cx={}&q={}&num={}")
+BRAVE_URL = "https://api.search.brave.com/res/v1/web/search?q={}&count={}"
+USAGE_FILE = common_utils.DATA_DIR / "cse_usage.json"
+
+# 하루 무료 한도가 100건이다. 90에서 멈춰 손으로 확인할 여유를 남긴다.
+DEFAULT_DAILY_CAP = 90
+# Brave 무료는 월 2,000건이다. 날짜별로 세고 있으므로 하루치로 환산해 60으로 둔다
+# (2,000 / 31 ≈ 64). 달을 통째로 세지 않는 것은, 어느 날 몰아 쓰다 월말에 말라붙는
+# 것보다 매일 쓸 수 있는 편이 낫기 때문이다.
+BRAVE_DAILY_CAP = 60
+# 기사 하나에 쓰는 검색 횟수. 늘리면 한도가 빨리 마른다.
+MAX_QUERIES_PER_ARTICLE = 2
+MAX_RESULTS = 5
+REQUEST_TIMEOUT = 20
+PAUSE_SECONDS = 1.0
+# 검색어가 짧으면 무관한 결과가 쏟아진다.
+MIN_TERM_CHARS = 5
+
+
+def log(message):
+    print(message)
+
+
+def provider():
+    """쓸 검색 제공자. 둘 다 있으면 Brave를 쓴다(무료 한도가 크고 사이트 제한이 없다)."""
+    if os.environ.get("BRAVE_SEARCH_KEY"):
+        return "brave"
+    if os.environ.get("GOOGLE_CSE_KEY") and os.environ.get("GOOGLE_CSE_CX"):
+        return "google"
+    return ""
+
+
+def provider_label():
+    return {"brave": "Brave Search", "google": "Google 맞춤검색"}.get(provider(), "")
+
+
+def available():
+    return bool(provider())
+
+
+def daily_cap():
+    if provider() == "brave":
+        name, default = "BRAVE_SEARCH_DAILY_CAP", BRAVE_DAILY_CAP
+    else:
+        name, default = "GOOGLE_CSE_DAILY_CAP", DEFAULT_DAILY_CAP
+    try:
+        return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+# 우리가 이미 매일 수집하는 뉴스 매체(feeds.json 신뢰도 C). 검색 결과에서 뺀다 —
+# 여기서 찾으려는 것은 기사가 아니라 그 기사가 인용한 원문이다. A·B등급(PSIRT·벤더
+# 연구팀)은 1차 자료 그 자체라 그대로 둔다.
+_news_hosts_cache = None
+
+
+def news_hosts():
+    global _news_hosts_cache
+    if _news_hosts_cache is not None:
+        return _news_hosts_cache
+    hosts = {"thehackernews.com"}  # 피드가 feedburner를 거쳐 와서 주소로는 안 잡힌다
+    # C등급이지만 1차 자료인 곳. 등급은 "뉴스 기사로서 얼마나 믿을 만한가"를 매긴
+    # 것이라 PoC 저장소·벤더 연구 블로그가 여기 섞여 있다 — 검색에서는 오히려 찾던
+    # 것이므로 빼지 않는다. feeds.json 등급은 발송 파이프라인이 쓰므로 건드리지 않는다.
+    keep = {"exploit-db.com", "proofpoint.com"}
+    try:
+        feeds = json.loads((common_utils.ASSETS_DIR / "feeds.json")
+                           .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        feeds = []
+    for feed in feeds if isinstance(feeds, list) else []:
+        if str(feed.get("reliability") or "").upper() != "C":
+            continue
+        host = urllib.parse.urlparse(str(feed.get("rss_url") or "")).netloc.lower()
+        # 배급 서비스 주소는 매체를 가리키지 않는다.
+        if host and "feedburner" not in host:
+            hosts.add(host[4:] if host.startswith("www.") else host)
+    _news_hosts_cache = hosts - keep
+    return _news_hosts_cache
+
+
+def _is_news_site(host):
+    host = str(host or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    return host in news_hosts()
+
+
+def _load_usage():
+    try:
+        data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def usage_today():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return int(_load_usage().get(today) or 0)
+
+
+def _count(n=1):
+    """사용량을 센다. 날짜별로만 남기고 오래된 것은 버린다."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    usage = _load_usage()
+    usage[today] = int(usage.get(today) or 0) + n
+    # 최근 며칠만 남긴다 — 이 파일은 한도 계산용이지 통계용이 아니다.
+    for key in sorted(usage)[:-7]:
+        usage.pop(key, None)
+    try:
+        USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        USAGE_FILE.write_text(json.dumps(usage, ensure_ascii=False), encoding="utf-8")
+    except OSError as error:
+        log("[-] 검색 사용량 기록 실패(검색에는 영향 없음): {}".format(error))
+
+
+def _fetch(url, headers):
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def _search_google(query, num):
+    data = _fetch(API_URL.format(
+        urllib.parse.quote(os.environ["GOOGLE_CSE_KEY"]),
+        urllib.parse.quote(os.environ["GOOGLE_CSE_CX"]),
+        urllib.parse.quote(query), max(1, min(int(num), 10))), {
+            "User-Agent": "boannews-intel/1.0 (threat research)",
+            "Accept": "application/json",
+        })
+    # CX가 이미 볼 사이트를 좁혀 두므로 여기서 더 거르지 않는다.
+    return [{
+        "title": " ".join(str(item.get("title") or "").split())[:140],
+        "link": item.get("link") or "",
+        "site": item.get("displayLink") or "",
+        "snippet": " ".join(str(item.get("snippet") or "").split())[:220],
+    } for item in data.get("items") or []]
+
+
+def _search_brave(query, num):
+    # 뉴스 매체를 걸러낼 것이므로 넉넉히 받아 온다 — 요청 수는 그대로 1회다.
+    data = _fetch(BRAVE_URL.format(urllib.parse.quote(query),
+                                   max(1, min(int(num) * 3, 20))), {
+        "X-Subscription-Token": os.environ["BRAVE_SEARCH_KEY"],
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+    })
+    items = []
+    for item in ((data.get("web") or {}).get("results") or []):
+        link = item.get("url") or ""
+        site = urllib.parse.urlparse(link).netloc
+        if _is_news_site(site):
+            continue
+        items.append({
+            "title": " ".join(str(item.get("title") or "").split())[:140],
+            "link": link,
+            "site": site,
+            "snippet": " ".join(str(item.get("description") or "").split())[:220],
+        })
+        if len(items) >= num:
+            break
+    return items
+
+
+@analysis_trace.step("검색 서비스 질의", kind="lookup", inputs=("query", "num"))
+def search(query, num=MAX_RESULTS):
+    """검색 한 번. 실패하거나 한도를 넘었으면 (None, 사유)."""
+    which = provider()
+    if not which:
+        return None, "키 없음"
+    if usage_today() >= daily_cap():
+        return None, "하루 한도({}) 소진".format(daily_cap())
+    try:
+        items = _search_brave(query, num) if which == "brave" else _search_google(query, num)
+    except Exception as error:
+        # 실패도 호출로 잡힐 수 있으니 센다 — 세지 않으면 한도를 넘겨 계속 실패한다.
+        _count(1)
+        return None, "조회 실패: {}".format(str(error)[:70])
+    _count(1)
+    return items, ""
+
+
+# 회사 소개·게시물 페이지는 개념 설명 자료가 아니다.
+SOCIAL_HOST_RE = re.compile(r"(?:^|\.)(?:linkedin|facebook|instagram|twitter|x|youtube|tiktok)\.com$", re.I)
+
+
+def background(topics):
+    """Find background references without the attack-only security query."""
+    results, steps, seen = [], [], set()
+    attempted = False
+    for topic in (topics or [])[:3]:
+        aliases = re.findall(r"\(([A-Za-z][^()]*)\)", topic)
+        term = aliases[0].strip() if aliases else str(topic).strip()
+        # "DPP"·"PCF" 같은 약어는 다른 뜻으로 더 많이 쓰인다(실측: "DPP" 검색 1위가 호놀룰루
+        # 시 도시계획국). 약어면 원래 이름으로 찾는다.
+        if aliases and re.fullmatch(r"[A-Z0-9]{2,6}", term):
+            base = re.sub(r"\([^()]*\)", "", str(topic)).strip()
+            term = base or term
+        if not term:
+            continue
+        items, error = search('"{}"'.format(term.replace('"', "")), num=4)
+        if items is None:
+            steps.append("{} 배경 검색 불가: {}".format(term, error))
+            continue
+        attempted = True
+        matched = 0
+        for item in items:
+            url = item.get("link") or ""
+            if not url or url in seen:
+                continue
+            title = item.get("title") or ""
+            snippet = item.get("snippet") or ""
+            if (_norm(term) not in _norm(title + " " + snippet)
+                    or _generic_feed({"link": url}) or _is_news_site(urllib.parse.urlparse(url).netloc)
+                    or SOCIAL_HOST_RE.search(urllib.parse.urlparse(url).netloc or "")):
+                continue
+            seen.add(url)
+            matched += 1
+            results.append({"term": term, "title": title, "url": url,
+                            "host": item.get("site") or urllib.parse.urlparse(url).netloc,
+                            "snippet": snippet})
+        steps.append("{} 배경 검색: 관련 결과 {}건".format(term, matched))
+    if not attempted:
+        return None
+    return {"results": results, "findings": [],
+            "references": [row["url"] for row in results], "steps": steps,
+            "terms": [row.get("term") for row in results]}
+
+
+# 이름만 던지면 엉뚱한 것이 걸린다. 실측: "ChocoShell"로 검색하니 5건 중 4건이
+# GitHub 사용자·포트나이트 위키·아이스크림 토핑·인스타 계정이었다. 악성코드 이름은
+# 일상 낱말과 겹치기 쉬운데, 그렇게 찾은 링크가 1차 자료 수집으로 넘어가면 조사가
+# 아이스크림 레시피를 읽는다. 보안 문맥을 붙여 좁힌다.
+SECURITY_CONTEXT = "(malware OR campaign OR threat OR APT OR IOC OR ransomware)"
+CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.I)
+
+
+def security_query(term):
+    """검색어에 보안 문맥을 붙인다. CVE 번호는 그 자체로 유일하므로 그대로 쓴다."""
+    term = (term or "").strip()
+    if not term or CVE_RE.match(term):
+        return term
+    return '"{}" {}'.format(term, SECURITY_CONTEXT)
+
+
+# 질문 재검색에서 뺄 흔한 조사·질문 어미. 정교한 형태소 분석이 아니라, 검색어로
+# 못 쓸 토큰을 골라내는 정도의 휴리스틱이다.
+QUESTION_STOPWORDS = {
+    "이", "가", "을", "를", "은", "는", "의", "에", "에서", "으로", "로", "인가",
+    "있는가", "없는가", "확인", "여부", "무엇인가", "얼마나", "어떤",
+}
+# 라운드 재검색에서 질문 기반 검색어를 몇 개까지 더할지. 고정 용어(malware/actors/
+# cves)가 다 안 풀렸을 때만 쓰이므로 한도를 넉넉히 늘리지 않는다.
+MAX_QUESTION_TERMS = 1
+QUESTION_TECHNIQUES = re.compile(
+    r"clickfix|c2|유포지|스크립트|클립보드|도메인|해시|확장|지속성|"
+    r"피싱|탈취|취약점|패키지|드라이버|샌드박스|패치|버전|http|dom", re.I)
+
+
+def _question_keyword(question):
+    """Use the investigation subject, not the longest question ending."""
+    text = re.sub(r"[?？]", "", question or "")
+    match = QUESTION_TECHNIQUES.search(text)
+    if match:
+        return match.group(0)
+    tokens = [t for t in re.split(r"\s+", text) if len(t) >= 2
+              and t not in QUESTION_STOPWORDS
+              and not re.search(r"(?:있는가|없는가|무엇인가|어떠한가|확인하는가)$", t)]
+    return max(tokens, key=len) if tokens else ""
+
+
+def terms_from(targets, exclude=(), open_questions=None):
+    """검색할 이름 — 캠페인·악성코드 이름과 CVE. 이미 답이 나온 것은 뺀다.
+
+    open_questions를 주면(2라운드 이상), 고정 용어만으로 못 채운 자리에 아직 안
+    풀린 질문에서 뽑은 핵심어를 더한다 — 1라운드가 0건이어도 같은 용어를 그대로
+    다시 검색하지 않고 질문을 바꿔 재시도하게 된다.
+    """
+    out = []
+    lowered = {str(x).lower() for x in exclude}
+    for key in ("malware", "actors", "cves"):
+        for value in (targets or {}).get(key) or []:
+            value = str(value).strip()
+            if len(value) < MIN_TERM_CHARS or value.lower() in lowered:
+                continue
+            if value not in out:
+                out.append(value)
+    out = out[:MAX_QUERIES_PER_ARTICLE]
+    for question in (open_questions or [])[:4]:
+        if len(out) >= MAX_QUERIES_PER_ARTICLE + MAX_QUESTION_TERMS:
+            break
+        keyword = _question_keyword(question)
+        meaningful_short = bool(out and QUESTION_TECHNIQUES.fullmatch(keyword or ""))
+        if (keyword and (len(keyword) >= MIN_TERM_CHARS or meaningful_short)
+                and keyword.lower() not in lowered and keyword not in out):
+            out.append(keyword)
+    return out
+
+
+def _norm(text):
+    return re.sub(r"[\s\-_.·]+", "", str(text or "")).casefold()
+
+
+def _relevant(item, term):
+    """결과 제목·요약에 검색어(따옴표 안 이름)가 실제로 있는가."""
+    names = re.findall(r'"([^"]+)"', term) or [term]
+    blob = _norm((item.get("title") or "") + " " + (item.get("snippet") or ""))
+    return any(_norm(name) and _norm(name) in blob for name in names)
+
+
+# 특정 사건이 아니라 모든 캠페인·IOC를 모아 둔 페이지. 어떤 이름으로 검색해도 걸린다.
+GENERIC_FEED_RE = re.compile(
+    r"github\.com/[^/]+/(?:[^/]*(?:apt|ioc|malware|threat)[^/]*collection|malware-ioc|"
+    r"apt_cybercriminal)|socradar\.io/(?:free-tools/)?campaigns|cyberpedia/.*indicators?-of-compromise",
+    re.I)
+
+
+def _generic_feed(item):
+    return bool(GENERIC_FEED_RE.search(item.get("link") or ""))
+
+
+def analyze(targets=None, answered=(), open_questions=None):
+    """웹 검색 트랙. 키가 없거나 검색할 이름이 없으면 None.
+
+    answered에는 다른 조회에서 이미 자료를 찾은 이름을 넘긴다 — 같은 것을 또
+    검색해서 한도를 쓰지 않으려는 것이다. open_questions는 2라운드 이상에서 아직
+    안 풀린 질문을 넘겨 검색어를 바꿔 보게 한다(terms_from 참고).
+
+    반환에 references를 실어 보낸다. 그 링크들이 1차 자료 수집의 입력이 된다.
+    """
+    if not available():
+        return None
+    terms = terms_from(targets, exclude=answered, open_questions=open_questions)
+    if not terms:
+        return None
+
+    findings, steps, references = [], [], []
+    failures = []
+    fixed_terms = {(str(value).strip()) for key in ("malware", "actors", "cves")
+                   for value in (targets or {}).get(key) or []}
+    anchor = next((value for key in ("malware", "actors", "cves")
+                   for value in (targets or {}).get(key) or [] if value), "")
+    for term in terms:
+        query = security_query(term)
+        if anchor and term not in fixed_terms:
+            query = security_query(anchor) + " " + term
+        items, reason = search(query)
+        time.sleep(PAUSE_SECONDS)
+        if items is None:
+            steps.append("\"{}\" 웹 검색을 건너뛰었습니다 — {}.".format(term, reason))
+            failures.append(reason)
+            continue
+        if not items:
+            steps.append("\"{}\"로 {}에 검색했지만 연구 자료가 없었습니다."
+                         .format(term, provider_label()))
+            findings.append(
+                "\"{}\" 질의에서는 연구 자료를 찾지 못했습니다. 공개 자료의 부재나 "
+                "안전성을 뜻하지 않으며 다른 표현·출처 확인이 필요합니다.".format(term))
+            continue
+        # 검색어가 제목·요약에 없는 결과는 버린다. 따옴표 고유명사 + 보안 OR절은 느슨하게
+        # 매칭돼, 서로 다른 검색어 5개가 같은 APT·IOC 모음 페이지를 받았다(실측
+        # 2026-09-30, 카테나-X 건: 7건 모두 CyberMonitor·prodaft·socradar). 그 링크가 다음
+        # 단계에서 "1차 자료"로 읽혔다.
+        subject = anchor if anchor and term not in fixed_terms else term
+        relevant = [item for item in items if _relevant(item, subject) and not _generic_feed(item)]
+        if len(relevant) < len(items):
+            steps.append("\"{}\" 검색 결과 {}건 중 검색어가 없는 결과·일반 IOC 모음 {}건을 "
+                         "버렸습니다.".format(term, len(items), len(items) - len(relevant)))
+        items = relevant
+        if not items:
+            findings.append("\"{}\" 질의 결과에 이 이름을 다룬 자료가 없었습니다. 공개 자료의 "
+                            "부재를 뜻하지는 않습니다.".format(term))
+            continue
+        steps.append("\"{}\"로 {}에서 연구 자료 {}건을 찾았습니다.".format(
+            term, provider_label(), len(items)))
+        findings.append("\"{}\" 관련 참고 자료를 {}건 찾았습니다: {}.".format(
+            term, len(items), ", ".join(item["site"] for item in items[:3])))
+        for item in items[:2]:
+            if item["snippet"]:
+                findings.append("· {} — {}".format(item["site"], item["snippet"][:150]))
+        references.extend(item["link"] for item in items if item["link"])
+
+    if not findings:
+        # 검색이 한 번도 성공하지 못한 것과 "찾았는데 없더라"는 다르다. None을
+        # 돌려주면 위에서 "결과가 없었습니다"로 덮여, 키 제한 때문에 한 번도 돌지
+        # 않았다는 사실이 화면에서 사라진다(실측 2026-09-17: API 키에 Android 앱
+        # 제한이 걸려 모든 호출이 403이었는데 카드에는 자료 없음으로 나왔다).
+        if failures:
+            findings = ["웹 검색이 돌지 않아 공개 자료를 확인하지 못했습니다 — {}. "
+                        "자료가 없다는 뜻이 아닙니다.".format(failures[0][:70])]
+        else:
+            return None
+    seen, unique = set(), []
+    for link in references:
+        if link not in seen:
+            seen.add(link)
+            unique.append(link)
+    return {
+        "findings": findings,
+        "steps": steps,
+        "references": unique[:MAX_RESULTS],
+        # 실제로 검색한 말. 다음 라운드가 같은 말을 다시 검색하지 않게 넘겨받는다 —
+        # 예전에는 참고 링크(URL)를 넘겨서 이름과 한 번도 겹치지 않았고, 1라운드
+        # 검색이 그대로 반복돼 결과가 두 번씩 쌓였다(실측 2026-09-28, Lunex 건).
+        "terms": terms,
+        "used_today": usage_today(),
+        "cap": daily_cap(),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
