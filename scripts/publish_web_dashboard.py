@@ -34,6 +34,7 @@ import event_calendar
 import live_news
 import featured_sources
 import incident_archive
+import intelligence_dashboard
 from dashboard_text import event_summary, public_text
 
 for stream in (sys.stdout, sys.stderr):
@@ -376,6 +377,10 @@ def _write_and_commit(repo, payload, period, date_stamp, data_dir):
             json.dump(payload, file, ensure_ascii=False, indent=2)
     _rebuild_search_index_from_events(repo)
     live_news.write_snapshot(data_dir / "latest-news.json")
+    try:
+        intelligence_dashboard.publish(data_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("[!] 대시보드 집계 보류: {}".format(type(error).__name__))
     try:
         featured_sources.publish(data_dir)
     except (OSError, ValueError, KeyError, TypeError) as error:
