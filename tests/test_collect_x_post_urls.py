@@ -64,3 +64,24 @@ def test_refresh_keeps_the_file_when_nothing_loads(tmp_path, monkeypatch):
     except RuntimeError:
         pass
     assert json.loads(out.read_text(encoding="utf-8")) == {"posts": []}
+
+
+def test_merge_returns_the_same_data_when_nothing_changed():
+    first = xc.merge({}, {"troyhunt": ["https://x.com/troyhunt/status/9"]}, per_account=2, now=NOW)
+    later = NOW + timedelta(hours=2)
+    again = xc.merge(first, {"troyhunt": ["https://x.com/troyhunt/status/9"]}, per_account=2, now=later)
+    assert again == first  # no new updated_at, so the file and the repository stay unchanged
+
+
+def test_record_health_reports_accounts_failing_for_over_a_day(tmp_path):
+    state = tmp_path / "health.json"
+    accounts = ["troyhunt", "skim71"]
+    assert xc.record_health(state, {"troyhunt": [], "skim71": []}, NOW, accounts) == []
+    assert xc.record_health(state, {"troyhunt": []}, NOW + timedelta(hours=10), accounts) == []
+    assert xc.record_health(state, {"troyhunt": []}, NOW + timedelta(hours=25), accounts) == ["skim71"]
+    assert xc.record_health(state, {"troyhunt": [], "skim71": []}, NOW + timedelta(hours=26), accounts) == []
+
+
+def test_is_due_prefers_the_last_check_over_the_last_change():
+    old_change = (NOW - timedelta(days=2)).isoformat()
+    assert not xc.is_due({"updated_at": old_change, "checked_at": (NOW - timedelta(minutes=10)).isoformat()}, NOW)

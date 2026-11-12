@@ -14,6 +14,7 @@ blocked pages; accounts that fail keep their previously saved URLs.
 import argparse
 import json
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,7 +26,11 @@ PROFILE = Path.home() / ".boannews-x-profile"
 OUTPUT = Path(__file__).resolve().parents[2] / "boannews_vercel_deploy" / "dashboard" / "data" / "x-posts.json"
 RELATIVE_OUTPUT = "dashboard/data/x-posts.json"
 POST_RE = re.compile(r"^https://(?:www\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})/status/(\d+)(?:[/?#].*)?$", re.I)
-MIN_INTERVAL = timedelta(hours=2)
+# Guards against back-to-back runs; the task itself runs every 2 hours.
+MIN_INTERVAL = timedelta(minutes=90)
+# An account that has not loaded for this long is reported, like a stalled news source.
+ACCOUNT_STALE_AFTER = timedelta(hours=24)
+STATE_NAME = "x_posts_health.json"
 
 
 def normalize_post(url, account):
@@ -52,7 +57,7 @@ def load(output):
 
 def is_due(data, now, interval=MIN_INTERVAL):
     try:
-        updated = datetime.fromisoformat(data["updated_at"])
+        updated = datetime.fromisoformat(data.get("checked_at") or data["updated_at"])
     except (KeyError, TypeError, ValueError):
         return True
     return now - updated >= interval
@@ -126,6 +131,9 @@ def merge(data, found, per_account, now):
             rows = sorted(({**row, "group": group} for row in rows), key=lambda p: post_id(p["url"]), reverse=True)
             posts.extend(rows[:per_account])
     posts.sort(key=lambda p: post_id(p["url"]), reverse=True)
+    # Same list as before: keep the file byte-identical so no commit or deploy follows.
+    if posts == data.get("posts"):
+        return data
     return {"updated_at": stamp, "posts": posts}
 
 
@@ -134,6 +142,26 @@ def write(output, data):
     pending = output.with_suffix(".json.tmp")
     pending.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     pending.replace(output)
+
+
+def record_health(state_path, found, now, accounts=None):
+    """Remember each account's last successful load; return accounts failing for too long."""
+    try:
+        state = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    stamp = now.isoformat(timespec="seconds")
+    stale = []
+    for account in accounts or all_accounts():
+        if account in found:
+            state[account] = stamp
+            continue
+        state.setdefault(account, stamp)  # first sighting starts the clock
+        if now - datetime.fromisoformat(state[account]) > ACCOUNT_STALE_AFTER:
+            stale.append(account)
+    Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(state_path).write_text(json.dumps(state, indent=1), encoding="utf-8")
+    return stale
 
 
 def all_accounts():
@@ -151,24 +179,54 @@ def refresh(output, profile, per_account, now=None):
     return len(found)
 
 
-def push(repo_path, profile, per_account, force=False, now=None):
-    """Refresh x-posts.json in the dashboard clone, then commit and push only that file."""
+def push(repo_path, profile, per_account, force=False, now=None, state_path=None):
+    """Refresh x-posts.json in the dashboard clone, then commit and push only that file.
+
+    Returns a process exit code: 0 when healthy (including "nothing new"), 1 when
+    nothing loaded, publishing failed, or an account has failed for over a day.
+    The task's non-zero result is what task_health reports to Slack.
+    """
     import publish_web_dashboard as pwd
 
     now = now or datetime.now(timezone.utc)
     repo = Path(repo_path or pwd.REPO_PATH)
     if not str(repo_path or pwd.REPO_PATH) or not pwd._validate_publish_repo(repo):
         print("[-] WEB_DASHBOARD_REPO_PATH is not a usable dashboard clone")
-        return False
+        return 1
+    if state_path is None:
+        import common_utils
+        state_path = common_utils.STATE_DIR / STATE_NAME
     target = repo / RELATIVE_OUTPUT
-    if not force and not is_due(load(target), now):
+    try:
+        last = json.loads(Path(state_path).read_text(encoding="utf-8")).get("_last_run")
+    except (OSError, ValueError, AttributeError):
+        last = None
+    if not force and not is_due({"checked_at": last} if last else load(target), now):
         print("[*] X posts were refreshed recently; skipped")
-        return False
+        return 0
     # Browse outside the repo lock: a slow page must not hold up the report publisher.
     found = scrape(profile, all_accounts(), per_account)
+    stale = record_health(state_path, found, now)
+    state = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    state["_last_run"] = now.isoformat(timespec="seconds")
+    Path(state_path).write_text(json.dumps(state, indent=1), encoding="utf-8")
+    if stale:
+        print("[-] No successful load for over {}h: {}".format(
+            int(ACCOUNT_STALE_AFTER.total_seconds() // 3600), ", ".join(stale)))
     if not found:
         print("[-] No posts collected; nothing published")
-        return False
+        return 1
+    try:
+        published = _commit_and_push(pwd, repo, target, found, per_account, now)
+    except Exception as error:  # git or lock failure: the next run rebases and retries
+        print("[-] X posts publish failed: {}".format(pwd.redact_url(str(error))))
+        return 1
+    if published:
+        print(f"[+] Published X posts from {len(found)} accounts")
+    return 1 if stale else 0
+
+
+def _commit_and_push(pwd, repo, target, found, per_account, now):
     with pwd.repo_lock(repo):
         branch = pwd._run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).strip()
         # Sync first: the report publisher resets dashboard/data to origin, so an
@@ -181,7 +239,6 @@ def push(repo_path, profile, per_account, force=False, now=None):
             return False
         pwd._run_git(["commit", "-m", "Update X posts"], cwd=repo)
         pwd._run_git(["push", "origin", branch], cwd=repo)
-    print(f"[+] Published X posts from {len(found)} accounts")
     return True
 
 
@@ -210,8 +267,7 @@ def main():
             context.close()
         return
     if args.push:
-        push(None, args.profile, args.per_account, force=args.force)
-        return
+        sys.exit(push(None, args.profile, args.per_account, force=args.force))
     refresh(args.output, args.profile, args.per_account)
 
 
