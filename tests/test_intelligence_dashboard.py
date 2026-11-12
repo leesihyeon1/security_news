@@ -79,3 +79,33 @@ def test_every_entity_has_a_known_group_and_area():
     areas = {row[0] for row in idash.AREAS}
     for key, _, group, area, aliases in idash.ENTITY_ROWS:
         assert group in groups and area in areas and aliases, key
+
+
+def test_service_groups_follow_their_technical_roles():
+    groups = {row[0]: row[2] for row in idash.ENTITY_ROWS}
+    assert groups["chrome"] == groups["firefox"] == "client"
+    assert groups["linux"] == groups["windows11"] == "os"
+    assert groups["npm"] == groups["pypi"] == "packages"
+    assert groups["python"] == groups["javascript"] == "language"
+    assert groups["nginx"] == groups["apache"] == groups["cloudflare"] == "edge"
+    assert groups["docker"] == groups["kubernetes"] == "container"
+    assert groups["vscode"] == groups["vscodemarketplace"] == "ide"
+    assert groups["githubactions"] == groups["jenkins"] == "cicd"
+    assert groups["mongodb"] == groups["postgresql"] == "data"
+
+
+def test_documented_relations_reference_distinct_known_assets():
+    ids = {row[0] for row in idash.ENTITY_ROWS}
+    links = {(source, target) for source, target, _, _ in idash.RELATIONS}
+    assert len(links) == len(idash.RELATIONS)
+    for source, target, label, url in idash.RELATIONS:
+        assert source in ids and target in ids and source != target
+        assert label and url.startswith("https://")
+    overview, _ = idash.build([], now=NOW)
+    assert len(overview["relations"]) == len(idash.RELATIONS)
+
+
+def test_specific_new_subjects_are_not_generic_mentions():
+    assert idash.subject_ids("GitHub Actions workflow") == ["github", "githubactions"]
+    assert "githubactions" not in idash.subject_ids("The team takes actions")
+    assert "vscodemarketplace" in idash.subject_ids("VS Code Marketplace extension")
