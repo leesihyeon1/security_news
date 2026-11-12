@@ -131,7 +131,6 @@ def test_publish_writes_json_and_commits(tmp_path, monkeypatch):
     monkeypatch.setattr(pwd.live_news, "write_snapshot", lambda path, rows=None: None)
     monkeypatch.setattr(pwd.featured_sources, "publish", lambda data_dir, **kwargs: None)
     monkeypatch.setattr(pwd.intelligence_dashboard, "publish", lambda data_dir, **kwargs: None)
-    monkeypatch.setattr(pwd.collect_x_post_urls, "publish", lambda data_dir, **kwargs: None)
     monkeypatch.setattr(pwd.event_calendar, "from_collected_events", lambda *args, **kwargs: [])
     monkeypatch.setattr(pwd.incident_archive, "publish", lambda data_dir, **kwargs: None)
     monkeypatch.setattr(pwd.incident_archive, "discover", lambda *args, **kwargs: 0)
