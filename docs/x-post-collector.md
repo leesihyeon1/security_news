@@ -2,8 +2,8 @@
 
 The dashboard's X panel embeds posts listed in `dashboard/data/x-posts.json`
 with X's official single-post embed. This local tool fills that file: it opens
-the profiles in `ACCOUNTS` (`scripts/collect_x_post_urls.py`) in a normal,
-minimized Microsoft Edge window with a dedicated profile and keeps only post
+the profiles in `ACCOUNTS` (`scripts/collect_x_post_urls.py`) in a normal
+Microsoft Edge window placed off-screen with a dedicated profile and keeps only post
 URLs (newest first, reposts of other authors excluded).
 
 - Edge is used because Playwright's bundled Chromium fails to start on this PC

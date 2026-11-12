@@ -1,7 +1,8 @@
 """Collect recent public X post URLs with a locally signed-in Chromium profile.
 
-Each run opens the accounts in ACCOUNTS in a normal (minimized) Microsoft Edge
-window, keeps only post URLs, and saves them to the dashboard's x-posts.json,
+Each run opens the accounts in ACCOUNTS in a normal Microsoft Edge window placed
+off-screen (so it does not pop up while the PC is in use), keeps only post
+URLs, and saves them to the dashboard's x-posts.json,
 which the dashboard renders with X's official single-post embed. Signing in
 (--login, once) is optional; X serves public profiles to signed-out visitors.
 Headless runs are not used: X rejects them.
@@ -63,10 +64,11 @@ def is_due(data, now, interval=MIN_INTERVAL):
     return now - updated >= interval
 
 
-def open_browser(playwright, profile, minimized=True):
+def open_browser(playwright, profile, hidden=True):
     """Installed Edge first: Playwright's bundled Chromium fails to start on some PCs."""
     options = {"headless": False, "viewport": {"width": 1280, "height": 900},
-               "args": ["--start-minimized"] if minimized else []}
+               # A real (non-headless) window, just positioned off the visible desktop.
+               "args": ["--window-position=-32000,-32000", "--window-size=1280,900"] if hidden else []}
     try:
         return playwright.chromium.launch_persistent_context(str(profile), channel="msedge", **options)
     except Exception as exc:
@@ -260,7 +262,7 @@ def main():
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
-            context = open_browser(playwright, args.profile, minimized=False)
+            context = open_browser(playwright, args.profile, hidden=False)
             page = context.new_page()
             page.goto("https://x.com/login")
             input("Sign in in Chromium, then press Enter here to close it: ")
