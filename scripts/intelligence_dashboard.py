@@ -24,38 +24,64 @@ AREAS = [
     ("data", "데이터·제도", "file_cabinet", r"\b(?:database|privacy|regulation|GDPR|data.breach)\b|개인정보|데이터.?유출|규제|법률"),
 ]
 GROUPS = [
-    ("develop", "개발·협업", "toolbox"), ("packages", "패키지·확장", "electric_plug"),
-    ("web", "웹 기술", "globe_with_meridians"), ("deploy", "클라우드·배포", "cloud"),
-    ("runtime", "서버·데이터", "file_cabinet"), ("ai", "AI·에이전트", "laptop"),
+    ("ide", "IDE·마켓플레이스", "toolbox"), ("repository", "코드 저장소", "file_cabinet"),
+    ("language", "개발 언어", "toolbox"), ("packages", "패키지 레지스트리", "electric_plug"),
+    ("cicd", "CI/CD", "toolbox"), ("framework", "프레임워크·앱", "globe_with_meridians"),
+    ("ai", "AI·에이전트", "laptop"), ("os", "운영체제", "laptop"),
+    ("container", "컨테이너·오케스트레이션", "file_cabinet"),
+    ("deploy", "클라우드·배포", "cloud"), ("edge", "엣지·웹서버", "globe_with_meridians"),
+    ("identity", "계정·인증", "locked"), ("data", "데이터 저장소", "file_cabinet"),
+    ("client", "브라우저", "laptop"),
+]
+RELATIONS = [
+    ("vscode", "vscodemarketplace", "확장 설치", "https://code.visualstudio.com/docs/configure/extensions/extension-marketplace"),
+    ("vscode", "github", "저장소 작업", "https://code.visualstudio.com/docs/sourcecontrol/github"),
+    ("github", "githubactions", "워크플로 실행", "https://docs.github.com/en/actions/tutorials/create-an-example-workflow"),
+    ("githubactions", "vercel", "선택적 배포 연동", "https://vercel.com/kb/guide/how-can-i-use-github-actions-with-vercel"),
+    ("javascript", "npm", "패키지 생태계", "https://docs.npmjs.com/about-packages-and-modules/"),
+    ("python", "pypi", "패키지 배포", "https://packaging.python.org/en/latest/tutorials/packaging-projects/"),
+    ("react", "nextjs", "기반 프레임워크", "https://nextjs.org/docs"),
+    ("nodejs", "npm", "패키지 관리", "https://docs.npmjs.com/cli/v7/commands/npm/"),
+    ("nodejs", "docker", "선택적 컨테이너화", "https://docs.docker.com/guides/nodejs/"),
+    ("nextjs", "docker", "선택적 컨테이너화", "https://docs.docker.com/guides/nextjs/"),
+    ("nginx", "nodejs", "선택적 리버스 프록시", "https://docs.nginx.com/nginx/deployment-guides/load-balance-third-party/node-js/"),
+    ("kubernetes", "amazonwebservices", "선택적 EKS 운영", "https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html"),
+    ("entraid", "azure", "Azure 접근 인증", "https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments"),
+    ("linux", "docker", "엔진 실행 환경", "https://docs.docker.com/engine/install/"),
+    ("docker", "kubernetes", "컨테이너 이미지 활용", "https://kubernetes.io/docs/concepts/containers/images/"),
+    ("windows11", "chrome", "브라우저 실행 환경", "https://support.google.com/chrome/a/answer/7100626"),
 ]
 # Aliases identify article subjects, not dependencies, installed assets or exposure.
 ENTITY_ROWS = [
-    ("github", "GitHub", "develop", "development", ["GitHub", "깃허브"]),
-    ("gitlab", "GitLab", "develop", "development", ["GitLab", "깃랩"]),
-    ("vscode", "VS Code", "develop", "endpoint", ["VS Code", "Visual Studio Code"]),
-    ("jenkins", "Jenkins", "develop", "development", ["Jenkins", "젠킨스"]),
+    ("github", "GitHub", "repository", "development", ["GitHub", "깃허브"]),
+    ("gitlab", "GitLab", "repository", "development", ["GitLab", "깃랩"]),
+    ("vscode", "VS Code", "ide", "endpoint", ["VS Code", "Visual Studio Code"]),
+    ("vscodemarketplace", "VS Code Marketplace", "ide", "development", ["VS Code Marketplace", "Visual Studio Marketplace"]),
+    ("jenkins", "Jenkins", "cicd", "development", ["Jenkins", "젠킨스"]),
+    ("githubactions", "GitHub Actions", "cicd", "development", ["GitHub Actions"]),
+    ("entraid", "Microsoft Entra ID", "identity", "identity", ["Entra ID", "Microsoft Entra"]),
     ("npm", "npm", "packages", "development", ["npm"]),
     ("pypi", "PyPI", "packages", "development", ["PyPI"]),
-    ("chrome", "Chrome", "packages", "endpoint", ["Chrome", "크롬"]),
-    ("firefox", "Firefox", "packages", "endpoint", ["Firefox", "파이어폭스"]),
-    ("react", "React", "web", "development", ["React.js", "ReactJS", "React"]),
-    ("nextjs", "Next.js", "web", "development", ["Next.js", "NextJS"]),
-    ("nodejs", "Node.js", "web", "development", ["Node.js", "NodeJS"]),
-    ("javascript", "JavaScript", "web", "development", ["JavaScript", "자바스크립트"]),
-    ("nginx", "NGINX", "web", "network", ["NGINX", "엔진엑스"]),
-    ("apache", "Apache", "web", "network", ["Apache", "아파치"]),
+    ("chrome", "Chrome", "client", "endpoint", ["Chrome", "크롬"]),
+    ("firefox", "Firefox", "client", "endpoint", ["Firefox", "파이어폭스"]),
+    ("react", "React", "framework", "development", ["React.js", "ReactJS", "React"]),
+    ("nextjs", "Next.js", "framework", "development", ["Next.js", "NextJS"]),
+    ("nodejs", "Node.js", "framework", "development", ["Node.js", "NodeJS"]),
+    ("javascript", "JavaScript", "language", "development", ["JavaScript", "자바스크립트"]),
+    ("nginx", "NGINX", "edge", "network", ["NGINX", "엔진엑스"]),
+    ("apache", "Apache", "edge", "network", ["Apache", "아파치"]),
     ("amazonwebservices", "AWS", "deploy", "cloud", ["AWS", "Amazon Web Services"]),
     ("azure", "Azure", "deploy", "identity", ["Azure", "애저"]),
     ("googlecloud", "Google Cloud", "deploy", "cloud", ["Google Cloud", "GCP", "구글 클라우드"]),
     ("vercel", "Vercel", "deploy", "cloud", ["Vercel", "버셀"]),
-    ("cloudflare", "Cloudflare", "deploy", "network", ["Cloudflare", "클라우드플레어"]),
-    ("docker", "Docker", "runtime", "cloud", ["Docker", "도커"]),
-    ("kubernetes", "Kubernetes", "runtime", "cloud", ["Kubernetes", "K8s", "쿠버네티스"]),
-    ("linux", "Linux", "runtime", "cloud", ["Linux", "리눅스"]),
-    ("windows11", "Windows", "runtime", "endpoint", ["Windows", "윈도우", "윈도"]),
-    ("mongodb", "MongoDB", "runtime", "data", ["MongoDB", "몽고DB"]),
-    ("postgresql", "PostgreSQL", "runtime", "data", ["PostgreSQL", "Postgres"]),
-    ("python", "Python", "ai", "development", ["Python", "파이썬"]),
+    ("cloudflare", "Cloudflare", "edge", "network", ["Cloudflare", "클라우드플레어"]),
+    ("docker", "Docker", "container", "cloud", ["Docker", "도커"]),
+    ("kubernetes", "Kubernetes", "container", "cloud", ["Kubernetes", "K8s", "쿠버네티스"]),
+    ("linux", "Linux", "os", "cloud", ["Linux", "리눅스"]),
+    ("windows11", "Windows", "os", "endpoint", ["Windows", "윈도우", "윈도"]),
+    ("mongodb", "MongoDB", "data", "data", ["MongoDB", "몽고DB"]),
+    ("postgresql", "PostgreSQL", "data", "data", ["PostgreSQL", "Postgres"]),
+    ("python", "Python", "language", "development", ["Python", "파이썬"]),
     ("tensorflow", "TensorFlow", "ai", "development", ["TensorFlow"]),
     ("pytorch", "PyTorch", "ai", "development", ["PyTorch"]),
     ("mcp", "MCP", "ai", "identity", ["MCP", "Model Context Protocol"]),
@@ -64,7 +90,7 @@ ENTITY_ROWS = [
 
 def entity_catalog():
     return [{"id": key, "label": label, "group": group, "area": area,
-             "image": "assets/dashboard-map/" + ("electric_plug.png" if key == "mcp" else key + ".svg")}
+             "image": "assets/dashboard-map/" + ("locked.png" if key == "entraid" else "electric_plug.png" if key in {"mcp", "vscodemarketplace", "githubactions"} else key + ".svg")}
             for key, label, group, area, _ in ENTITY_ROWS]
 
 
@@ -145,7 +171,9 @@ def build(events, now=None, days=180):
                 "info_categories": sorted(INFO_CATEGORIES), "daily": list(daily.values()),
                 "entities": entity_catalog(),
                 "areas": [{"id": key, "label": label, "image": "assets/dashboard-map/" + icon + ".png"} for key, label, icon, _ in AREAS],
-                "groups": [{"id": key, "label": label, "image": "assets/dashboard-map/" + icon + ".png"} for key, label, icon in GROUPS]}
+                "groups": [{"id": key, "label": label, "image": "assets/dashboard-map/" + icon + ".png"} for key, label, icon in GROUPS],
+                "relations": [{"source": source, "target": target, "label": label, "url": url}
+                              for source, target, label, url in RELATIONS]}
     return overview, details
 
 

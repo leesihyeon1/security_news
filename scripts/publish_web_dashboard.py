@@ -29,6 +29,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import collect_x_post_urls
 import common_utils
 import event_calendar
 import live_news
@@ -385,6 +386,11 @@ def _write_and_commit(repo, payload, period, date_stamp, data_dir):
         featured_sources.publish(data_dir)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print("[!] 보안 블로그 목록 발행 보류: {}".format(type(error).__name__))
+    # Optional: only runs when X_BEARER_TOKEN is set; failures keep the last saved post list.
+    try:
+        collect_x_post_urls.publish(data_dir)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+        print("[!] X 게시물 갱신 보류: {}".format(error))
     _rebuild_issue_history(data_dir)
     calendar_path = data_dir / "calendar-events.json"
     with calendar_path.open("w", encoding="utf-8") as file:

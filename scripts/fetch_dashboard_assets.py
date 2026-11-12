@@ -31,7 +31,7 @@ def fetch(output):
                        "sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
     catalog = json.loads(download("https://raw.githubusercontent.com/devicons/devicon/v2.16.0/devicon.json"))
     for key, *_ in ENTITY_ROWS:
-        if key == "mcp":
+        if key in {"mcp", "vscodemarketplace", "githubactions", "entraid"}:
             continue
         versions = next(row["versions"]["svg"] for row in catalog if row["name"] == key)
         variant = "original" if "original" in versions else "original-wordmark"
