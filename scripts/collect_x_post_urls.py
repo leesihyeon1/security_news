@@ -20,7 +20,7 @@ from pathlib import Path
 
 ACCOUNTS = {
     "breaking": ("DarkWebInformer", "DailyDarkWeb", "TheHackersNews", "vxunderground"),
-    "insight": ("SwiftOnSecurity", "briankrebs", "troyhunt", "cyb3rops", "skim71"),
+    "insight": ("SwiftOnSecurity", "troyhunt", "cyb3rops", "skim71"),
 }
 PROFILE = Path.home() / ".boannews-x-profile"
 OUTPUT = Path(__file__).resolve().parents[2] / "boannews_vercel_deploy" / "dashboard" / "data" / "x-posts.json"
