@@ -1,37 +1,31 @@
-"""Collect recent public X post URLs through the official X API v2.
+"""Collect recent public X post URLs with a locally signed-in Chromium profile.
 
-The dashboard renders each saved URL with X's official single-post embed. The
-profile timeline embed and scripted profile pages are not used: X rejects the
-former with 429 for anonymous visitors and does not permit the latter.
+Each run opens the accounts in ACCOUNTS in a normal (minimized) Microsoft Edge
+window, keeps only post URLs, and saves them to the dashboard's x-posts.json,
+which the dashboard renders with X's official single-post embed. Signing in
+(--login, once) is optional; X serves public profiles to signed-out visitors.
+Headless runs are not used: X rejects them.
 
-Requires X_BEARER_TOKEN (app-only bearer token from the X Developer Console).
-Without it, nothing is fetched and the existing file stays as it is. Reads are
-billed per returned post, so each account asks only for posts newer than the
-newest saved one (since_id) and the run makes no retries.
+--push refreshes the file inside the dashboard clone and commits and pushes it
+(scheduled via tasks/publish_x_posts.bat). It does not solve challenges or retry
+blocked pages; accounts that fail keep their previously saved URLs.
 """
 
 import argparse
 import json
-import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
-
-API = "https://api.x.com/2"
-TIMEOUT_SECONDS = 15
 ACCOUNTS = {
     "breaking": ("DarkWebInformer", "DailyDarkWeb", "TheHackersNews", "vxunderground"),
     "insight": ("SwiftOnSecurity", "briankrebs", "troyhunt", "cyb3rops", "skim71"),
 }
+PROFILE = Path.home() / ".boannews-x-profile"
 OUTPUT = Path(__file__).resolve().parents[2] / "boannews_vercel_deploy" / "dashboard" / "data" / "x-posts.json"
+RELATIVE_OUTPUT = "dashboard/data/x-posts.json"
 POST_RE = re.compile(r"^https://(?:www\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})/status/(\d+)(?:[/?#].*)?$", re.I)
-ID_RE = re.compile(r"^\d{1,25}$")
-
-
-class RateLimited(RuntimeError):
-    pass
+MIN_INTERVAL = timedelta(hours=2)
 
 
 def normalize_post(url, account):
@@ -45,101 +39,150 @@ def post_id(url):
     return int(url.rsplit("/", 1)[-1])
 
 
-def _get(session, path, token, params):
-    response = session.get(API + path, params=params, timeout=TIMEOUT_SECONDS,
-                           headers={"Authorization": "Bearer " + token, "User-Agent": "security-news-dashboard"})
-    if response.status_code == 429:
-        raise RateLimited("X API rate limit (reset {})".format(response.headers.get("x-rate-limit-reset", "?")))
-    if response.status_code in (401, 403):
-        # Never echo the token or response body; a status code is enough to act on.
-        raise RuntimeError("X API rejected the token ({})".format(response.status_code))
-    response.raise_for_status()
-    return response.json()
+def extract_posts(links, account, limit=2):
+    found = {post for link in links if (post := normalize_post(link, account))}
+    return sorted(found, key=post_id, reverse=True)[:limit]
 
 
-def lookup_user_ids(session, token, names):
-    data = _get(session, "/users/by", token, {"usernames": ",".join(names)})
-    return {row["username"].lower(): row["id"] for row in data.get("data", [])
-            if ID_RE.match(str(row.get("id", ""))) and row.get("username")}
-
-
-def recent_posts(session, token, user_id, account, since_id=None):
-    params = {"max_results": 5, "exclude": "retweets,replies", "tweet.fields": "created_at"}
-    if since_id:
-        params["since_id"] = str(since_id)
-    data = _get(session, "/users/{}/tweets".format(user_id), token, params)
-    rows = []
-    for tweet in data.get("data", []):
-        if ID_RE.match(str(tweet.get("id", ""))):
-            rows.append({"url": f"https://x.com/{account}/status/{tweet['id']}",
-                         "created_at": tweet.get("created_at")})
-    return rows
-
-
-def load_existing(output):
+def load(output):
     if not output.exists():
-        return {}, {}
-    data = json.loads(output.read_text(encoding="utf-8"))
+        return {}
+    return json.loads(output.read_text(encoding="utf-8"))
+
+
+def is_due(data, now, interval=MIN_INTERVAL):
+    try:
+        updated = datetime.fromisoformat(data["updated_at"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    return now - updated >= interval
+
+
+def open_browser(playwright, profile, minimized=True):
+    """Installed Edge first: Playwright's bundled Chromium fails to start on some PCs."""
+    options = {"headless": False, "viewport": {"width": 1280, "height": 900},
+               "args": ["--start-minimized"] if minimized else []}
+    try:
+        return playwright.chromium.launch_persistent_context(str(profile), channel="msedge", **options)
+    except Exception as exc:
+        print(f"Edge unavailable ({type(exc).__name__}); trying bundled Chromium")
+        return playwright.chromium.launch_persistent_context(str(profile), **options)
+
+
+def scrape(profile, accounts, per_account):
+    """Return {account: [urls]} for accounts that loaded; failures are left out."""
+    from playwright.sync_api import sync_playwright
+
+    found = {}
+    with sync_playwright() as playwright:
+        context = open_browser(playwright, profile)
+        page = context.new_page()
+        try:
+            for account in accounts:
+                try:
+                    page.goto(f"https://x.com/{account}", wait_until="domcontentloaded", timeout=30000)
+                    try:
+                        page.locator("article a[href*='/status/']").first.wait_for(timeout=20000)
+                    except Exception:
+                        if "/login" in page.url or "/i/flow/" in page.url:
+                            raise RuntimeError("login required; run --login") from None
+                        raise
+                    page.wait_for_timeout(1500)  # let the first screen of posts render
+                    links = page.locator("article a[href*='/status/']").evaluate_all(
+                        "nodes => nodes.map(node => node.href)"
+                    )
+                    urls = extract_posts(links, account, per_account)
+                    if not urls:
+                        raise RuntimeError("no post URLs found")
+                    found[account] = urls
+                    print(f"{account}: {len(urls)}")
+                except Exception as exc:
+                    print(f"{account}: skipped ({type(exc).__name__}: {str(exc).splitlines()[0]})")
+                    if "login required" in str(exc):
+                        break
+        finally:
+            context.close()
+    return found
+
+
+def merge(data, found, per_account, now):
+    """New post list: fresh URLs first, previous ones fill in for failed accounts."""
     old = {}
     for item in data.get("posts", []):
         author = item.get("author") if isinstance(item, dict) else None
         url = normalize_post(item.get("url"), author) if author else None
         if url:
             old.setdefault(author.lower(), []).append({**item, "url": url})
-    ids = {k.lower(): v for k, v in (data.get("accounts") or {}).items() if ID_RE.match(str(v))}
-    return old, ids
-
-
-def refresh(output, token, per_account=3, session=None, now=None):
-    """Update output with the newest posts. Returns the number of new posts found."""
-    session = session or requests.Session()
-    now = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
-    old, ids = load_existing(output)
-    names = [name for group in ACCOUNTS.values() for name in group]
-    missing = [name for name in names if name.lower() not in ids]
-    if missing:
-        ids.update(lookup_user_ids(session, token, missing))
-
-    posts, added, limited = [], 0, False
+    stamp = now.isoformat(timespec="seconds")
+    posts = []
     for group, accounts in ACCOUNTS.items():
         for account in accounts:
-            saved = old.get(account.lower(), [])
-            fresh = []
-            if not limited and account.lower() in ids:
-                newest = max((post_id(p["url"]) for p in saved), default=None)
-                try:
-                    fresh = recent_posts(session, token, ids[account.lower()], account, newest)
-                except RateLimited as error:
-                    print("[!] {}: {} - 나머지 계정은 이전 목록을 유지합니다".format(account, error))
-                    limited = True
-                except (OSError, ValueError) as error:
-                    print("[!] {}: 건너뜀 ({})".format(account, type(error).__name__))
-            known = {p["url"] for p in saved}
-            fresh = [dict(p, author=account, group=group, collected_at=now) for p in fresh if p["url"] not in known]
-            added += len(fresh)
-            merged = sorted(fresh + [dict(p, group=group) for p in saved], key=lambda p: post_id(p["url"]), reverse=True)
-            posts.extend(merged[:per_account])
-
-    if not posts:
-        raise RuntimeError("No posts collected; existing output was not changed")
+            previous = {p["url"]: p for p in old.get(account.lower(), [])}
+            if account in found:
+                rows = [previous.get(url) or {"url": url, "author": account, "collected_at": stamp}
+                        for url in found[account]]
+            else:
+                rows = list(previous.values())
+            rows = sorted(({**row, "group": group} for row in rows), key=lambda p: post_id(p["url"]), reverse=True)
+            posts.extend(rows[:per_account])
     posts.sort(key=lambda p: post_id(p["url"]), reverse=True)
+    return {"updated_at": stamp, "posts": posts}
+
+
+def write(output, data):
     output.parent.mkdir(parents=True, exist_ok=True)
     pending = output.with_suffix(".json.tmp")
-    accounts = {name: ids[name.lower()] for name in names if name.lower() in ids}
-    pending.write_text(json.dumps({"updated_at": now, "accounts": accounts, "posts": posts},
-                                  ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    pending.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     pending.replace(output)
-    return added
 
 
-def publish(data_dir, per_account=3):
-    """Dashboard publish hook: a no-op unless X_BEARER_TOKEN is configured."""
-    token = os.environ.get("X_BEARER_TOKEN", "").strip()
-    if not token:
-        return None
-    added = refresh(Path(data_dir) / "x-posts.json", token, per_account)
-    print("[*] X 게시물 새로 {}건".format(added))
-    return added
+def all_accounts():
+    return [account for accounts in ACCOUNTS.values() for account in accounts]
+
+
+def refresh(output, profile, per_account, now=None):
+    now = now or datetime.now(timezone.utc)
+    data = load(output)
+    found = scrape(profile, all_accounts(), per_account)
+    if not found:
+        raise RuntimeError("No posts collected; existing output was not changed")
+    write(output, merge(data, found, per_account, now))
+    print(f"Saved {len(found)} accounts to {output}")
+    return len(found)
+
+
+def push(repo_path, profile, per_account, force=False, now=None):
+    """Refresh x-posts.json in the dashboard clone, then commit and push only that file."""
+    import publish_web_dashboard as pwd
+
+    now = now or datetime.now(timezone.utc)
+    repo = Path(repo_path or pwd.REPO_PATH)
+    if not str(repo_path or pwd.REPO_PATH) or not pwd._validate_publish_repo(repo):
+        print("[-] WEB_DASHBOARD_REPO_PATH is not a usable dashboard clone")
+        return False
+    target = repo / RELATIVE_OUTPUT
+    if not force and not is_due(load(target), now):
+        print("[*] X posts were refreshed recently; skipped")
+        return False
+    # Browse outside the repo lock: a slow page must not hold up the report publisher.
+    found = scrape(profile, all_accounts(), per_account)
+    if not found:
+        print("[-] No posts collected; nothing published")
+        return False
+    with pwd.repo_lock(repo):
+        branch = pwd._run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).strip()
+        # Sync first: the report publisher resets dashboard/data to origin, so an
+        # uncommitted x-posts.json would be lost at its next run.
+        pwd._sync_to_remote_head(repo, branch)
+        write(target, merge(load(target), found, per_account, now))
+        pwd._run_git(["add", RELATIVE_OUTPUT], cwd=repo)
+        if not pwd._has_staged_changes(RELATIVE_OUTPUT, cwd=repo):
+            print("[*] No new X posts")
+            return False
+        pwd._run_git(["commit", "-m", "Update X posts"], cwd=repo)
+        pwd._run_git(["push", "origin", branch], cwd=repo)
+    print(f"[+] Published X posts from {len(found)} accounts")
+    return True
 
 
 def main():
@@ -147,16 +190,29 @@ def main():
 
     common_utils.load_env_file()
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--login", action="store_true", help="open Chromium for interactive X sign-in")
+    parser.add_argument("--push", action="store_true", help="refresh, commit and push x-posts.json in the dashboard clone")
+    parser.add_argument("--force", action="store_true", help="with --push, ignore the minimum refresh interval")
+    parser.add_argument("--profile", type=Path, default=PROFILE)
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--per-account", type=int, default=3)
     args = parser.parse_args()
     if not 1 <= args.per_account <= 5:
         parser.error("--per-account must be between 1 and 5")
-    token = os.environ.get("X_BEARER_TOKEN", "").strip()
-    if not token:
-        parser.error("X_BEARER_TOKEN is not set (.env)")
-    added = refresh(args.output, token, args.per_account)
-    print("Saved to {} (new posts: {})".format(args.output, added))
+    if args.login:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            context = open_browser(playwright, args.profile, minimized=False)
+            page = context.new_page()
+            page.goto("https://x.com/login")
+            input("Sign in in Chromium, then press Enter here to close it: ")
+            context.close()
+        return
+    if args.push:
+        push(None, args.profile, args.per_account, force=args.force)
+        return
+    refresh(args.output, args.profile, args.per_account)
 
 
 if __name__ == "__main__":
