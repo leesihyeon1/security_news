@@ -1,22 +1,33 @@
-# X post URL collector
+# X post collector
 
-This optional local tool opens nine public profiles in a dedicated Chromium
-session and saves only post URLs to the sibling dashboard's `x-posts.json`.
-It does not copy credentials into the repository. It stops on login challenges
-or blocked pages and keeps the last saved URLs for failed accounts.
+The dashboard's X panel shows recent posts from a fixed list of security
+accounts (`ACCOUNTS` in `scripts/collect_x_post_urls.py`) with X's official
+single-post embed. Post URLs come from the official X API v2
+(`GET /2/users/:id/tweets`, excluding reposts and replies).
+
+Why not other routes:
+
+- The profile timeline embed (`twitter-timeline`) is rejected by X with
+  `429 Rate limit exceeded` for anonymous visitors.
+- Opening profile pages with a signed-in browser and reading links is scraping,
+  which X does not permit, and it breaks on login challenges.
+
+## Setup
+
+1. Create an app in the X Developer Console and copy its Bearer Token.
+2. Add `X_BEARER_TOKEN=...` to the local `.env` (never commit it).
+
+The daily dashboard publish then refreshes `dashboard/data/x-posts.json` and
+commits it with the other data files. Without the token the step is skipped and
+the last saved list stays. To run it on its own:
 
 ```powershell
-.venv\Scripts\python.exe -m pip install -r requirements-x-collector.txt
-.venv\Scripts\python.exe -m playwright install chromium
-.venv\Scripts\python.exe scripts\collect_x_post_urls.py --login
 .venv\Scripts\python.exe scripts\collect_x_post_urls.py
 ```
 
-The login step is interactive and uses `~/.boannews-x-profile` as its local
-browser profile. Close other runs before starting a new one. Review the JSON
-diff before committing it to the dashboard repository. Running the collector
-locally does not deploy changes; the dashboard repository must be pushed.
+## Cost and limits
 
-X may restrict scripted profile access. This tool does not bypass rate limits,
-CAPTCHAs, or other access controls. Do not configure unattended recurring runs
-without reviewing X's current terms and operational risk.
+X bills API reads per returned post. Each account asks only for posts newer
+than its newest saved one (`since_id`, at most 5), and user IDs are cached in
+the output file, so a run with no new posts costs little. A 429 stops further
+requests for that run without retrying; the previous posts are kept.
