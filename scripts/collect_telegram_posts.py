@@ -26,6 +26,9 @@ SIGNALS = {
     "랜섬웨어 주장": re.compile(r"ransom|victim|extort|랜섬|인질", re.I),
 }
 MAX_AGE = timedelta(days=7)
+DARKFEED_ALERT = re.compile(r"New Threat Intelligence Alert!\s*(.*?)\s*Tag:\s*(.*?)(?:\s*AI Risk Level:.*)?$", re.S)
+SALE = re.compile(r"for sale|offered|selling|판매", re.I)
+SOURCE_TYPES = {"ransomware_feed": "집계 채널", "ransomlook": "집계 채널", "darkfeed_alert": "위협 정보 채널"}
 
 
 class ChannelPage(HTMLParser):
@@ -101,7 +104,8 @@ def fetch_page(handle):
 def safe_excerpt(value):
     value = re.sub(r"https?://\S+|t\.me/\S+", " ", value)
     value = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[이메일 생략]", value)
-    value = re.sub(r"(?<!\d)(?:\+?\d[\d ()-]{8,}\d)(?!\d)", "[번호 생략]", value)
+    # CVE IDs look like long digit runs; keep them out of the phone-number rule.
+    value = re.sub(r"(?<!\d)(?<!CVE-)(?<!cve-)(?:\+?\d[\d ()-]{8,}\d)(?!\d)", "[번호 생략]", value)
     value = re.sub(r"\s+", " ", value).strip()
     return value[:240].rstrip()
 
@@ -122,24 +126,65 @@ def parse_page(html, channel, now):
             continue
         if not timedelta(0) <= now - published <= MAX_AGE:
             continue
-        raw = " ".join(item["parts"])
-        if channel["kind"] == "ransomware_feed":
-            claim = re.search(r"🥷\s*(.*?)\s*🎯\s*(.*?)(?:\s*🔗|$)", raw, re.S)
-            if not claim:
+        raw = re.sub(r"\s+", " ", " ".join(item["parts"])).strip()
+        kind = channel["kind"]
+        claim_key = None
+        category = None
+        if kind in ("ransomware_feed", "ransomlook"):
+            if kind == "ransomware_feed":
+                claim = re.search(r"🥷\s*(.*?)\s*🎯\s*(.*?)(?:\s*🔗|$)", raw, re.S)
+                actor, victim = (claim.group(1), claim.group(2)) if claim else ("", "")
+            else:
+                claim = re.match(r"(.+?)\s+By\s+(.+?)(?:\s+Ransom post image.*)?$", raw)
+                victim, actor = (claim.group(1), claim.group(2)) if claim else ("", "")
+            if not claim or not actor.strip() or not victim.strip():
                 continue
-            raw = f"{claim.group(1).strip()} · {claim.group(2).strip()}"
-        category = next((label for label, pattern in SIGNALS.items() if pattern.search(raw)), None)
-        if channel["kind"] != "ransomware_feed" and category is None:
-            continue
+            raw = f"{actor.strip()} · {victim.strip()}"
+            # Ransomfeed appends ", <country>"; compare the organisation name only.
+            claim_key = victim_key(victim.rsplit(",", 1)[0] if kind == "ransomware_feed" else victim)
+            category = "랜섬웨어 주장"
+        elif kind == "darkfeed_alert":
+            alert = DARKFEED_ALERT.search(raw)
+            if not alert:
+                continue  # promotions, statistics and CVE notices are not claims
+            title, tag = alert.group(1).strip(), alert.group(2).strip()
+            if tag.lower() == "new threat actor":
+                name = re.search(r"Group Name:\s*(.+)", title)
+                raw, category = f"신규 위협 그룹: {name.group(1).strip() if name else title}", "위협 그룹 동향"
+            else:
+                raw = title
+                category = ("판매·모집" if SALE.search(title) else "유출 주장" if "breach" in tag.lower()
+                            else "랜섬웨어 주장" if "ransom" in tag.lower() else "위협 정보")
+        else:
+            category = next((label for label, pattern in SIGNALS.items() if pattern.search(raw)), None)
+            if category is None:
+                continue
         excerpt = safe_excerpt(raw)
         if not excerpt:
             continue
-        result.append({"url": f"https://t.me/{channel['handle']}/{match.group(2)}",
-                       "channel": channel["handle"], "channel_label": channel["label"],
-                       "published_at": published.isoformat(timespec="seconds"),
-                       "category": category or "랜섬웨어 주장", "excerpt": excerpt,
-                       "source_type": "집계 채널" if channel["kind"] == "ransomware_feed" else "공개 채널"})
+        row = {"url": f"https://t.me/{channel['handle']}/{match.group(2)}",
+               "channel": channel["handle"], "channel_label": channel["label"],
+               "published_at": published.isoformat(timespec="seconds"),
+               "category": category, "excerpt": excerpt,
+               "source_type": SOURCE_TYPES.get(kind, "공개 채널")}
+        if claim_key:
+            row["claim_key"] = claim_key
+        result.append(row)
     return result
+
+
+def victim_key(value):
+    """Same victim across feeds: case, spacing, punctuation and domain endings ignored."""
+    value = re.sub(r"\.(com|net|org|co|io|de|fr|uk|us|ca|au|jp|kr|br|in)(\.[a-z]{2})?$", "", value.strip().lower())
+    return re.sub(r"[^0-9a-z가-힣]+", "", value)
+
+
+def claim_key_of(row):
+    if row.get("claim_key"):
+        return row["claim_key"]
+    if row.get("category") == "랜섬웨어 주장" and " · " in row.get("excerpt", ""):
+        return victim_key(row["excerpt"].split(" · ", 1)[1].rsplit(",", 1)[0])
+    return None
 
 
 def collect(config, now, fetch=fetch_page):
@@ -171,7 +216,17 @@ def merge(existing, found, config, now, per_channel=12):
             continue
         if timedelta(0) <= age <= MAX_AGE:
             fresh.append(row)
-    fresh.sort(key=lambda row: row["published_at"], reverse=True)
+    # Several feeds relay the same leak-site claim; keep its earliest report only.
+    fresh.sort(key=lambda row: row["published_at"])
+    seen, unique = set(), []
+    for row in fresh:
+        key = claim_key_of(row)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(row)
+    fresh = sorted(unique, key=lambda row: row["published_at"], reverse=True)
     if fresh == previous:
         return existing
     return {"updated_at": now.isoformat(timespec="seconds"), "posts": fresh}

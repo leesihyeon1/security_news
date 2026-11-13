@@ -85,3 +85,28 @@ def test_record_health_reports_accounts_failing_for_over_a_day(tmp_path):
 def test_is_due_prefers_the_last_check_over_the_last_change():
     old_change = (NOW - timedelta(days=2)).isoformat()
     assert not xc.is_due({"updated_at": old_change, "checked_at": (NOW - timedelta(minutes=10)).isoformat()}, NOW)
+
+
+def test_post_text_reads_the_signed_out_card_body():
+    card = "메인에 올림\nTroy Hunt\n@troyhunt\n6시간\nHaving this outage\nwith M365 https://t.co/x\n62\n31\n1.9천"
+    assert xc.post_text(card, "troyhunt") == "Having this outage with M365"
+    quoted = "Dark Web Informer\n@DarkWebInformer\n1시간\nLook at this\nOther\n@other\n2시간\nquoted text\n5"
+    assert xc.post_text(quoted, "DarkWebInformer") == "Look at this Other"
+
+
+def test_extract_entries_uses_own_post_links_and_id_time():
+    items = [{"links": ["https://x.com/other/status/5"], "text": "x"},
+             {"links": ["https://x.com/troyhunt/status/2121053107463618816/photo/1"],
+              "text": "Troy Hunt\n@troyhunt\n6시간\nHello"}]
+    [entry] = xc.extract_entries(items, "troyhunt")
+    assert entry == {"url": "https://x.com/troyhunt/status/2121053107463618816", "excerpt": "Hello",
+                     "published_at": "2026-11-13T01:30:42+00:00"}
+
+
+def test_merge_adds_text_to_saved_posts_without_erasing_it():
+    data = {"posts": [{"url": "https://x.com/troyhunt/status/9", "author": "troyhunt", "collected_at": "old"}]}
+    found = {"troyhunt": [{"url": "https://x.com/troyhunt/status/9", "excerpt": "Hi", "published_at": "t"}]}
+    row = xc.merge(data, found, per_account=2, now=NOW)["posts"][0]
+    assert row["excerpt"] == "Hi" and row["collected_at"] == "old"
+    again = xc.merge({"posts": [row]}, {"troyhunt": [{"url": row["url"], "excerpt": ""}]}, per_account=2, now=NOW)
+    assert again["posts"][0]["excerpt"] == "Hi"

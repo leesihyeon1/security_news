@@ -72,3 +72,38 @@ class TelegramCollectorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _page(handle, rows):
+    items = "".join(
+        f'<div class="tgme_widget_message" data-post="{handle}/{i}"><div class="tgme_widget_message_text">{text}</div>'
+        f'<time datetime="{when}"></time></div>' for i, (text, when) in enumerate(rows, 1))
+    return f"<html>{items}</html>"
+
+
+def test_ransomlook_and_darkfeed_formats_and_cross_feed_dedupe():
+    from datetime import datetime, timezone
+    import collect_telegram_posts as tg
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)
+    look = tg.parse_page(_page("Ransomlook", [("cey-tech.com By krybit Ransom post image 🖼️", "2026-11-13T06:29:00+00:00"),
+                                               ("Coeur Mining Inc By incransom Ransom post image", "2026-11-12T10:00:00+00:00")]),
+                         {"handle": "Ransomlook", "label": "Ransomlook", "kind": "ransomlook"}, now)
+    assert [r["excerpt"] for r in look] == ["krybit · cey-tech.com", "incransom · Coeur Mining Inc"]
+    dark = tg.parse_page(_page("DarkfeedNews", [
+        ("🚨 New Threat Intelligence Alert! Dyson Employee Data Package Offered for Sale on Darknet Tag: Data Breach AI Risk Level: 10/10", "2026-11-12T16:25:00+00:00"),
+        ("🚨 New Threat Intelligence Alert! New Threat Actor Group Name: Curious Worm Tag: New Threat Actor", "2026-11-12T10:27:00+00:00"),
+        ("⚠️ New Actively-Exploited Vulnerability • CVE ID: CVE-2026-12345", "2026-11-12T10:00:00+00:00"),
+        ("👤 Don't just track the attacks. Know the attackers.", "2026-11-12T09:00:00+00:00")]),
+        {"handle": "DarkfeedNews", "label": "DARKFEED", "kind": "darkfeed_alert"}, now)
+    assert [(r["category"], r["excerpt"]) for r in dark] == [
+        ("판매·모집", "Dyson Employee Data Package Offered for Sale on Darknet"), ("위협 그룹 동향", "신규 위협 그룹: Curious Worm")]
+    feed = [{"url": "https://t.me/RansomFeedNews/1", "channel": "RansomFeedNews", "category": "랜섬웨어 주장",
+             "excerpt": "incransom · coeur mining inc, USA", "published_at": "2026-11-12T13:45:00+00:00"}]
+    config = [{"handle": h, "label": h, "kind": "x"} for h in ("RansomFeedNews", "Ransomlook")]
+    merged = tg.merge({}, {"RansomFeedNews": feed, "Ransomlook": look}, config, now)
+    assert sorted(r["excerpt"] for r in merged["posts"]) == ["incransom · Coeur Mining Inc", "krybit · cey-tech.com"]
+
+
+def test_cve_ids_are_not_masked_as_phone_numbers():
+    import collect_telegram_posts as tg
+    assert tg.safe_excerpt("CVE-2026-123456 call +1 (555) 123-4567") == "CVE-2026-123456 call [번호 생략]"
