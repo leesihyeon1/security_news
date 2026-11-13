@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import threat_dashboard
 from dashboard_text import public_text
 from live_news import public_url, utc_timestamp
 
@@ -207,6 +208,11 @@ def publish(data_dir, events_path=None, now=None):
     temp = target.with_suffix(".tmp")
     temp.write_text(json.dumps(overview, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     temp.replace(target)
+    # The threat overview is a separate file; its failure must not undo the article aggregates.
+    try:
+        threat_dashboard.publish(data_dir, read_events(events_path), now=now)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("[!] 위협 대시보드 집계 보류: {}".format(type(error).__name__))
     return overview
 
 
