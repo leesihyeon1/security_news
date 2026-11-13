@@ -4,6 +4,16 @@
       "handle": "RansomFeedNews",
       "label": "Ransomfeed News",
       "kind": "ransomware_feed"
+    },
+    {
+      "handle": "Ransomlook",
+      "label": "Ransomlook",
+      "kind": "ransomlook"
+    },
+    {
+      "handle": "DarkfeedNews",
+      "label": "DARKFEED",
+      "kind": "darkfeed_alert"
     }
   ]
 }

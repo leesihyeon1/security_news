@@ -50,6 +50,58 @@ def extract_posts(links, account, limit=2):
     return sorted(found, key=post_id, reverse=True)[:limit]
 
 
+def clean_text(value, limit=280):
+    value = re.sub(r"https?://\S+", " ", value or "")
+    value = re.sub(r"\s+", " ", value).strip()
+    return value if len(value) <= limit else value[:limit - 1].rstrip() + "…"
+
+
+X_EPOCH_MS = 1288834974657
+COUNT_LINE = re.compile(r"^[\d.,]+\s*[KMB천만억]?$", re.I)
+
+
+def posted_at(url):
+    """X post IDs carry their creation time (snowflake), so no page date parsing is needed."""
+    stamp = ((post_id(url) >> 22) + X_EPOCH_MS) / 1000
+    return datetime.fromtimestamp(stamp, timezone.utc).isoformat(timespec="seconds")
+
+
+def post_text(article_text, account):
+    """Body of a signed-out profile card: lines after "@handle" and its date, minus counters."""
+    lines = [line.strip() for line in (article_text or "").splitlines() if line.strip()]
+    handle = "@" + account.lower()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.lower() == handle) + 2  # skip the date
+    except StopIteration:
+        return ""
+    body = []
+    for line in lines[start:]:
+        if line.startswith("@") and " " not in line:
+            break  # a quoted post's author line: stop before its text
+        body.append(line)
+    while body and COUNT_LINE.match(body[-1]):
+        body.pop()
+    return clean_text(" ".join(body))
+
+
+def extract_entries(items, account, limit=3):
+    """Posts by the account itself (reposts of others excluded), newest first, with text and time."""
+    entries = {}
+    for item in items:
+        url = next((u for u in map(lambda link: normalize_post(link, account), item.get("links") or []) if u), None)
+        if url and url not in entries:
+            entries[url] = {"url": url, "excerpt": post_text(item.get("text"), account),
+                            "published_at": posted_at(url)}
+    return sorted(entries.values(), key=lambda e: post_id(e["url"]), reverse=True)[:limit]
+
+
+# The signed-out profile page carries no <time> or test ids; read links and visible text.
+ARTICLES_JS = """nodes => nodes.map(article => ({
+  links: [...article.querySelectorAll("a[href*='/status/']")].map(a => a.href),
+  text: article.innerText
+}))"""
+
+
 def load(output):
     if not output.exists():
         return {}
@@ -77,7 +129,7 @@ def open_browser(playwright, profile, hidden=True):
 
 
 def scrape(profile, accounts, per_account):
-    """Return {account: [urls]} for accounts that loaded; failures are left out."""
+    """Return {account: [post entries]} for accounts that loaded; failures are left out."""
     from playwright.sync_api import sync_playwright
 
     found = {}
@@ -95,10 +147,8 @@ def scrape(profile, accounts, per_account):
                             raise RuntimeError("login required; run --login") from None
                         raise
                     page.wait_for_timeout(1500)  # let the first screen of posts render
-                    links = page.locator("article a[href*='/status/']").evaluate_all(
-                        "nodes => nodes.map(node => node.href)"
-                    )
-                    urls = extract_posts(links, account, per_account)
+                    items = page.locator("article").evaluate_all(ARTICLES_JS)
+                    urls = extract_entries(items, account, per_account)
                     if not urls:
                         raise RuntimeError("no post URLs found")
                     found[account] = urls
@@ -126,8 +176,12 @@ def merge(data, found, per_account, now):
         for account in accounts:
             previous = {p["url"]: p for p in old.get(account.lower(), [])}
             if account in found:
-                rows = [previous.get(url) or {"url": url, "author": account, "collected_at": stamp}
-                        for url in found[account]]
+                rows = []
+                for entry in found[account]:
+                    entry = {"url": entry} if isinstance(entry, str) else entry
+                    base = previous.get(entry["url"]) or {"author": account, "collected_at": stamp}
+                    # Fresh text/time replace the saved ones; empty values never erase them.
+                    rows.append({**base, **{k: v for k, v in entry.items() if v}, "author": account})
             else:
                 rows = list(previous.values())
             rows = sorted(({**row, "group": group} for row in rows), key=lambda p: post_id(p["url"]), reverse=True)

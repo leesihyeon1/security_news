@@ -9,7 +9,13 @@ marked as an unverified claim and links to the original Telegram post.
 checking that it is current and relevant. Use `kind: "claims"` for a direct
 source: only posts with leak, breach, ransom, sale, or recruitment terms are
 selected. `kind: "ransomware_feed"` parses the Ransomfeed actor and claimed
-victim fields. Only posts from the last seven days are exported. The collector
+victim fields. `kind: "ransomlook"` parses Ransomlook's "<victim> By <group>"
+posts. `kind: "darkfeed_alert"` keeps only DARKFEED's "New Threat Intelligence
+Alert!" posts (breach, sale and new-group alerts) and drops its promotions,
+statistics and CVE notices. The same ransomware victim relayed by several feeds
+is shown once, from its earliest report. Direct threat-actor channels are not
+listed: republishing their extortion posts on a public page amplifies them and
+their "samples" are often stolen personal data. Only posts from the last seven days are exported. The collector
 reads `https://t.me/s/<handle>` without an account or bot token; it does not
 download media, samples, or linked files. Telegram may change its public page
 markup, so monitor the collector's run log and the dashboard's stale notice.
