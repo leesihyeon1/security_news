@@ -1,0 +1,9 @@
+{
+  "channels": [
+    {
+      "handle": "RansomFeedNews",
+      "label": "Ransomfeed News",
+      "kind": "ransomware_feed"
+    }
+  ]
+}
