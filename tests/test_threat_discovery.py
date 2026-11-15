@@ -64,6 +64,8 @@ def test_reviewer_rejection_and_code_rules_override_the_final_answer():
     rejected = d.discover(EVENTS, model(review={"claims": [], "single_event": True, "new_or_escalating": False,
                                                  "problems": ["제품 홍보"], "recommendation": "reject"}), now=NOW, model="m")
     assert rejected["findings"][0]["verdict"] == "rejected"
+    reason = rejected["findings"][0]["reason"]
+    assert reason.startswith("코드 검증에서 기각:") and "회고·홍보·정기 공지로 판단" in reason
     two_sources = [news(1, "a"), news(2, "b"), news(3, "a")]
     assert d.discover(two_sources, model(), now=NOW, model="m")["findings"][0]["verdict"] == "watch"
 
