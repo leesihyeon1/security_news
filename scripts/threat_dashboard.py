@@ -101,12 +101,8 @@ def _top(counter, limit=TOP_NAMES):
     return {key for key, _ in counter.most_common(limit)}
 
 
-def build(events, now=None, days=180):
-    now = now or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    end = now.astimezone(KST).date()
-    start = end - timedelta(days=days - 1)
+def scan(events, now):
+    """One pass over the events: unique news articles by URL, CVEs by ID, and per-source collection times."""
     articles, cves, sources = {}, {}, {}
     seen_ids = set()
 
@@ -151,6 +147,7 @@ def build(events, now=None, days=180):
         cluster = event.get("cluster") if isinstance(event.get("cluster"), dict) else {}
         articles[url] = {
             "collected": collected, "day": day, "title": title[:300], "url": url, "source": source,
+            "summary": public_text(str(event.get("ai_summary") or event.get("summary") or ""))[:600],
             "category": str(event.get("category") or ""), "status": status, "kev": bool(event.get("kev")),
             "severity": severity_of(event), "actors": names(event.get("threat_actor")),
             "malware": names(event.get("malware_family")),
@@ -161,6 +158,16 @@ def build(events, now=None, days=180):
             "corroborated": len(cluster.get("corroborating_sources") or []),
         }
 
+    return articles, cves, sources
+
+
+def build(events, now=None, days=180):
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    end = now.astimezone(KST).date()
+    start = end - timedelta(days=days - 1)
+    articles, cves, sources = scan(events, now)
     in_window = [a for a in articles.values() if start <= a["day"] <= end]
     threats = [a for a in in_window if a["category"] in THREAT_CATEGORIES]
     display, totals = {}, defaultdict(Counter)
