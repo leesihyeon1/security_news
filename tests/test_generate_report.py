@@ -328,3 +328,19 @@ def test_public_narrative_rejects_repeated_generic_action(monkeypatch):
 def test_public_narrative_distinguishes_collected_records_from_incidents():
     narrative = "[총평]\n전체 370건의 이슈가 확인됐습니다.\n[핵심 위협 TOP 3]\n1. 취약점이 악용되고 있습니다.\n[권고 조치]\n1. 영향 자산의 패치를 적용해야 합니다."
     assert "수집 건수" in gr._public_narrative_problem(narrative, 1)
+
+
+def test_scheduled_0830_run_reports_the_window_that_closed_that_morning():
+    # daily_report 작업은 KST 08:30에 돈다. 기본 마감(08시)이면 그날 아침에 닫힌 구간이어야 한다.
+    now = datetime(2026, 11, 14, 23, 30)  # KST 11-15 08:30
+    since, until = gr.report_window(1, now_utc=now)
+    assert until == datetime(2026, 11, 14, 23, 0)  # KST 11-15 08:00
+    assert since == datetime(2026, 11, 13, 23, 0)
+    assert gr.window_lag_hours(until, now) == 0.5
+
+
+def test_cutoff_later_than_the_run_is_reported_as_a_stale_window(monkeypatch):
+    monkeypatch.setattr(gr, "REPORT_CUTOFF_HOUR_KST", 9)
+    now = datetime(2026, 11, 14, 23, 30)  # KST 08:30, 마감 09:00은 아직 지나지 않았다
+    _, until = gr.report_window(1, now_utc=now)
+    assert gr.window_lag_hours(until, now) > gr.STALE_WINDOW_WARNING_HOURS

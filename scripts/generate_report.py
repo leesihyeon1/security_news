@@ -142,7 +142,11 @@ FEEDBACK_USEFUL_MIN_CLICKS = 3
 SEARCH_INTEREST_WINDOW_DAYS = 7  # 이보다 오래된 검색어는 "요즘 관심사"로 보기엔 낡음
 SEARCH_INTEREST_MIN_SEARCHES = 2  # 한 번만 입력된 검색어는 우연한 호기심일 수 있어 제외
 
-REPORT_CUTOFF_HOUR_KST = int(os.environ.get("REPORT_CUTOFF_HOUR_KST", "9"))
+# 마감 시각은 daily_report 작업 시작 시각(08:30)보다 일러야 한다. 늦으면 실행 시점에 오늘 구간이 아직
+# 닫히지 않아 하루 전 구간이 선택된다(실측 2026-11-15: 마감 09:00·작업 08:30 → 매일 하루 늦은 요약).
+REPORT_CUTOFF_HOUR_KST = int(os.environ.get("REPORT_CUTOFF_HOUR_KST", "8"))
+# 일간 구간이 닫힌 지 이 시간이 넘어 실행되면 작업 시각과 마감 시각이 어긋난 것으로 보고 경고한다.
+STALE_WINDOW_WARNING_HOURS = 12
 CVE_LABEL_MAX_SHOWN = 3   # 카드 제목에 늘어놓을 CVE 개수
 KST_OFFSET = timedelta(hours=9)
 # 수집은 구간 안이지만 발행일이 이보다 더 오래된 기사는 리포트에서 뺀다.
@@ -177,6 +181,11 @@ def report_window(days, now_utc=None):
     end_utc = cutoff_kst - KST_OFFSET
     since_utc = end_utc - timedelta(days=days)
     return since_utc, end_utc
+
+
+def window_lag_hours(end_utc, now_utc=None):
+    """구간이 닫힌 뒤 지금까지 지난 시간. 정기 실행이면 1시간 안팎이어야 한다."""
+    return ((now_utc or datetime.utcnow()) - end_utc).total_seconds() / 3600
 
 
 def event_score(event):
@@ -2879,6 +2888,10 @@ def main():
         title = "주간 보안 인텔리전스 리포트"
 
     since, now = report_window(days)
+    lag = window_lag_hours(now)
+    if args.period == "daily" and lag > STALE_WINDOW_WARNING_HOURS:
+        print("[!] 집계 구간이 {:.0f}시간 전에 닫혔습니다 — 작업 시작 시각이 마감 시각(KST {}시)보다 이르지 않은지 확인하세요."
+              .format(lag, REPORT_CUTOFF_HOUR_KST))
     period_label = "{} ~ {} (UTC)".format(since.strftime("%Y-%m-%d %H:%M"), now.strftime("%Y-%m-%d %H:%M"))
 
     events = load_events_between(since, now)
