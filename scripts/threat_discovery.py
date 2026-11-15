@@ -325,6 +325,24 @@ def settle(facts, record):
     }
 
 
+def explained(result):
+    """When the reviewer or the code rules lowered the verdict, say so first.
+
+    The model writes its reason before the rules run, so on its own the reason can contradict
+    the published verdict (e.g. "확정 판정한다" on a rejected finding).
+    """
+    stages = result.get("stages")
+    if not stages or result["verdict"] == "confirmed":
+        return result
+    failed = [check["note"] for check in stages["checks"] if not check["passed"]]
+    if failed:
+        lead = "코드 검증에서 " + ("기각" if result["verdict"] == "rejected" else "관찰로 하향") + ": " + "; ".join(failed)
+    else:
+        lead = "검토자가 근거 보강이 필요하다고 판단해 관찰로 분류"
+    original = result.get("reason") or ""
+    return {**result, "reason": lead + ". (AI 확정 단계 의견: " + original + ")" if original else lead + "."}
+
+
 def public_facts(facts, evidence):
     techniques = [{"id": t, "label": td.TECHNIQUES.get(t, "")} for t in facts["techniques"]]
     return {"signals": facts["signals"], "trend": facts["trend"], "articles": facts["articles"],
@@ -367,7 +385,7 @@ def discover(events, generate, now=None, cache=None, model=""):
             result = {"verdict": "unreviewed", "confidence": "low", "event_type": "기타", "title": facts["lead"],
                       "summary": "", "why_now": "", "who_is_affected": "", "reason": "AI 검토를 수행하지 못해 통계 신호만 표시합니다.",
                       "actions": [], "detection": [], "stages": None, "cited": []}
-        findings.append({"id": key, **result, **public_facts(facts, evidence)})
+        findings.append({"id": key, **explained(result), **public_facts(facts, evidence)})
     order = {"confirmed": 0, "watch": 1, "unreviewed": 2, "rejected": 3}
     findings.sort(key=lambda f: (order[f["verdict"]], -f["active_reports"], -f["sources"]))
     counts = Counter(f["verdict"] for f in findings)
