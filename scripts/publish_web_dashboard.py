@@ -33,6 +33,7 @@ import common_utils
 import event_calendar
 import live_news
 import featured_sources
+import github_advisory_feed
 import incident_archive
 import intelligence_dashboard
 from dashboard_text import event_summary, public_text
@@ -385,6 +386,10 @@ def _write_and_commit(repo, payload, period, date_stamp, data_dir):
         featured_sources.publish(data_dir)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print("[!] 보안 블로그 목록 발행 보류: {}".format(type(error).__name__))
+    try:
+        github_advisory_feed.publish(data_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("[!] GitHub Advisory 목록 발행 보류: {}".format(type(error).__name__))
     _rebuild_issue_history(data_dir)
     calendar_path = data_dir / "calendar-events.json"
     with calendar_path.open("w", encoding="utf-8") as file:
