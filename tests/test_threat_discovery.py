@@ -28,7 +28,7 @@ def model(final=None, review=None, hypothesis=None):
                                   {"text": "WordPress 사이트가 이용된다.", "refs": ["A3"]},
                                   {"text": "근거 없는 주장.", "refs": ["A99"]}]},
         review or {"claims": [{"index": 0, "supported": "yes", "reason": "ok"}, {"index": 1, "supported": "yes", "reason": "ok"}],
-                   "single_event": True, "new_or_escalating": True, "problems": [], "recommendation": "confirm"},
+                   "single_event": True, "new_or_escalating": True, "material_uncertainty": False, "problems": [], "recommendation": "confirm"},
         final or {"verdict": "confirmed", "confidence": "high", "title": "Gootloader 유포 재개", "summary": "요약.",
                   "why_now": "지금.", "who_is_affected": "WordPress 운영 조직.", "actions": ["CVE-2026-11111 패치"],
                   "detection": [], "reason": "근거 충분."},
@@ -65,7 +65,7 @@ def test_reviewer_rejection_and_code_rules_override_the_final_answer():
                                                  "problems": ["제품 홍보"], "recommendation": "reject"}), now=NOW, model="m")
     assert rejected["findings"][0]["verdict"] == "rejected"
     reason = rejected["findings"][0]["reason"]
-    assert reason.startswith("코드 검증에서 기각:") and "회고·홍보·정기 공지로 판단" in reason
+    assert reason.startswith("코드 검증에서 기각:") and "신규 또는 확대 여부를 확인하지 못함" in reason
     two_sources = [news(1, "a"), news(2, "b"), news(3, "a")]
     assert d.discover(two_sources, model(), now=NOW, model="m")["findings"][0]["verdict"] == "watch"
 
@@ -74,7 +74,7 @@ def test_text_naming_a_cve_absent_from_the_evidence_is_dropped():
     final = {"verdict": "confirmed", "confidence": "high", "title": "t", "summary": "CVE-2026-99999도 악용된다.", "why_now": "지금.",
              "who_is_affected": "x", "actions": ["CVE-2026-99999 패치", "플러그인 점검"], "detection": [], "reason": "r"}
     finding = d.discover(EVENTS, model(final=final), now=NOW, model="m")["findings"][0]
-    assert finding["verdict"] == "watch" and finding["summary"] == "" and finding["actions"] == ["플러그인 점검"]
+    assert finding["verdict"] == "watch" and finding["summary"] == "" and finding["actions"] == []
     assert "CVE-2026-99999" not in json.dumps({k: finding[k] for k in ("summary", "actions", "detection")})
 
 
@@ -94,3 +94,47 @@ def test_steady_topics_and_single_source_bursts_are_not_candidates():
               for n in range(1, 20)] + [news(n, "abc"[n % 3], **quiet) for n in range(21, 25)]
     assert d.discover(steady, None, now=NOW)["findings"] == []
     assert d.discover([news(1, "a"), news(2, "a"), news(3, "a")], None, now=NOW)["findings"] == []
+
+
+def test_string_false_cannot_confirm_an_event_or_publish_mixed_event_guidance():
+    review = {"claims": [{"index": 0, "supported": "yes"}, {"index": 1, "supported": "yes"}],
+              "single_event": "false", "new_or_escalating": "false", "material_uncertainty": False,
+              "problems": [], "recommendation": "confirm"}
+    finding = d.discover(EVENTS, model(review=review), now=NOW)["findings"][0]
+    assert finding["verdict"] == "watch" and finding["actions"] == []
+
+
+def test_guidance_requires_real_excerpt_and_valid_reference():
+    evidence = [{"title": "Update the affected plugin", "summary": "Install the vendor security update."}]
+    good = {"text": "영향 플러그인 보안 업데이트 적용", "refs": ["A1"], "quote": "Install the vendor security update."}
+    assert d.grounded_items([good], evidence, 4) == [good]
+    assert d.grounded_items(["패치", {**good, "refs": ["A99"]}, {**good, "quote": "Disable all services immediately."}], evidence, 4) == []
+
+
+def test_unknown_cve_in_title_is_removed_and_downgraded():
+    finding = d.discover(EVENTS, model(final={"verdict": "confirmed", "title": "CVE-2026-99999 악용"}), now=NOW)["findings"][0]
+    assert finding["verdict"] == "watch" and "99999" not in finding["title"]
+
+
+def test_cache_changes_when_summary_or_reference_order_changes():
+    articles, _, _ = d.td.scan(EVENTS, NOW)
+    [facts], _ = d.candidates(list(articles.values()), NOW.astimezone(d.td.KST).date())
+    original = d.signature(facts, "m")
+    facts["evidence"].reverse()
+    assert d.signature(facts, "m") != original
+    original = d.signature(facts, "m")
+    facts["evidence"][0]["summary"] = "Corrected article summary"
+    assert d.signature(facts, "m") != original
+
+
+def test_small_subset_does_not_merge_with_a_broad_product_topic():
+    broad = {"articles": [{"url": str(i)} for i in range(10)]}
+    narrow = {"articles": [{"url": str(i)} for i in range(3)]}
+    assert len(d.merge_signals([broad, narrow])) == 2
+
+
+def test_uncertainty_prevents_confirmation_even_when_final_model_confirms():
+    review = {"claims": [{"index": 0, "supported": "yes"}, {"index": 1, "supported": "yes"}],
+              "single_event": True, "new_or_escalating": True, "material_uncertainty": True,
+              "problems": ["영향 버전 상충"], "recommendation": "confirm"}
+    assert d.discover(EVENTS, model(review=review), now=NOW)["findings"][0]["verdict"] == "watch"
