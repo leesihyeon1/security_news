@@ -167,7 +167,9 @@ def test_final_coverage_uses_actual_read_sources_and_reviewed_material():
              "steps": [{"track": "산출물 점검", "text": "목표를 세울 때 선언한 성공기준 3개 중 3개를 냈습니다."}]}
     analyst_workflow.finalize(block, {"criteria": ["external_reports", "blocklist", "hunting_query"]})
     assert block["coverage"]["done"] == []
-    assert len(block["coverage"]["missing"]) == 3
+    # 지표가 하나도 없는 기록이라 차단 목록은 "미달"이 아니라 "해당 없음"이다.
+    assert [item["key"] for item in block["coverage"]["missing"]] == ["external_reports", "hunting_query"]
+    assert [item["key"] for item in block["coverage"]["unavailable"]] == ["blocklist"]
     assert not any("3개 중 3개" in s["text"] for s in block["steps"])
     block["primary"] = {"sources": [{"url": "https://vendor.test/research", "chars": 1000}]}
     assert playbook.coverage(block, ["external_reports"])["done"]
@@ -297,3 +299,57 @@ def test_historical_question_paths_require_real_lookup_and_exact_question(monkey
     mapping["question_lookups"][0]["lookups"][0]["key"] = "web"
     with pytest.raises(ValueError, match="not executed"):
         refresh_analysis_workflow.attach_question_paths(record, mapping)
+
+
+def _synth_with_plan(monkeypatch, step, article):
+    monkeypatch.setattr(response_synth.common_utils, "environment_brief", lambda: "")
+    monkeypatch.setattr(response_synth.common_utils, "llm_generate",
+                        lambda *a, **k: json.dumps({"plan": [step], "headline": "검토", "verdict": "부분 확인"}))
+    return response_synth.synthesize("Gootloader", "analysis", {}, {"route": {"label": "malware"}}, article=article)
+
+
+def test_service_named_in_source_counts_as_grounded_in_a_plan(monkeypatch):
+    """실측(Gootloader 재분석): 원문 "ip-api/Steam Community"를 모델이 도메인으로 적자
+    유일한 조치가 통째로 버려져 "대응 계획 없음"이 됐다."""
+    step = complete_plan(check="프록시 로그에서 ip-api.com·steamcommunity.com 조회 이력을 대조")
+    result = _synth_with_plan(monkeypatch, step, "CastleRAT queries ip-api/Steam Community to find its C2.")
+    assert len(result["plan"]) == 1
+    assert "ip-api.com" in result["plan"][0]["check"]
+    assert not any("가렸습니다" in gap for gap in result["plan"][0]["review_gaps"])
+
+
+def test_ungrounded_value_is_masked_and_the_hunting_step_kept(monkeypatch):
+    step = complete_plan(check="프록시 로그에서 evil-gate.example 접속 이력을 대조")
+    result = _synth_with_plan(monkeypatch, step, "Gootloader spreads through compromised WordPress sites.")
+    assert len(result["plan"]) == 1
+    assert "evil-gate.example" not in json.dumps(result["plan"], ensure_ascii=False)
+    assert response_synth.UNGROUNDED_MARK in result["plan"][0]["check"]
+    assert any("가렸습니다" in gap for gap in result["plan"][0]["review_gaps"])
+
+
+def test_step_that_blocks_an_ungrounded_value_is_still_dropped(monkeypatch):
+    step = complete_plan(action="evil-gate.example 도메인 차단")
+    result = _synth_with_plan(monkeypatch, step, "Gootloader spreads through compromised WordPress sites.")
+    assert result["plan"] == []
+
+
+def test_criteria_without_any_input_are_not_counted_as_missed():
+    block = {"primary": {"sources": [{"url": "https://www.justice.gov/x", "chars": 900}]}}
+    result = playbook.coverage(block, ["external_reports", "blocklist", "dynamic_analysis",
+                                       "sample_source", "patch_priority", "local_commands"])
+    assert [item["key"] for item in result["done"]] == ["external_reports"]
+    assert [item["key"] for item in result["missing"]] == ["local_commands"]
+    assert [item["key"] for item in result["unavailable"]] == [
+        "blocklist", "dynamic_analysis", "sample_source", "patch_priority"]
+    lines = playbook.coverage_steps(result)
+    assert lines[0] == "목표를 세울 때 선언한 성공기준 2개 중 1개를 냈습니다(입력이 없어 낼 수 없던 4개 제외)."
+    assert "· 해당 없음: 동적 분석으로 확정한 행위 — 원문·1차 자료에 조회할 파일 해시가 없음." in lines
+
+
+def test_criteria_with_inputs_but_no_output_stay_missed():
+    block = {"indicator_assessments": [{"type": "sha256", "value": "a" * 64}, {"type": "domain", "value": "x.test"}],
+             "route": {"cves": ["CVE-2026-0001"]}}
+    result = playbook.coverage(block, ["blocklist", "dynamic_analysis", "sample_source", "patch_priority"])
+    assert [item["key"] for item in result["missing"]] == [
+        "blocklist", "dynamic_analysis", "sample_source", "patch_priority"]
+    assert "unavailable" not in result

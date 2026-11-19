@@ -1664,7 +1664,13 @@ def _merge_coverage(blocks):
     missing_keys = {item.get("key") for item in missing if isinstance(item, dict)}
     done = [item for item in _merge_list([item for cover in covers for item in cover.get("done") or []])
             if not (isinstance(item, dict) and item.get("key") in missing_keys)]
-    return {"done": done, "missing": missing}
+    seen = missing_keys | {item.get("key") for item in done if isinstance(item, dict)}
+    unavailable = [item for item in _merge_list([item for cover in covers for item in cover.get("unavailable") or []])
+                   if not (isinstance(item, dict) and item.get("key") in seen)]
+    merged = {"done": done, "missing": missing}
+    if unavailable:
+        merged["unavailable"] = unavailable
+    return merged
 
 
 def _merge_quality(blocks):

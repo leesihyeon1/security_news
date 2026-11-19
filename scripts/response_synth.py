@@ -450,6 +450,40 @@ def _invented(text, corpus):
     return bad
 
 
+# 대응 조치에서 근거 없는 값을 다루는 방식. 예전에는 값 하나만 근거가 없어도 조치를
+# 통째로 버렸다 — Gootloader 재분석(2026-11-19)에서 원문이 "ip-api/Steam Community"라고
+# 쓴 것을 모델이 ip-api.com·steamcommunity.com으로 적자 유일한 조치가 사라져 "대응 계획
+# 없음"이 됐다. 이름으로 원문에 나온 서비스 도메인은 근거로 인정하고, 그 밖의 값은 가린
+# 채 조치를 남긴다. 근거 없는 값을 막으라는 조치만 예전처럼 버린다.
+DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,18}$", re.I)
+MIN_NAMED_LABEL = 5
+UNGROUNDED_MARK = "[근거 미확인 값]"
+BLOCK_ACTION_RE = re.compile(r"차단|블록|block|deny|sinkhole|싱크홀", re.I)
+
+
+def _named_in_source(value, corpus):
+    """도메인의 이름 부분(ip-api, steamcommunity)이 원문에 단어로 나왔는가."""
+    value = str(value or "").lower().strip(".")
+    if not DOMAIN_RE.match(value):
+        return False
+    label = value.split(".")[-2] if value.count(".") >= 1 else ""
+    if len(label) < MIN_NAMED_LABEL:
+        return False
+    squeezed = re.sub(r"[\s_]+", "", corpus)
+    return label in corpus or label.replace("-", "") in squeezed
+
+
+def _plan_ungrounded(fields, corpus):
+    return [value for value in _invented(" ".join(fields.values()), corpus)
+            if not _named_in_source(value, corpus)]
+
+
+def _mask(text, values):
+    for value in sorted(set(values), key=len, reverse=True):
+        text = re.sub(re.escape(value), UNGROUNDED_MARK, text, flags=re.I)
+    return text
+
+
 def _clean_list(values, corpus, dropped):
     out = []
     for value in values or []:
@@ -934,10 +968,20 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
             continue
         fields = {key: " ".join(str(item.get(key) or "").split())[:600]
                   for key in ("action", "why", "when", *analyst_workflow.PLAN_FIELDS)}
-        bad = _invented(" ".join(fields.values()), corpus)
+        bad = _plan_ungrounded(fields, corpus)
+        masked = []
         if bad:
-            dropped.append("근거 없는 값({}) — {}".format(", ".join(bad[:2]), action[:50]))
-            continue
+            # 근거 없는 값을 막으라는 문장이 어느 칸(조치·완료 기준 등)에든 있으면 버린다.
+            blocking = [value for value in bad for text in fields.values()
+                        if value.lower() in text.lower() and BLOCK_ACTION_RE.search(text)]
+            if blocking:
+                dropped.append("근거 없는 값을 막으라는 조치({}) — {}".format(
+                    ", ".join(list(dict.fromkeys(blocking))[:2]), action[:50]))
+                continue
+            fields = {key: _mask(value, bad) for key, value in fields.items()}
+            action = fields["action"]
+            masked = bad
+            dropped.append("근거 없는 값 가림({}) — {}".format(", ".join(bad[:2]), action[:50]))
         blocked, doubtful, others = _block_review(action, never_block, unconfirmed)
         if blocked and not doubtful and not others:
             # 막으면 안 되는 값만 막으라는 조치 — 실행하면 정상 대상을 끊는다.
@@ -945,6 +989,10 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
                 ", ".join(blocked[:2]), action[:40]))
             continue
         fields["review_gaps"] = analyst_workflow.plan_gaps(fields)
+        if masked:
+            fields["review_gaps"].append(
+                "근거 미확인 값 {}개를 가렸습니다 — 원문·조회에서 확인한 뒤에만 조회·차단에 씁니다".format(
+                    len(set(masked))))
         if blocked:
             fields["review_gaps"].append(
                 "차단 금지 지표 포함({}) — 정찰 대상·비공인 주소 등이라 차단 목록에서 뺀다".format(
