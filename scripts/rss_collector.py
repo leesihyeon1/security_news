@@ -869,6 +869,15 @@ def main():
                 except Exception as health_error:
                     print("[-] 피드 상태 기록 실패({}): {}".format(feed["name"], health_error))
 
+    if args.all and not args.dry_run:
+        # 취약점 속보는 이번 회차에 새로 들어온 기사까지 보고 고른다 — 그래서 수집 뒤에 갱신한다.
+        # 새 기사가 없어도 갱신해야 48시간이 지난 항목이 내려간다.
+        try:
+            import cve_breaking
+            cve_breaking.refresh()
+        except Exception as error:
+            print("[-] 취약점 속보 갱신 건너뜀: {}".format(type(error).__name__))
+
     if args.dry_run or not results:
         return
 
