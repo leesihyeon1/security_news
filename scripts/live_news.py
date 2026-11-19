@@ -74,10 +74,22 @@ def utc_timestamp(value, source=""):
         return ""
 
 
+# 최신 기사 피드에서만 뺄 출처별 분류. 수집·보고서에는 그대로 남는다.
+# 실측(2026-11-06~11-19): 최신 기사 1,530건 중 제품행사·기타 358건의 65%(233건)가 이 두
+# 매체에서 나왔고, 데일리시큐는 기사의 43%가 제품행사였다. RCE 같은 대응 기사가 이런
+# 글에 밀려 첫 페이지에서 빨리 사라졌다.
+LATEST_EXCLUDED_CATEGORIES = {
+    "boannews": {"제품행사", "기타"},
+    "dailysecu": {"제품행사", "기타"},
+}
+
+
 def public_article(event):
     import common_utils
 
     source = event.get("source") or ""
+    if (event.get("category") or "") in LATEST_EXCLUDED_CATEGORIES.get(source, ()):
+        return None
     url = public_url(event.get("url"))
     title = public_text(str(event.get("title") or "")).strip()
     collected = utc_timestamp(event.get("fetched_at"))

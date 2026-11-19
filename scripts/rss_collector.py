@@ -129,16 +129,24 @@ FEED_ROOT_TAGS = ("rss", "feed", "channel", "RDF")
 NOT_FEED_SNIPPET_CHARS = 160
 
 
+def _strip_suffix(title, suffix):
+    """집계 피드(구글 뉴스)는 제목 끝에 " - 매체명"을 붙인다. 원래 제목으로 되돌린다."""
+    if suffix and title.endswith(suffix):
+        return title[:-len(suffix)].rstrip()
+    return title
+
+
 def fetch_feed_items(feed):
     resp = requests.get(feed["rss_url"], headers=REQUEST_HEADERS, timeout=20)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.content, "xml")
+    suffix = feed.get("strip_title_suffix") or ""
 
     items = []
     for item in soup.find_all("item"):
         link = item_text(item, "link")
         guid = item_text(item, "guid")
-        title = common_utils.clean_text(item_text(item, "title"))
+        title = _strip_suffix(common_utils.clean_text(item_text(item, "title")), suffix)
         if not (link or guid) or not title:
             continue
         items.append(

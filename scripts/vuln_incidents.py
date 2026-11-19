@@ -45,7 +45,7 @@ METRIC_RE = re.compile(r"\b(AC|AT|PR|UI|S|C|I|A|VC|VI|VA):([A-Z])\b")
 FEATURE_HINT_RE = re.compile(
     r"\b(?:when|if|only if|where)\b[^.]{0,80}\b(?:is |are )?(?:enabled|configured|exposed|in use|turned on)\b"
     r"|설정된 경우|활성화된 경우|사용하는 경우", re.I)
-VENDOR_SOURCES = {"cisa_kev", "msrc", "cisco_psirt", "fortinet_psirt", "paloalto_psirt", "kisa"}
+VENDOR_SOURCES = {"cisa_kev", "msrc", "cisco_psirt", "fortinet_psirt", "paloalto_psirt", "kisa", "ivanti_psirt"}
 
 
 def _now():
