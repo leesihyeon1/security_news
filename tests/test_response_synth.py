@@ -12,9 +12,54 @@ def test_question_status_keeps_only_questions_actually_asked():
         {"question": "지어낸 질문", "status": "answered", "answer": "x"},
     ]}
     out = rs.question_status(data, questions, corpus="확인됨")
-    assert len(out) == 1
-    assert out[0]["question"] == "유포지가 살아있는가"
+    assert [row["question"] for row in out] == questions  # 지어낸 질문은 버린다
     assert out[0]["status"] == "open"  # An answer without cited evidence is incomplete.
+    assert "unjudged" not in out[0]
+    assert out[1] == {"question": "표적이 누구인가", "status": "open", "answer": "", "unjudged": True}
+
+
+QS = ["1단계 · 변조된 웹사이트로 방문자를 유도했다: 원문과 공개 보고서·샘플이 제시하는 도구·지표는 무엇인가",
+      "C2 도메인은 무엇인가?", "압수된 도메인 목록은 공개됐는가"]
+
+
+def test_question_status_matches_by_number():
+    data = {"question_status": [
+        {"id": "Q2", "status": "partial", "answer": "x.example", "evidence": "x.example 관측"},
+        {"id": "Q1", "status": "open", "answer": "샘플 없음"},
+        {"id": "Q9", "status": "answered", "answer": "범위 밖"},
+    ]}
+    out = rs.question_status(data, QS, corpus="x.example 관측")
+    assert [row["question"] for row in out] == QS  # 원래 질문 문장·순서로 저장
+    assert [row["status"] for row in out] == ["open", "partial", "open"]
+    assert out[1]["answer"] == "x.example"
+    assert out[2].get("unjudged") is True and "unjudged" not in out[0]
+
+
+def test_question_status_accepts_lightly_rewritten_question_text():
+    data = {"question_status": [
+        {"question": "Q3. 압수된 도메인 목록은 공개됐는가?", "status": "open", "answer": "미공개"},
+        {"question": "C2 도메인은 무엇인가", "status": "open", "answer": "없음"},
+        # 긴 질문을 앞부분만 옮겨 쓴 경우
+        {"question": "1단계 · 변조된 웹사이트로 방문자를 유도했다", "status": "open", "answer": "원문 서술뿐"},
+    ]}
+    out = rs.question_status(data, QS, corpus="")
+    assert [row["answer"] for row in out] == ["원문 서술뿐", "없음", "미공개"]
+    assert not any(row.get("unjudged") for row in out)
+
+
+def test_question_status_ignores_ambiguous_partial_text():
+    questions = ["Gootloader 유포 도메인의 등록 시점은 언제인가", "Gootloader 유포 도메인의 호스팅 위치는 어디인가"]
+    data = {"question_status": [{"question": "Gootloader 유포 도메인의", "status": "answered", "answer": "x"}]}
+    assert rs.question_status(data, questions, corpus="") == []
+
+
+def test_question_status_empty_when_model_left_no_judgment():
+    assert rs.question_status({"question_status": []}, QS, corpus="") == []
+
+
+def test_prompt_numbers_the_questions():
+    prompt = rs.build_prompt("제목", "분석", {"questions": QS[:2]}, {"findings": ["x"]})
+    assert "- [Q1] " + QS[0] in prompt and "- [Q2] " + QS[1] in prompt
 
 
 def test_question_status_defaults_unknown_status_to_open():

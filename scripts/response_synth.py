@@ -104,9 +104,8 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
 - 아래 기준일보다 지난 기한은 '경과'로 표시하라. 앞으로 다가올 기한으로 쓰지 마라.
 - 조회 재료에 없는 도메인·IP·해시·CVE·패키지를 쓰지 마라. 쓰면 그 항목은 버려진다.
 - 기사 요약을 되풀이하지 마라. 조회로 무엇이 달라졌는지만 쓴다.
-- [확인해야 할 질문]이 있으면 그 순서대로 question_status에 하나씩 판정을 남겨라.
-  question은 그 질문 문장을 그대로 옮겨 적어라 — 새로 쓰거나 요약하면 다른 질문으로
-  취급돼 버려진다.
+- [확인해야 할 질문]이 있으면 질문마다 하나씩 question_status에 판정을 남겨라.
+  id에는 질문 앞의 번호(Q1, Q2 …)를 그대로 적는다. 질문 문장은 다시 옮겨 적지 않아도 된다.
 - 질문별로 실제 조회·1차 자료의 어느 관측이 답의 근거인지 evidence에 적고, 관련된
   plan 조치가 있으면 그 번호를 plan_index에 적어라. 답을 못 낸 이유도 answer에 적어라.
   파일 해시 확보와 외부 목록의 같은 해시 여부 대조는 별개의 질문이다. 확인한 전자를
@@ -172,7 +171,7 @@ PROMPT_HEAD = """당신은 SOC 대응 책임자다. 아래는 (1) 기사 분석,
      "ecosystem": "package인 경우 원문에서 확인한 npm|pip, 불명확하면 빈 문자열"}
   ],
   "question_status": [
-    {"question": "[확인해야 할 질문]의 질문을 그대로", "status": "answered|partial|open",
+    {"id": "[확인해야 할 질문]의 번호(Q1, Q2 …)", "status": "answered|partial|open",
      "answer": "조회 재료로 답한 내용. 못 답했으면 왜 못 했는지",
      "evidence": "답의 출처와 실제 관측. 없으면 빈 문자열",
      "plan_index": "관련 plan 조치의 1부터 시작하는 번호. 없으면 0"}
@@ -330,7 +329,7 @@ def build_prompt(title, analysis, targets, investigation, primary="", extra="",
            "\n\n[제약] 기사 원문 미제공: 기존 AI 분석을 독립 검증 근거로 간주하지 마라.")
         + "\n\n[기존 AI 분석 — 원문과 대조할 가설]\n" + (analysis or "")[:4000]
         + "\n\n[이 건의 대응 목표]\n" + (objective or "(설정되지 않음 — 조회 결과로 직접 판단하라)")
-        + ("\n\n[확인해야 할 질문]\n" + "\n".join("- " + q for q in questions) if questions else "")
+        + ("\n\n[확인해야 할 질문]\n" + numbered_questions(questions) if questions else "")
         + "\n\n[외부 조회 결과]\n" + _material(investigation, targets or {})
         # 원문마다 기사 인용/검색 참고 여부를 표시한다. 후속 검색 자료를 기사 인용으로 격상하지 않는다.
         + ("\n\n[읽은 원문 — 출처 유형 표시]\n" + primary if primary else "")
@@ -488,19 +487,67 @@ def normalize_verdict(value):
     return "미확인"
 
 
+# 질문 판정은 번호로 받는다. 예전에는 질문 문장을 한 글자도 다르지 않게 옮겨 써야만
+# 받았는데, 질문이 있는 심층분석 61건 중 26건(43%)에서 판정이 하나도 남지 않았다(실측
+# 2026-11-19). 조회와 판단은 끝났는데 화면의 "목표 검증 과정"이 전부 미해결로 보였다.
+QUESTION_ID_RE = re.compile(r"^\s*\[?\s*Q?\s*(\d{1,2})\s*\]?\s*[.:)]?\s*$", re.I)
+QUESTION_PREFIX_RE = re.compile(r"^\s*\[?\s*Q\s*(\d{1,2})\s*\]?\s*[.:)]\s*", re.I)
+MIN_QUESTION_OVERLAP = 15
+
+
+def numbered_questions(questions):
+    return "\n".join("- [Q{}] {}".format(index, question)
+                     for index, question in enumerate(questions or [], 1))
+
+
+def _question_key(text):
+    """공백·따옴표·구두점 차이는 같은 질문으로 본다."""
+    return re.sub(r"[\s\"'“”‘’`.,:;?!·…()\[\]{}<>~\-]+", "", str(text or "")).casefold()
+
+
+def _match_question(item, questions, keys):
+    """모델이 남긴 판정이 몇 번째 질문인지. 번호 → 같은 문장 → 앞부분 겹침 순으로 찾는다."""
+    for value in (item.get("id"), item.get("index"), item.get("question_id")):
+        match = QUESTION_ID_RE.match(str(value)) if value not in (None, "") else None
+        if match and 1 <= int(match.group(1)) <= len(questions):
+            return int(match.group(1)) - 1
+    text = str(item.get("question") or "")
+    prefixed = QUESTION_PREFIX_RE.match(text)
+    if prefixed and 1 <= int(prefixed.group(1)) <= len(questions):
+        return int(prefixed.group(1)) - 1
+    key = _question_key(text)
+    if not key:
+        return None
+    if key in keys:
+        return keys.index(key)
+    # 긴 질문을 줄여 쓰거나 끝을 고쳐 쓴 경우. 하나에만 걸릴 때만 받는다.
+    if len(key) >= MIN_QUESTION_OVERLAP:
+        hits = [index for index, known in enumerate(keys)
+                if known.startswith(key[:MIN_QUESTION_OVERLAP * 2]) or key.startswith(known[:MIN_QUESTION_OVERLAP * 2])
+                or key in known or known in key]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
 def question_status(data, questions, corpus, plan_positions=None):
-    """확인질문 판정. 실제로 물어본 질문(공백 정리 후 일치)만 받고, 답은 근거
-    검사를 거친다 — 그라운딩이 통과 못 해도 질문·상태는 남긴다(무엇이 안 풀렸는지는
-    그 자체로 진행 상황이다), 근거 없는 answer 텍스트만 비운다."""
-    valid = {" ".join(str(q).split()) for q in questions or []}
-    out, seen = [], set()
+    """확인질문 판정. 실제로 물어본 질문에 대한 판정만 받고, 답은 근거 검사를 거친다 —
+    그라운딩이 통과 못 해도 질문·상태는 남긴다(무엇이 안 풀렸는지는 그 자체로 진행
+    상황이다), 근거 없는 answer 텍스트만 비운다.
+
+    저장하는 question은 항상 원래 질문 문장이다 — 조사 원장·화면이 이 문장으로 찾는다.
+    모델이 판정을 남기지 않은 질문은 unjudged로 표시해 "조회했지만 미해결"과 구분한다.
+    """
+    questions = [" ".join(str(q).split()) for q in questions or [] if str(q or "").strip()]
+    questions = list(dict.fromkeys(questions))
+    keys = [_question_key(q) for q in questions]
+    rows = {}
     for item in (data or {}).get("question_status") or []:
         if not isinstance(item, dict):
             continue
-        question = " ".join(str(item.get("question") or "").split())
-        if question not in valid or question in seen:
+        index = _match_question(item, questions, keys)
+        if index is None or index in rows:
             continue
-        seen.add(question)
         status = str(item.get("status") or "").strip().lower()
         if status not in ALLOWED_QUESTION_STATUS:
             status = "open"
@@ -512,7 +559,7 @@ def question_status(data, questions, corpus, plan_positions=None):
             evidence = ""
         if status == "answered" and not (answer and evidence):
             status = "open"
-        row = {"question": question, "status": status, "answer": answer}
+        row = {"question": questions[index], "status": status, "answer": answer}
         if evidence:
             row["evidence"] = evidence
         try:
@@ -521,8 +568,11 @@ def question_status(data, questions, corpus, plan_positions=None):
             plan_index = 0
         if plan_index in (plan_positions or {}):
             row["plan_index"] = plan_positions[plan_index]
-        out.append(row)
-    return out
+        rows[index] = row
+    if not rows:
+        return []
+    return [rows.get(index) or {"question": question, "status": "open", "answer": "", "unjudged": True}
+            for index, question in enumerate(questions)]
 
 
 def campaign_relations(data, related, corpus):
@@ -969,7 +1019,7 @@ JSON 하나만 출력하라:
 "owner":"담당 역할","trigger":"검토 착수 조건","check":"확인할 공식 자료·내부 문서",
 "done":"검토 완료 기준"}],
 "open_questions":["공개 자료나 내부 정보가 더 필요한 질문"],
-"question_status":[{"question":"판단 단계 질문을 그대로","status":"answered|partial|open",
+"question_status":[{"id":"질문 번호(Q1, Q2 …)","status":"answered|partial|open",
 "answer":"근거가 있는 답 또는 답하지 못한 이유","evidence":"출처와 근거"}]}
 
 [제목]\n__TITLE__\n[기사 원문]\n__ARTICLE__\n[기본 분석]\n__ANALYSIS__
@@ -997,9 +1047,11 @@ def synthesize_briefing(title, analysis, targets, investigation, article="", mat
     values = {
         "__TITLE__": title or "", "__ARTICLE__": (article or "")[:12000],
         "__ANALYSIS__": (analysis or "")[:7000],
-        "__TARGETS__": json.dumps({key: targets.get(key) for key in
-                                    ("objective", "questions", "topics", "issues", "gaps")},
-                                   ensure_ascii=False),
+        "__TARGETS__": json.dumps(dict({key: targets.get(key) for key in
+                                        ("objective", "topics", "issues", "gaps")},
+                                       questions=["Q{}. {}".format(index, question) for index, question
+                                                  in enumerate(targets.get("questions") or [], 1)]),
+                                  ensure_ascii=False),
         "__MATERIALS__": (materials or "")[:12000],
     }
     for marker, value in values.items():
