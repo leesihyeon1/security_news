@@ -314,7 +314,7 @@ def test_service_named_in_source_counts_as_grounded_in_a_plan(monkeypatch):
     step = complete_plan(check="프록시 로그에서 ip-api.com·steamcommunity.com 조회 이력을 대조")
     result = _synth_with_plan(monkeypatch, step, "CastleRAT queries ip-api/Steam Community to find its C2.")
     assert len(result["plan"]) == 1
-    assert "ip-api.com" in result["plan"][0]["check"]
+    assert result["plan"][0]["check"] == step["check"]  # 값을 가리지 않고 그대로 남긴다
     assert not any("가렸습니다" in gap for gap in result["plan"][0]["review_gaps"])
 
 
