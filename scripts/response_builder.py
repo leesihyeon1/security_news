@@ -502,7 +502,8 @@ def build(block, iocs, primary="", text=""):
 
     github_material = github_hunter.response_material(block.get("github"))
     supply_material = supply_chain_hunter.response_material(block.get("supply_chain"))
-    vuln_material = vuln_hunter.response_material(block.get("vulnerability"))
+    article_cves = list((block.get("targets") or {}).get("cves") or []) + vuln_hunter.cves_from_text(text, iocs)
+    vuln_material = vuln_hunter.response_material(block.get("vulnerability"), article_cves)
     extension_material = extension_hunter.response_material(block.get("extension"))
     if not (blocklists or queries or vuln_material or supply_material or github_material
             or extension_material):
@@ -581,6 +582,72 @@ def build(block, iocs, primary="", text=""):
     # 섞인다. 화면에 나가기 전 한 곳에서 형식을 맞춘다.
     for query in queries:
         query["query"] = pattern_synth.format_kql(query.get("query") or "")
-    return {"blocklists": blocklists, "kql": queries, "actions": actions,
-            "commands": commands, "generated_at": common_utils.utc_now_iso(),
-            "provenance": values.get("provenance") or {}}
+    return finalize({"blocklists": blocklists, "kql": queries, "actions": actions,
+                     "commands": commands, "generated_at": common_utils.utc_now_iso(),
+                     "provenance": values.get("provenance") or {}})
+
+
+HASH_TYPES = {32: "MD5", 40: "SHA-1", 64: "SHA-256"}
+HASH_RE = re.compile(r"[0-9a-fA-F]+")
+HASH_LABEL = "파일 해시(SHA-256)"
+
+
+def _kind(label):
+    """사건이 여러 개인 기사는 라벨 앞에 "[사건명] "이 붙는다 — 종류는 그 뒤로 판단한다."""
+    return re.sub(r"^\[[^\]]*\]\s*", "", str(label or ""))
+
+
+def _value_key(value):
+    return str(value).split(" ", 1)[0].strip().lower()
+
+
+def finalize(response):
+    """화면에 나가기 직전의 일관성 정리. 같은 response를 여러 번 넣어도 결과가 같다.
+
+    - "차단 금지"에 있는 값은 다른 "차단·헌팅 후보" 목록에서 뺀다. 한쪽에서 막으라고 하고
+      다른 쪽에서 막지 말라고 하면 담당자가 판단할 수 없다 — 금지 쪽이 이긴다.
+    - 해시 목록은 길이로 종류를 나눈다(MD5가 "SHA-256" 목록에 섞여 있었다).
+    - 같은 조치 문장·쿼리·명령은 한 번만 남긴다.
+    """
+    if not response:
+        return response
+    groups = response.get("blocklists") or []
+    spared = {_value_key(value) for group in groups if _kind(group.get("label")).startswith("차단 금지")
+              for value in group.get("values") or []}
+    cleaned = []
+    for group in groups:
+        label = str(group.get("label") or "")
+        values = list(dict.fromkeys(group.get("values") or []))
+        if spared and _kind(label).startswith(("차단 후보", "차단·헌팅 후보")):
+            values = [value for value in values if _value_key(value) not in spared]
+        if label.endswith(HASH_LABEL) and values:
+            prefix = label[:-len(HASH_LABEL)]
+            by_type = {}
+            for value in values:
+                text = str(value).strip()
+                kind = HASH_TYPES.get(len(text)) if HASH_RE.fullmatch(text) else None
+                by_type.setdefault(kind or "형식 확인 필요", []).append(text)
+            for kind in ["SHA-256", "SHA-1", "MD5", "형식 확인 필요"]:
+                if by_type.get(kind):
+                    cleaned.append(dict(group, label=prefix + "파일 해시({})".format(kind), values=by_type[kind]))
+            continue
+        if values:
+            cleaned.append(dict(group, values=values))
+    response["blocklists"] = cleaned
+    response["actions"] = list(dict.fromkeys(response.get("actions") or []))
+    seen = set()
+    kql = []
+    for query in response.get("kql") or []:
+        if query.get("query") not in seen:
+            seen.add(query.get("query"))
+            kql.append(query)
+    response["kql"] = kql
+    seen = set()
+    commands = []
+    for command in response.get("commands") or []:
+        key = repr(sorted(command.items())) if isinstance(command, dict) else repr(command)
+        if key not in seen:
+            seen.add(key)
+            commands.append(command)
+    response["commands"] = commands
+    return response
