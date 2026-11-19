@@ -11,6 +11,7 @@
     밝힌다. 증거가 있는 트랙만 만든다 — 해시가 없으면 VT 트랙은 아예 안 나온다.
 """
 
+import json
 import os
 import re
 import time
@@ -1570,6 +1571,78 @@ def build_for_article(iocs, text="", urlscan_key=None, vt_key=None, title="", ca
     return _combine_incidents(sub_blocks)
 
 
+# 사건별 block을 합칠 때 사건 식별자는 최상위로 올리지 않는다.
+_INCIDENT_ONLY_KEYS = {"incident_id", "incident_label"}
+
+
+def _merge_list(values):
+    out, seen = [], set()
+    for value in values:
+        if isinstance(value, dict) and value.get("cve"):
+            key = ("cve", str(value["cve"]).upper())
+        else:
+            key = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
+            out.append(value)
+    return out
+
+
+def _merge_values(values):
+    """같은 키의 사건별 값을 하나로 합친다 — 목록은 잇고, 객체는 키별로 다시 합친다."""
+    present = [value for value in values if value is not None]
+    if present and all(isinstance(value, list) for value in present):
+        # 빈 목록도 남긴다 — 단일 사건 기록처럼 "조회했으나 없음"과 "키 없음"을 구분한다.
+        return _merge_list([item for value in present for item in value])
+    values = [value for value in present if value not in ("", [], {})]
+    if not values:
+        return None
+    if all(isinstance(value, dict) for value in values):
+        keys = list(dict.fromkeys(key for value in values for key in value))
+        merged = {key: _merge_values([value.get(key) for value in values]) for key in keys}
+        return {key: value for key, value in merged.items() if value is not None}
+    if all(isinstance(value, bool) for value in values):
+        return any(values)
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+        return max(values)
+    return values[0]
+
+
+def _merge_coverage(blocks):
+    """산출물 점검은 사건마다 다르다. 한 사건이라도 못 낸 산출물은 '미달'로 남긴다."""
+    covers = [b.get("coverage") for b in blocks if b.get("coverage")]
+    if not covers:
+        return None
+    missing = _merge_list([item for cover in covers for item in cover.get("missing") or []])
+    missing_keys = {item.get("key") for item in missing if isinstance(item, dict)}
+    done = [item for item in _merge_list([item for cover in covers for item in cover.get("done") or []])
+            if not (isinstance(item, dict) and item.get("key") in missing_keys)]
+    return {"done": done, "missing": missing}
+
+
+def _merge_quality(blocks):
+    rows = [b.get("quality") for b in blocks if isinstance(b.get("quality"), dict)]
+    if not rows:
+        return None
+    merged = dict(rows[0])
+    for key, value in rows[0].items():
+        if isinstance(value, int) and not isinstance(value, bool):
+            merged[key] = sum(row.get(key) or 0 for row in rows)
+    merged["issues"] = _merge_list([issue for row in rows for issue in row.get("issues") or []])
+    return merged
+
+
+def _merge_synthesis_status(blocks):
+    states = [b.get("synthesis_status") for b in blocks if isinstance(b.get("synthesis_status"), dict)]
+    if not states:
+        return None
+    failed = [state for state in states if state.get("status") == "failed"]
+    if failed:
+        return {"status": "failed", "retryable": any(state.get("retryable") for state in failed),
+                "failed_incidents": len(failed)}
+    return {"status": "completed"}
+
+
 def _combine_incidents(sub_blocks):
     """사건별 block N개를 기사 하나의 block으로 합친다.
 
@@ -1677,9 +1750,9 @@ def _combine_incidents(sub_blocks):
         combined["questions"] = questions
     combined["question_lookups"] = [row for b in sub_blocks
                                      for row in b.get("question_lookups") or []]
-    coverage = [b.get("coverage") for b in sub_blocks if b.get("coverage")]
+    coverage = _merge_coverage(sub_blocks)
     if coverage:
-        combined["coverage"] = coverage[0]
+        combined["coverage"] = coverage
     gaps = [gap for b in sub_blocks for gap in b.get("gaps") or []]
     if gaps:
         combined["gaps"] = gaps
@@ -1704,6 +1777,19 @@ def _combine_incidents(sub_blocks):
                     merged_sources.append(source)
         combined["primary"] = {"sources": merged_sources}
     combined["lookup_status"] = [status for b in sub_blocks for status in b.get("lookup_status") or []]
+    # 단일 사건 기록과 같은 최상위 키를 갖게 한다. 예전에는 위에서 고른 키만 올라와서
+    # 여러 사건 기사(실측: SilentAir)에는 synthesis_status·coverage·quality와 인텔·웹·
+    # 취약점 조회 결과가 최상위에 없었다 — 화면의 관측 결과·PDF가 비어 보였다.
+    for key, merge in (("synthesis_status", _merge_synthesis_status), ("quality", _merge_quality)):
+        value = merge(sub_blocks)
+        if value:
+            combined[key] = value
+    for key in dict.fromkeys(key for b in sub_blocks for key in b):
+        if key in combined or key in _INCIDENT_ONLY_KEYS:
+            continue
+        value = _merge_values([b.get(key) for b in sub_blocks])
+        if value is not None:
+            combined[key] = value
     return combined
 
 

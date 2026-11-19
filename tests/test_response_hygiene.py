@@ -1,3 +1,4 @@
+import investigation
 import response_builder
 import vuln_hunter
 
@@ -46,3 +47,31 @@ def test_finalize_resolves_block_and_spare_conflicts_across_incidents():
     assert labels["[A] 차단 금지 — 정상 인프라(공격에 악용됨)"] == [sha]
     assert result["actions"] == ["같은 조치"] and len(result["kql"]) == 1
     assert response_builder.finalize(result) == result   # idempotent
+
+
+def test_multi_incident_record_has_the_same_top_level_shape_as_a_single_one():
+    """실측(SilentAir): 사건 2건 기사에는 synthesis_status·coverage·quality와 인텔·웹 조회
+    결과가 최상위에 없어 화면의 관측 결과와 PDF 한계 표시가 비었다."""
+    def block(label, intel, status, cover, quality):
+        return {"incident_id": label, "incident_label": label, "route": {"label": label},
+                "intel": {"findings": intel, "steps": [], "references": []},
+                "web": {"findings": [], "steps": [], "used_today": 3, "cap": 20},
+                "vulnerability": {"cves": [{"cve": "CVE-2026-0001", "kev": False}], "findings": []},
+                "synthesis_status": status, "coverage": cover, "quality": quality,
+                "research_attempts": [], "generated_at": "2026-11-17T00:0{}:00Z".format(label[-1])}
+    first = block("사건 1", ["A"], {"status": "completed"},
+                  {"done": [{"key": "blocklist"}, {"key": "hunting_query"}], "missing": []},
+                  {"version": "v1", "query_count": 1, "plan_count": 2, "issues": ["x"]})
+    second = block("사건 2", ["A", "B"], {"status": "failed", "retryable": True},
+                   {"done": [{"key": "blocklist"}], "missing": [{"key": "hunting_query"}]},
+                   {"version": "v1", "query_count": 2, "plan_count": 3, "issues": ["x", "y"]})
+    combined = investigation._combine_incidents([first, second])
+    assert combined["intel"]["findings"] == ["A", "B"]
+    assert combined["web"]["cap"] == 20 and combined["web"]["findings"] == []
+    assert combined["vulnerability"]["cves"] == [{"cve": "CVE-2026-0001", "kev": False}]
+    assert combined["synthesis_status"] == {"status": "failed", "retryable": True, "failed_incidents": 1}
+    assert combined["coverage"] == {"done": [{"key": "blocklist"}], "missing": [{"key": "hunting_query"}]}
+    assert combined["quality"]["query_count"] == 3 and combined["quality"]["issues"] == ["x", "y"]
+    assert combined["research_attempts"] == []
+    assert combined["generated_at"] == "2026-11-17T00:01:00Z"
+    assert "incident_label" not in combined and len(combined["incidents"]) == 2

@@ -110,6 +110,14 @@ def _text(value, limit):
     return " ".join(value.split())
 
 
+def _clip(value, limit):
+    """표시용 글자 수를 넘으면 자른다. 라벨·설명이 몇 자 길다고 단계를 버리지 않는다."""
+    if not isinstance(value, str) or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f<>]", value):
+        return ""
+    text = " ".join(value.split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 MAX_EVIDENCE_CHARS = 900
 EVIDENCE_PIECE_RE = re.compile(r"\s*(?:\.\.\.|…)\s*|(?<=[.!?])\s+(?=[A-Z0-9\"'(가-힣])")
 
@@ -169,54 +177,88 @@ def validate(candidate, body, category, targets, source_url):
     if (not isinstance(raw_nodes, list) or not 2 <= len(raw_nodes) <= MAX_NODES or
             not isinstance(raw_edges, list) or not 1 <= len(raw_edges) <= MAX_EDGES):
         return skipped("단계 또는 연결 데이터가 불완전합니다.")
+    # 단계·연결은 하나씩 대조해서, 원문 근거를 확인하지 못한 것만 뺀다. 예전에는 하나만
+    # 틀려도 도식 전체를 버려서 흐름도 데이터가 있는 27건 중 3건만 표시됐다(실측
+    # 2026-11-19, 2026-10-05 이후 0건). 화면에 남는 단계·연결은 모두 원문 인용이 확인된
+    # 것이고, 빠진 개수는 omitted로 함께 낸다 — 빠진 자리를 추정으로 잇지 않는다.
     source = " ".join((body or "").split())
     nodes, ids = [], set()
+    omitted_nodes = omitted_edges = 0
     for node in raw_nodes:
-        if not isinstance(node, dict):
-            return skipped("단계 형식이 잘못되었습니다.")
+        node = node if isinstance(node, dict) else {}
         node_id = node.get("id")
         phase = node.get("phase")
-        label = _text(node.get("label"), 32)
+        label = _clip(node.get("label"), 32)
         detail = node.get("detail")
+        lines = [_clip(line, 100) for line in detail[:4]] if isinstance(detail, list) else []
+        lines = [line for line in lines if line]
         evidence = _evidence(node.get("evidence"), source)
         role = node.get("role")
         if (not isinstance(node_id, str) or not ID_RE.fullmatch(node_id) or node_id in ids or
                 type(phase) is not int or phase not in (0, 1, 2) or
                 not label or not re.search(r"[가-힣]", label) or not evidence or
-                role not in ("event", "capability") or not isinstance(detail, list) or
-                not 1 <= len(detail) <= 4 or any(not _text(line, 100) for line in detail)):
-            return skipped("단계의 원문 근거나 표시 형식을 확인하지 못했습니다.")
+                role not in ("event", "capability") or not lines):
+            omitted_nodes += 1
+            continue
         ids.add(node_id)
         nodes.append({"id": node_id, "phase": phase, "label": label,
-                      "detail": [_text(line, 100) for line in detail], "role": role,
-                      "evidence": evidence})
+                      "detail": lines, "role": role, "evidence": evidence})
+    if len(nodes) < 2:
+        return skipped("단계의 원문 근거나 표시 형식을 확인하지 못했습니다.")
     by_id = {node["id"]: node for node in nodes}
-    children = {node_id: [] for node_id in ids}
-    parents = {node_id: [] for node_id in ids}
     edges, pairs = [], set()
     for edge in raw_edges:
-        if not isinstance(edge, dict):
-            return skipped("연결 형식이 잘못되었습니다.")
+        edge = edge if isinstance(edge, dict) else {}
         start, end = edge.get("from"), edge.get("to")
-        if not isinstance(start, str) or not isinstance(end, str):
-            return skipped("연결 대상이 잘못되었습니다.")
-        evidence = _evidence(edge.get("evidence"), source)
         relation = edge.get("relation")
-        if (start not in ids or end not in ids or start == end or (start, end) in pairs or
-                relation not in ("sequence", "branch") or not evidence):
-            return skipped("연결의 원문 근거나 대상을 확인하지 못했습니다.")
-        if (by_id[start]["phase"] > by_id[end]["phase"] or
+        if (not isinstance(start, str) or not isinstance(end, str) or
+                start not in ids or end not in ids or start == end or (start, end) in pairs or
+                relation not in ("sequence", "branch")):
+            omitted_edges += 1
+            continue
+        evidence = _evidence(edge.get("evidence"), source)
+        # 단계를 거꾸로 잇거나, 기능(capability) 뒤에 사건을 잇거나, 기능을 사건처럼
+        # 직렬로 이은 연결은 순서를 잘못 말하므로 뺀다.
+        if (not evidence or by_id[start]["phase"] > by_id[end]["phase"] or
                 by_id[start]["role"] == "capability" or
                 (by_id[end]["role"] == "capability" and relation != "branch")):
-            return skipped("단계 순서 또는 기능 분기가 일치하지 않습니다.")
+            omitted_edges += 1
+            continue
         pairs.add((start, end))
-        children[start].append(end)
-        parents[end].append(start)
         edges.append({"from": start, "to": end, "relation": relation, "evidence": evidence})
+    if not edges:
+        return skipped("연결의 원문 근거나 대상을 확인하지 못했습니다.")
+
+    # 연결이 빠지며 떨어져 나간 단계는 가장 큰 연결 묶음만 남긴다(같으면 앞 단계 쪽).
+    neighbours = {node_id: set() for node_id in ids}
+    for edge in edges:
+        neighbours[edge["from"]].add(edge["to"])
+        neighbours[edge["to"]].add(edge["from"])
+    best = set()
+    for node in nodes:
+        if node["id"] in best:
+            continue
+        group, stack = set(), [node["id"]]
+        while stack:
+            node_id = stack.pop()
+            if node_id not in group:
+                group.add(node_id)
+                stack.extend(neighbours[node_id])
+        if len(group) > len(best):
+            best = group
+    omitted_nodes += len(nodes) - len(best)
+    nodes = [node for node in nodes if node["id"] in best]
+    edges = [edge for edge in edges if edge["from"] in best]
+    if len(nodes) < 2 or len(nodes) * 2 < len(raw_nodes):
+        return skipped("원문 근거로 확인한 단계가 절반에 못 미칩니다.")
 
     # Keep source order for independent branches; never fabricate a missing edge.
-    pending = [node["id"] for node in nodes if not parents[node["id"]]]
-    indegree = {key: len(value) for key, value in parents.items()}
+    children = {node["id"]: [] for node in nodes}
+    indegree = {node["id"]: 0 for node in nodes}
+    for edge in edges:
+        children[edge["from"]].append(edge["to"])
+        indegree[edge["to"]] += 1
+    pending = [node["id"] for node in nodes if not indegree[node["id"]]]
     ordered = []
     while pending:
         node_id = pending.pop(0)
@@ -227,14 +269,6 @@ def validate(candidate, body, category, targets, source_url):
                 pending.append(child)
     if len(ordered) != len(nodes):
         return skipped("순환 연결은 공격 순서로 표시하지 않습니다.")
-    seen, stack = set(), [nodes[0]["id"]]
-    while stack:
-        node_id = stack.pop()
-        if node_id not in seen:
-            seen.add(node_id)
-            stack.extend(children[node_id] + parents[node_id])
-    if seen != ids:
-        return skipped("연결되지 않은 독립 사건이나 단계가 있습니다.")
     try:
         parsed = urlsplit(source_url or "")
         safe_url = source_url if parsed.scheme in ("https", "http") and parsed.hostname and not parsed.username else ""
@@ -242,7 +276,10 @@ def validate(candidate, body, category, targets, source_url):
         safe_url = ""
     if not safe_url:
         return skipped("도식의 원문 출처를 확인하지 못했습니다.")
-    return {"version": VERSION, "status": "ready", "kind": kind, "title": TITLES[kind],
+    flow = {"version": VERSION, "status": "ready", "kind": kind, "title": TITLES[kind],
             "phases": PHASES[kind], "nodes": ordered, "edges": edges,
             "source_url": safe_url, "basis": "article",
             "source_digest": hashlib.sha256((body or "").encode("utf-8")).hexdigest()[:16]}
+    if omitted_nodes or omitted_edges:
+        flow["omitted"] = {"nodes": omitted_nodes, "edges": omitted_edges}
+    return flow
