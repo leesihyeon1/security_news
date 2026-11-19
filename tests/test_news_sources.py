@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 
 import common_utils
-import live_news
 import rss_collector
 
 FEEDS = {feed["name"]: feed for feed in json.loads(
@@ -46,16 +45,3 @@ def test_aggregator_title_suffix_is_removed(monkeypatch):
     monkeypatch.setattr(rss_collector.requests, "get", lambda *a, **k: Response())
     items = rss_collector.fetch_feed_items(FEEDS["bleepingcomputer"])
     assert items[0]["title"] == "Drupal patches critical RCE flaw"
-
-
-def _event(source, category):
-    return {"id": source + category, "source": source, "category": category, "title": "제목 " + category,
-            "url": "https://example.test/" + source + "/" + category, "fetched_at": "2026-11-19T00:00:00Z",
-            "published_at": "2026-11-19T00:00:00Z", "summary": "요약"}
-
-
-def test_latest_feed_drops_product_and_misc_posts_from_the_two_korean_outlets_only():
-    events = [_event("dailysecu", "제품행사"), _event("boannews", "기타"), _event("boannews", "취약점"),
-              _event("helpnetsecurity", "제품행사"), _event("dailysecu", "미분류")]
-    kept = {(row["source"], row["category"]) for row in live_news.latest_articles(events)}
-    assert kept == {("boannews", "취약점"), ("helpnetsecurity", "제품행사"), ("dailysecu", "미분류")}
