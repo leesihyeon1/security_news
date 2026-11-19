@@ -156,6 +156,42 @@ def vocabulary_spec(kind="threat"):
     return "\n".join(lines)
 
 
+HASH_TYPES = {"md5", "sha1", "sha256", "hash"}
+NETWORK_TYPES = {"domain", "ip", "ipv4", "ipv6", "url", "host"}
+
+
+def _indicator_types(block):
+    types = set()
+    for item in (block or {}).get("indicator_assessments") or []:
+        if isinstance(item, dict):
+            types.add(str(item.get("type") or "").lower())
+    if ((block or {}).get("malware") or {}).get("files") or ((block or {}).get("route") or {}).get("hashes"):
+        types.add("hash")
+    if (block or {}).get("seeds"):
+        types.add("url")
+    return types
+
+
+def _has_cves(block):
+    route = (block or {}).get("route") or {}
+    targets = (block or {}).get("targets") or {}
+    return bool(route.get("cves") or targets.get("cves") or ((block or {}).get("vulnerability") or {}).get("cves"))
+
+
+# 조회할 입력이 원문·1차 자료에 처음부터 없으면 낼 수 없는 산출물. 이런 기준이 선언되면
+# 영원히 "미달"로 남아 실제로 놓친 것과 구분되지 않았다(실측 2026-11-19, Gootloader 재분석:
+# 해시·지표가 없는 수사기관 발표 기사에 동적 분석·샘플 확보·차단 목록이 미달로 찍혔다).
+PREREQUISITES = {
+    "dynamic_analysis": (lambda b: bool(_indicator_types(b) & HASH_TYPES),
+                         "원문·1차 자료에 조회할 파일 해시가 없음"),
+    "sample_source": (lambda b: bool(_indicator_types(b) & HASH_TYPES),
+                      "원문·1차 자료에 조회할 파일 해시가 없음"),
+    "blocklist": (lambda b: bool(_indicator_types(b) & (HASH_TYPES | NETWORK_TYPES)),
+                  "원문·1차 자료에 차단·확인할 지표(도메인·IP·URL·해시)가 없음"),
+    "patch_priority": (_has_cves, "원문·1차 자료에 CVE가 없음"),
+}
+
+
 def coverage(block, criteria):
     """모델이 선언한 성공기준과 실제 산출물을 대조한다.
 
@@ -166,15 +202,27 @@ def coverage(block, criteria):
     wanted = [c for c in wanted if c in ARTIFACTS]
     if not wanted:
         return None
-    done, missing = [], []
+    done, missing, unavailable = [], [], []
     for key in wanted:
         label, check = ARTIFACTS[key]
         try:
             ok = bool(check(block or {}))
         except Exception:
             ok = False
+        if not ok and key in PREREQUISITES:
+            possible, reason = PREREQUISITES[key]
+            try:
+                possible = bool(possible(block or {}))
+            except Exception:
+                possible = True
+            if not possible:
+                unavailable.append({"key": key, "label": label, "reason": reason})
+                continue
         (done if ok else missing).append({"key": key, "label": label})
-    return {"done": done, "missing": missing}
+    result = {"done": done, "missing": missing}
+    if unavailable:
+        result["unavailable"] = unavailable
+    return result
 
 
 def coverage_steps(result):
@@ -182,9 +230,13 @@ def coverage_steps(result):
     if not result:
         return []
     total = len(result["done"]) + len(result["missing"])
-    steps = ["목표를 세울 때 선언한 성공기준 {}개 중 {}개를 냈습니다.".format(
-        total, len(result["done"]))]
+    unavailable = result.get("unavailable") or []
+    steps = ["목표를 세울 때 선언한 성공기준 {}개 중 {}개를 냈습니다{}.".format(
+        total, len(result["done"]),
+        "(입력이 없어 낼 수 없던 {}개 제외)".format(len(unavailable)) if unavailable else "")]
     for item in result["missing"]:
         steps.append("· 미달: {} — 목표 달성에 필요하다고 선언했는데 나오지 "
                      "않았습니다.".format(item["label"]))
+    for item in unavailable:
+        steps.append("· 해당 없음: {} — {}.".format(item["label"], item["reason"]))
     return steps
