@@ -44,20 +44,45 @@ def test_unquoted_issue_evidence_requires_review(monkeypatch):
     assert case["issues"][0]["source_check"] == "review_required"
 
 
-def test_unmapped_analysis_stage_becomes_an_explicit_question(monkeypatch):
-    result = {"cases": [{"incident": 1, "objective": "영향 범위를 확인한다",
+def test_unmapped_analysis_stage_is_reported_not_turned_into_a_question(monkeypatch):
+    """실측(Gootloader 재분석): 판단이 다루지 않은 단계마다 단계 문장을 그대로 제목·질문·
+    사내 확인 항목으로 붙여, 피해 통계·수사기관 압수에도 "로그에서 실행 흔적"을 묻게 됐다."""
+    result = {"cases": [{"incident": 1, "objective": "영향 범위를 확인한다", "criteria": ["hunting_query"],
                          "issues": [{**_issue("ClickFix 유입", "user_action", "유입 명령은 무엇인가"),
                                      "step_ids": ["s1"]}]}]}
     monkeypatch.setattr(issue_decision.common_utils, "llm_generate",
                         lambda *args, **kwargs: json.dumps(result, ensure_ascii=False))
-    analysis = "[기술적 세부사항]\n1. ClickFix 유입\n2. 브라우저 자격증명 탈취\n[권장 대응]\n"
+    analysis = "[기술적 세부사항]\n1. ClickFix 유입\n2. 수사기관이 서버 235개를 압수\n[권장 대응]\n"
     case = issue_decision.decide("기사", "ClickFix 유입", analysis, {})[0]
     assert case["missing_steps"] == ["s2"]
     assert case["decision_status"] == "review_required"
-    assert any("브라우저 자격증명 탈취" in question for question in case["questions"])
-    assert any(issue["title"] == "2단계 · 브라우저 자격증명 탈취"
-               for issue in case["issues"])
-    assert all("공격 단계 s" not in issue["title"] for issue in case["issues"])
+    assert [issue["title"] for issue in case["issues"]] == ["ClickFix 유입"]
+    assert case["questions"] == ["유입 명령은 무엇인가"]
+    assert not any("압수" in check for check in case["internal_checks"])
+    assert case["objective"] == "영향 범위를 확인한다"   # 목표에 "추가 조사" 꼬리를 달지 않는다
+    assert case["review_reasons"] == ["판단에서 다루지 않은 기본 분석 단계: 2단계 — 공격 행위인지 확인 필요"]
+
+
+def test_every_step_assigned_keeps_the_case_confirmed(monkeypatch):
+    result = {"cases": [{"incident": 1, "objective": "유입 경로 헌팅", "criteria": ["hunting_query"],
+                         "issues": [
+                             {**_issue("SEO 포이즈닝 유입", "malware", "유포 URL 패턴은 무엇인가"), "step_ids": ["s1"]},
+                             {"title": "수사기관 인프라 압수", "type": "other", "evidence": "수사기관이 서버 235개를 압수",
+                              "disposition": "established", "reason": "기사로 확인된 사실", "question": "",
+                              "decision": "압수 도메인 목록 공개 시 차단 반영", "step_ids": ["s2"]}]}]}
+    monkeypatch.setattr(issue_decision.common_utils, "llm_generate",
+                        lambda *args, **kwargs: json.dumps(result, ensure_ascii=False))
+    analysis = "[기술적 세부사항]\n1. SEO 포이즈닝 유입\n2. 수사기관이 서버 235개를 압수\n[권장 대응]\n"
+    case = issue_decision.decide("기사", "SEO 포이즈닝 유입. 수사기관이 서버 235개를 압수", analysis, {})[0]
+    assert case["decision_status"] == "confirmed"
+    assert case["missing_steps"] == [] and case["review_reasons"] == []
+    assert case["questions"] == ["유포 URL 패턴은 무엇인가"]
+
+
+def test_prompt_asks_to_assign_every_step_and_park_non_attack_facts():
+    assert "모든 단계 ID를 빠짐없이" in issue_decision.PROMPT
+    assert "수사기관의 압수" in issue_decision.PROMPT
+    assert "[기본 분석의 공격 단계]" not in issue_decision.PROMPT
 
 
 def test_missing_completion_criteria_is_not_marked_confirmed(monkeypatch):

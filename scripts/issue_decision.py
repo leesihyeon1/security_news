@@ -52,8 +52,11 @@ question은 외부 조회(원문·공개 스캔·샌드박스·검색·취약점
 C2 통신 대상은 무엇인가". 프록시·방화벽·EDR·메모리 포렌식 등 사내 로그에서 흔적을
 찾는 일, 실행·감염·침해 여부와 사내 영향 범위는 외부 도구로 답할 수 없으므로 question에
 쓰지 말고 internal_check에 담당자가 사내에서 확인할 일로 적어라.
-아래 [기본 분석의 공격 단계]가 있으면 각 단계 ID를 해당 이슈의 step_ids에 붙여라.
-한 이슈가 여러 단계를 다뤄도 된다. 단계와 무관한 이슈에는 빈 배열을 쓴다.
+아래 [기본 분석의 기술 세부 단계]가 있으면 모든 단계 ID를 빠짐없이 어느 이슈엔가의
+step_ids에 붙여라. 한 이슈가 여러 단계를 다뤄도 된다. 단계와 무관한 이슈에는 빈 배열을 쓴다.
+단계 중에는 공격 행위가 아닌 것도 있다 — 피해 규모·통계, 수사기관의 압수·차단·체포,
+피해자 통지·복구 지원 같은 단계는 조사 질문을 만들지 말고 established 이슈 하나로 묶거나
+(기사로 확인된 사실) excluded로 둔다. 공격 행위 단계만 investigate로 둔다.
 기사에서 웹스토어 배포가 확인되지 않았으면 웹스토어 등록을 전제하지 마라.
 각 사건의 번호를 지켜 다른 사건의 지표나 행위를 섞지 마라.
 제목의 주된 사건 뒤에 관련 사례로 소개된 별도 캠페인은 이 사건의 이슈나
@@ -159,6 +162,10 @@ def _stage_title(step):
     detail = re.sub(r"^.{1,100}캠페인\s*\(\d+\)\s*[:：]\s*", "", detail)
     detail = re.sub(r"\s+", " ", detail).strip(" .:：")
     return "{}단계 · {}".format(number, detail or "행위 근거 확인 필요")
+
+
+def _step_number(step):
+    return "{}단계".format(re.sub(r"\D", "", step.get("id") or "") or "?")
 
 
 def _stage_question(step):
@@ -341,17 +348,12 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
 
     missing = []
     covered_steps = {step_id for issue in issues for step_id in issue["step_ids"]}
+    # 판단이 다루지 않은 기본 분석 단계는 개별 조사 이슈로 만들지 않는다. 예전에는 단계
+    # 문장을 그대로 제목·질문·사내 확인 항목으로 붙여서, 같은 문장이 네 번 반복되고 "피해
+    # 2,880만 달러", "수사기관이 서버 235개 압수" 같은 사실에도 "로그에서 실행 흔적을
+    # 확인하라"는 지시가 붙었다(실측 2026-11-19, Gootloader 재분석: 이슈 6개 중 5개).
+    # 빠진 단계는 검토 사유로 알리고 판단 상태를 "검토 필요"로 둔다.
     missing_steps = [step for step in steps if step["id"] not in covered_steps]
-    for step in missing_steps:
-        question = _stage_question(step)
-        issues.append({"id": "i{}-{}".format(incident, len(issues) + 1),
-                       "title": _stage_title(step), "type": "other",
-                       "evidence": step["text"], "disposition": "investigate",
-                       "reason": "기본 분석 단계가 이슈별 판단에서 누락됨",
-                       "question": question, "decision": "해당 단계의 영향 범위와 대응 조건 확인",
-                       "internal_check": _stage_check(step),
-                       "source_check": "matched", "step_ids": [step["id"]]})
-        questions.append(question)
     # A visible source technique cannot disappear merely because the model omitted it.
     for pattern, label, kind, question in SIGNALS if check_signals else ():
         if not pattern.search(article):
@@ -371,10 +373,6 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
             questions.append(issue["question"])
         if issue.get("internal_check") and issue["internal_check"] not in checks:
             checks.append(issue["internal_check"])
-    if missing or missing_steps:
-        objective = objective.rstrip(".。 ") + "; 추가 조사: " + ", ".join(
-            missing + (["기본 분석에서 누락된 공격 단계 {}건".format(len(missing_steps))]
-                       if missing_steps else [])) + "의 실행·영향 조건 확인."
     primary = "" if informational else source.get("primary")
     # 정보성 기사에 헌팅 쿼리·차단 목록 같은 기준이 선언되면 낼 수 없어 "미달"로만 남는다.
     allowed = playbook.INFORMATIONAL_ARTIFACTS if informational else playbook.ARTIFACTS
@@ -385,6 +383,15 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
     if informational:
         questions = questions[:MAX_LEARNING_QUESTIONS]
     review_reasons = []
+    # 목표 문장에 "; 추가 조사: …"를 덧붙이던 것을 검토 사유로 옮겼다 — 목표가 기계적인
+    # 꼬리를 달고 읽혔고, 정작 "검토 필요"의 이유는 비어 있었다.
+    if missing_steps:
+        review_reasons.append("판단에서 다루지 않은 기본 분석 단계: {} — 공격 행위인지 확인 필요".format(
+            ", ".join(_step_number(step) for step in missing_steps)))
+    if missing:
+        review_reasons.append("판단에서 빠진 기법을 원문 신호로 추가: " + ", ".join(missing))
+    if unverified:
+        review_reasons.append("원문에서 근거 구절을 찾지 못한 이슈 {}개".format(len(unverified)))
     # 정보성 기사는 기준·한계가 비어도 된다 — 공개 자료로 확인할 학습 질문뿐이라, 이
     # 규칙이 모델을 탐지 산출물 기준으로 밀어붙이던 압력이 여기서는 근거가 없다.
     if (not informational and any(issue["disposition"] == "investigate" for issue in issues)
@@ -471,7 +478,7 @@ def decide(title, article, analysis, targets):
                                                     for i, name in enumerate(incidents, 1))
                   + "\n[기사 원문]\n" + (article or "")[:12000]
                   + "\n[완료된 기본 분석]\n" + (analysis or "")[:9000]
-                  + "\n[기본 분석의 공격 단계]\n" + json.dumps(steps, ensure_ascii=False)
+                  + "\n[기본 분석의 기술 세부 단계]\n" + json.dumps(steps, ensure_ascii=False)
                   + "\n[기존 조사 후보]\n" + json.dumps({k: targets.get(k) for k in
                       ("primary", "objective", "questions", "criteria")}, ensure_ascii=False))
     try:
