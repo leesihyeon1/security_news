@@ -62,21 +62,68 @@ def test_declared_multiple_incidents_override_single_graph(sample):
     assert build(sample)["status"] == "skipped"
 
 
-@pytest.mark.parametrize("part", ["nodes", "edges"])
-def test_hallucinated_evidence_rejects_whole_graph(sample, part):
-    sample["candidate"][part][0]["evidence"] = "원문에 존재하지 않는 임의의 탈취 서버 주소를 확인했습니다."
-    assert build(sample)["status"] == "skipped"
+FAKE = "원문에 존재하지 않는 임의의 탈취 서버 주소를 확인했습니다."
+
+
+def test_hallucinated_node_is_dropped_not_drawn(sample):
+    sample["candidate"]["nodes"][0]["evidence"] = FAKE
+    flow = build(sample)
+    dropped = sample["candidate"]["nodes"][0]["id"]
+    assert dropped not in {node["id"] for node in flow.get("nodes") or []}
+    assert all(dropped not in (edge["from"], edge["to"]) for edge in flow.get("edges") or [])
+    assert FAKE not in json.dumps(flow, ensure_ascii=False)
+    if flow["status"] == "ready":
+        assert flow["omitted"]["nodes"] >= 1
+
+
+def test_hallucinated_edge_is_dropped_not_drawn(sample):
+    edge = sample["candidate"]["edges"][0]
+    edge["evidence"] = FAKE
+    flow = build(sample)
+    assert FAKE not in json.dumps(flow, ensure_ascii=False)
+    assert (edge["from"], edge["to"]) not in {(e["from"], e["to"]) for e in flow.get("edges") or []}
 
 
 def test_missing_edge_does_not_get_filled_from_numbering(sample):
-    sample["candidate"]["edges"].pop(2)
-    assert build(sample)["status"] == "skipped"
+    removed = sample["candidate"]["edges"].pop(2)
+    flow = build(sample)
+    pairs = {(edge["from"], edge["to"]) for edge in flow.get("edges") or []}
+    assert (removed["from"], removed["to"]) not in pairs
+    # 떨어져 나간 단계는 이어 붙이지 않고 뺀다.
+    if flow["status"] == "ready":
+        kept = {node["id"] for node in flow["nodes"]}
+        assert all(edge["from"] in kept and edge["to"] in kept for edge in flow["edges"])
 
 
 def test_capability_cannot_be_followed_by_an_event(sample):
     candidate = sample["candidate"]
     candidate["edges"].append(dict(candidate["edges"][-1], **{"from": "n8", "to": "n9"}))
+    flow = build(sample)
+    assert flow["status"] == "ready"
+    assert ("n8", "n9") not in {(edge["from"], edge["to"]) for edge in flow["edges"]}
+    assert flow["omitted"] == {"nodes": 0, "edges": 1}
+
+
+def test_mostly_unsupported_graph_is_still_skipped(sample):
+    nodes = sample["candidate"]["nodes"]
+    for node in nodes[: len(nodes) // 2 + 1]:
+        node["evidence"] = FAKE
     assert build(sample)["status"] == "skipped"
+
+
+def test_long_label_and_detail_are_clipped_instead_of_dropping_the_step(sample):
+    node = sample["candidate"]["nodes"][1]
+    node["label"] = "가" * 40
+    node["detail"] = ["나" * 130]
+    flow = build(sample)
+    kept = next(item for item in flow["nodes"] if item["id"] == node["id"])
+    assert len(kept["label"]) == 32 and kept["label"].endswith("…")
+    assert len(kept["detail"][0]) == 100
+    assert "omitted" not in flow
+
+
+def test_complete_graph_reports_nothing_omitted(sample):
+    assert "omitted" not in build(sample)
 
 
 def test_cycle_is_rejected(sample):
