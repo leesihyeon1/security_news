@@ -820,6 +820,22 @@ def _merge_tracks(jobs, results, block, steps, stage):
 # "남은 질문"을 만들어 놓고 거기서 멈췄다(실측: Magento 건이 남긴 질문 5개 중 3개는
 # 우리가 가진 도구로 답할 수 있는 것이었다). 한 바퀴로 묶는 이유는 시간이다 —
 # 기사 하나에 이미 400초가 넘게 든다.
+def _browser_state(results):
+    """브라우저 조사의 조회 상태.
+
+    볼 URL이 없거나 워커가 꺼져 실행하지 않은 것(deferred)은 실패가 아니다 — 저장된 스캔도
+    없으면 "입력 없음(unavailable)"으로 둔다. 예전에는 원문에 URL이 없는 기사마다 "실패·부분
+    조회 1개"가 찍혔다(실측 2026-11-19, Gootloader 재분석).
+    """
+    live = next((item for item in results if item.get("source") == "isolated_browser"), {})
+    archived = [item for item in results if item.get("source") == "archived_scan"]
+    if live.get("status") == "observed":
+        return "returned"
+    if live.get("status") == "deferred" and not archived:
+        return "unavailable"
+    return "partial"
+
+
 def _corroborate_roles(block, steps):
     """조회 결과(샌드박스 통신·urlscan DOM)로 역할 미확인 지표를 확정 후보로 올린다.
 
@@ -1126,7 +1142,7 @@ def build(iocs, text="", urlscan_key=None, vt_key=None, title="", category="",
         browser_results = browser_track["results"]
         browser_live = next((item for item in browser_results
                              if item["source"] == "isolated_browser"), {})
-        state = "returned" if browser_live.get("status") == "observed" else "partial"
+        state = _browser_state(browser_results)
         block.setdefault("lookup_status", []).append({
             "key": "브라우저 조사", "status": state,
             "detail": "격리 브라우저 관측" if state == "returned" else
