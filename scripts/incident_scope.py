@@ -71,6 +71,7 @@ def _split_targets(targets, incidents, incident_map):
 
     objectives = targets.get("objectives_by_incident") or {}
     questions = targets.get("questions_by_incident") or {}
+    checks = targets.get("internal_checks_by_incident") or {}
     criteria = targets.get("criteria_by_incident") or {}
     gaps = targets.get("gaps_by_incident") or {}
     primaries = targets.get("primary_by_incident") or {}
@@ -95,6 +96,7 @@ def _split_targets(targets, incidents, incident_map):
         # 전체의 공유 값으로 대체한다 — 조용히 비우는 것보다 낫다.
         slot["objective"] = objectives.get(index) or targets.get("objective") or ""
         slot["questions"] = questions.get(index) or targets.get("questions") or []
+        slot["internal_checks"] = checks.get(index) or targets.get("internal_checks") or []
         slot["criteria"] = criteria.get(index) or targets.get("criteria") or []
         slot["gaps"] = gaps.get(index) or targets.get("gaps") or []
         primary = primaries.get(index) or targets.get("primary") or ""

@@ -20,6 +20,13 @@ MAX_LEARNING_QUESTIONS = 3
 # 어디에나 있어 대조 의미가 없다.
 MIN_EVIDENCE_FRAGMENT = 8
 ELLIPSIS_RE = re.compile(r"\.{3,}|…+")
+# 사내 로그·자산이 있어야 답할 수 있는 질문. 외부 조회(원문·공개 스캔·샌드박스·검색·
+# 취약점 DB)로는 구조적으로 "미해결"이 된다 — 실측(2026-11-19): 최근 4건의 검증 질문
+# 19개 중 확인 0개, 그중 9개가 "실행 여부와 영향 범위를 확인할 원문·샘플·로그 근거"였다.
+# 이런 질문은 조사 단계의 성패로 세지 않고 담당자가 볼 사내 확인 항목으로 옮긴다.
+INTERNAL_RE = re.compile(
+    r"(?<![가-힣A-Za-z])로그(?![인아])|사내|자사|우리\s*(?:조직|환경|회사)|내부망|"
+    r"실행\s*여부|감염\s*여부|침해\s*여부|영향\s*범위")
 STEP_RE = re.compile(r"^\s*\d+[.)]\s+(.+)$")
 SIGNALS = (
     (re.compile(r"(?<![A-Za-z0-9])clickfix(?![A-Za-z0-9])", re.I), "ClickFix", "user_action",
@@ -43,7 +50,8 @@ PROMPT = """당신은 SOC 조사 책임자다. 이미 완료된 기본 분석을
 question은 외부 조회(원문·공개 스캔·샌드박스·검색·취약점 DB)로 답할 수 있는 형태로
 써라 — 예: "이 Custom GPT 응답이 어느 외부 유인 페이지로 연결되는가", "최종 페이로드의
 C2 통신 대상은 무엇인가". 프록시·방화벽·EDR·메모리 포렌식 등 사내 로그에서 흔적을
-찾는 일은 외부 도구로 답할 수 없으므로 question이 아니라 decision에 적어라.
+찾는 일, 실행·감염·침해 여부와 사내 영향 범위는 외부 도구로 답할 수 없으므로 question에
+쓰지 말고 internal_check에 담당자가 사내에서 확인할 일로 적어라.
 아래 [기본 분석의 공격 단계]가 있으면 각 단계 ID를 해당 이슈의 step_ids에 붙여라.
 한 이슈가 여러 단계를 다뤄도 된다. 단계와 무관한 이슈에는 빈 배열을 쓴다.
 기사에서 웹스토어 배포가 확인되지 않았으면 웹스토어 등록을 전제하지 마라.
@@ -60,7 +68,8 @@ JSON만 출력하라:
 "step_ids":["관련된 공격 단계 ID"],
 "disposition":"investigate|established|excluded",
 "reason":"조사·확인 완료·제외 판단 이유",
-"question":"investigate이면 답해야 할 질문, 아니면 빈 문자열",
+"question":"investigate이면 공개 자료로 답할 질문, 아니면 빈 문자열",
+"internal_check":"사내 로그·자산에서 확인할 일, 없으면 빈 문자열",
 "decision":"이 답으로 결정할 대응"}]}]}
 허용된 산출물 키:
 {vocabulary}
@@ -153,8 +162,17 @@ def _stage_title(step):
 
 
 def _stage_question(step):
-    return "{}: 실행 여부와 영향 범위를 확인할 원문·샘플·로그 근거는 무엇인가".format(
+    return "{}: 원문과 공개 보고서·샘플이 이 단계에 대해 제시하는 도구·지표·실행 조건은 무엇인가".format(
         _stage_title(step))
+
+
+def _stage_check(step):
+    return "{}: 프록시·EDR·서버 로그에서 이 단계의 실행 흔적과 영향 받은 자산을 확인".format(
+        _stage_title(step))
+
+
+def _public_question(title):
+    return "{}: 원문과 공개 보고서가 제시하는 근거·지표·실행 조건은 무엇인가".format(title)
 
 
 def _json(raw):
@@ -223,7 +241,8 @@ def _fallback_case(incident, label, article, analysis, targets, steps, single):
             issues.append({"title": title, "type": kind, "evidence": evidence,
                            "step_ids": related, "disposition": "investigate",
                            "reason": "기사 원문에 언급된 공격 단계의 실행 조건 확인 필요",
-                           "question": question, "decision": "영향 범위와 대응 조건 확인"})
+                           "question": question, "decision": "영향 범위와 대응 조건 확인",
+                           "internal_check": "{}: 사내 단말·프록시 로그에서 해당 행위 흔적 확인".format(title)})
     covered = {step_id for issue in issues for step_id in issue["step_ids"]}
     for step in steps:
         if step["id"] in covered:
@@ -231,7 +250,7 @@ def _fallback_case(incident, label, article, analysis, targets, steps, single):
         issues.append({"title": _stage_title(step), "type": "other",
                        "evidence": step["text"], "step_ids": [step["id"]],
                        "disposition": "investigate", "reason": "기본 분석에 기록된 단계 확인 필요",
-                       "question": _stage_question(step),
+                       "question": _stage_question(step), "internal_check": _stage_check(step),
                        "decision": "해당 단계의 대응 대상 확인"})
     if not issues:
         excerpt = next((line.strip() for line in analysis.splitlines()
@@ -243,7 +262,7 @@ def _fallback_case(incident, label, article, analysis, targets, steps, single):
             issues.append({"title": "기사 핵심 주장 검증", "type": "other",
                            "evidence": _text(excerpt, 160), "step_ids": [],
                            "disposition": "investigate", "reason": "세부 공격 단계가 구조화되지 않음",
-                           "question": "이 주장에 대한 원문·외부 관측 근거와 영향 범위는 무엇인가",
+                           "question": "이 주장을 뒷받침하는 원문·공개 보고서·외부 관측 근거는 무엇인가",
                            "decision": "근거 확인 후 대응 범위 결정"})
     if not issues:
         issues.append({"title": "사건별 근거 확인", "type": "other",
@@ -270,6 +289,7 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
     if not objective or not isinstance(source.get("issues"), list):
         return None
     issues, questions, seen = [], [], set()
+    checks = []
     unverified = []
     valid_steps = {step["id"] for step in steps}
     for index, entry in enumerate(source["issues"][:MAX_ISSUES], 1):
@@ -281,8 +301,14 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
         evidence = _text(entry.get("evidence"), 600 if matched_step else 240)
         disposition = entry.get("disposition")
         question = _text(entry.get("question"), 800 if matched_step else 300)
+        check = _text(entry.get("internal_check"), 300)
         if not title or not evidence or disposition not in DISPOSITIONS:
             continue
+        if question and not informational and INTERNAL_RE.search(question):
+            # 사내에서만 답할 수 있는 질문은 확인 항목으로 옮기고, 조사 질문은 공개 자료로
+            # 확인할 형태로 바꾼다 — 단계 질문이면 단계 기준으로, 아니면 이슈 제목 기준으로.
+            check = check or question
+            question = _stage_question(matched_step) if matched_step else _public_question(title)
         if disposition == "investigate" and not question:
             continue
         if title.lower() in seen:
@@ -301,6 +327,8 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
                  "decision": _text(entry.get("decision"), 240),
                  "step_ids": [value for value in (entry.get("step_ids") or [])
                               if isinstance(value, str) and value in valid_steps]}
+        if check and disposition != "excluded" and not informational:
+            issue["internal_check"] = check
         issue["source_check"] = ("matched" if _source_contains(evidence, article + "\n" + analysis)
                                  else "review_required")
         if issue["source_check"] != "matched":
@@ -321,6 +349,7 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
                        "evidence": step["text"], "disposition": "investigate",
                        "reason": "기본 분석 단계가 이슈별 판단에서 누락됨",
                        "question": question, "decision": "해당 단계의 영향 범위와 대응 조건 확인",
+                       "internal_check": _stage_check(step),
                        "source_check": "matched", "step_ids": [step["id"]]})
         questions.append(question)
     # A visible source technique cannot disappear merely because the model omitted it.
@@ -340,6 +369,8 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
     for issue in issues:
         if issue["disposition"] == "investigate" and issue["question"] not in questions:
             questions.append(issue["question"])
+        if issue.get("internal_check") and issue["internal_check"] not in checks:
+            checks.append(issue["internal_check"])
     if missing or missing_steps:
         objective = objective.rstrip(".。 ") + "; 추가 조사: " + ", ".join(
             missing + (["기본 분석에서 누락된 공격 단계 {}건".format(len(missing_steps))]
@@ -360,7 +391,8 @@ def _case(source, incident, article, analysis, steps=(), check_signals=True, inf
             and not criteria and not gaps):
         review_reasons.append("달성 기준과 조사 한계가 모두 비어 있음")
     return {"objective": objective, "primary": primary if primary in AXES else "",
-            "questions": questions, "criteria": list(dict.fromkeys(criteria)),
+            "questions": questions, "internal_checks": checks,
+            "criteria": list(dict.fromkeys(criteria)),
             "gaps": gaps, "issues": issues,
             "decision_status": "review_required" if missing or missing_steps or unverified or review_reasons else "confirmed",
             "missing_issues": missing, "missing_steps": [step["id"] for step in missing_steps],
@@ -494,6 +526,7 @@ def apply(targets, cases):
     else:
         for field, key in (("objective", "objectives_by_incident"),
                            ("questions", "questions_by_incident"),
+                           ("internal_checks", "internal_checks_by_incident"),
                            ("criteria", "criteria_by_incident"),
                            ("gaps", "gaps_by_incident"),
                            ("primary", "primary_by_incident"),

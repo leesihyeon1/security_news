@@ -237,3 +237,50 @@ def test_worker_recovers_when_decision_function_raises(monkeypatch):
     assert record["targets"]["decision_status"] == "review_required"
     assert captured["issues"][0]["title"] == "ClickFix"
     assert captured["questions"]
+
+
+def test_fallback_questions_ask_public_sources_and_keep_internal_checks_apart(monkeypatch):
+    """실측(2026-11-19): 판단 응답을 못 쓴 기사의 단계 질문이 모두 "원문·샘플·로그 근거"를
+    물어 외부 조회로는 하나도 확인되지 않았다. 로그 확인은 사내 확인 항목으로 따로 둔다."""
+    monkeypatch.setattr(issue_decision.common_utils, "llm_generate", lambda *a, **k: "{}")
+    analysis = "[기술적 세부사항]\n1. 변조된 웹사이트로 방문자를 유도\n2. C2 서버와 통신\n[권고 조치]"
+    case = issue_decision.decide("Gootloader", "변조된 웹사이트", analysis, {})[0]
+    assert len(case["questions"]) == 2
+    assert not any(issue_decision.INTERNAL_RE.search(question) for question in case["questions"])
+    assert len(case["internal_checks"]) == 2
+    assert all("로그" in check for check in case["internal_checks"])
+    assert "1단계 · 변조된 웹사이트로 방문자를 유도" in case["internal_checks"][0]
+
+
+def test_internal_only_model_question_moves_to_internal_check(monkeypatch):
+    result = {"cases": [{"incident": 1, "objective": "침해 단말을 가린다", "criteria": ["hunting_query"],
+                         "issues": [
+                             _issue("웹셸 설치", "malware", "사내 서버에 웹셸이 실행됐는지 로그로 확인되는가"),
+                             {**_issue("C2 통신", "malware", "C2 도메인은 무엇인가"),
+                              "internal_check": "프록시 로그에서 C2 도메인 접속 확인"},
+                             {**_issue("기존 블로그 분석", "other", "공개 블로그가 제시한 해시는 무엇인가")}]}]}
+    monkeypatch.setattr(issue_decision.common_utils, "llm_generate",
+                        lambda *a, **k: json.dumps(result, ensure_ascii=False))
+    article = "웹셸 설치 이후 C2 통신이 있었고 기존 블로그 분석이 있다."
+    case = issue_decision.decide("기사", article, "", {})[0]
+    webshell, c2, blog = case["issues"]
+    assert webshell["internal_check"] == "사내 서버에 웹셸이 실행됐는지 로그로 확인되는가"
+    assert webshell["question"].startswith("웹셸 설치: 원문과 공개 보고서")
+    assert c2["question"] == "C2 도메인은 무엇인가"
+    assert c2["internal_check"] == "프록시 로그에서 C2 도메인 접속 확인"
+    # "블로그"의 "로그"는 사내 로그가 아니다.
+    assert blog["question"] == "공개 블로그가 제시한 해시는 무엇인가"
+    assert "internal_check" not in blog
+    assert case["internal_checks"] == [webshell["internal_check"], c2["internal_check"]]
+    assert not any(issue_decision.INTERNAL_RE.search(question) for question in case["questions"])
+
+
+def test_internal_checks_follow_each_incident(monkeypatch):
+    monkeypatch.setattr(issue_decision.common_utils, "llm_generate", lambda *a, **k: "{}")
+    analysis = "[기술적 세부사항]\n1. 사건 A가 백도어를 설치\n2. 사건 B가 SMS를 가로챔\n[권고 조치]"
+    targets = {"incidents": ["사건 A", "사건 B"]}
+    cases = issue_decision.decide("종합", "사건 A와 사건 B", analysis, targets)
+    applied = issue_decision.apply(targets, cases)
+    scoped = incident_scope._split_targets(applied, ["사건 A", "사건 B"], {})
+    assert ["백도어" in " ".join(slot["internal_checks"]) for slot in scoped] == [True, False]
+    assert ["SMS" in " ".join(slot["internal_checks"]) for slot in scoped] == [False, True]
