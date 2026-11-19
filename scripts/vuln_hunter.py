@@ -309,15 +309,46 @@ def _findings_for_cve(entry):
     return lines
 
 
-def response_material(track):
+def split_entries(entries, article_cves=None):
+    """대응 대상(기사가 다룬 CVE)과 참고(조사 중 따라 들어온 CVE)를 나눈다.
+
+    실측(2026-11-17, GSocket 기사): 기사 대상 CVE는 1건이었는데, 후속 조회가 참고 자료에서
+    찾은 2018~2019년 Fortinet·Citrix·Pulse CVE 3건이 같은 목록에 합쳐져 "정규 패치 주기를
+    기다리지 말고 예외 처리로 먼저 올린다"는 조치까지 붙었다. 기사 CVE를 모를 때(제품
+    이름으로 NVD를 찾은 제로데이 기사)는 예전처럼 모두 대응 대상으로 둔다.
+    """
+    article = {str(cve).upper() for cve in article_cves or [] if CVE_RE.fullmatch(str(cve))}
+    targets, reference, unassigned = [], [], []
+    for entry in entries:
+        cve = str(entry.get("cve") or "")
+        if not CVE_RE.fullmatch(cve):
+            # "FRAGNESIA (CVE 번호 미기재)" 같은 이름이 CVE 칸과 KQL 조건에 그대로 들어갔다.
+            name = re.sub(r"\s*\(.*?\)\s*", "", cve).strip()
+            if name and name.lower() not in {n.lower() for n in unassigned}:
+                unassigned.append(name)
+        elif entry.get("origin") == "followup" or (article and cve.upper() not in article):
+            reference.append(entry)
+        else:
+            targets.append(entry)
+    return targets, reference, unassigned
+
+
+def response_material(track, article_cves=None):
     """취약점 대응 — 패치 우선순위와 노출 자산 확인 쿼리."""
     if not track:
         return None
     from response_builder import _kql_list
 
-    entries = track.get("cves") or []
+    entries, reference, unassigned = split_entries(track.get("cves") or [], article_cves)
     if not entries:
-        return None
+        if not (reference or unassigned):
+            return None
+        blocklists = []
+        if unassigned:
+            blocklists.append(unassigned_group(unassigned))
+        if reference:
+            blocklists.append(reference_group(reference))
+        return {"blocklists": blocklists, "kql": [], "actions": []}
     ids = [entry["cve"] for entry in entries]
     kev_ids = [entry["cve"] for entry in entries if entry.get("kev")]
     high_epss = [entry["cve"] for entry in entries
@@ -383,5 +414,22 @@ def response_material(track):
             "note": "NVD 영향 제품 목록은 누락·지연될 수 있습니다. 자산 목록과 벤더 권고를 함께 대조합니다.",
             "values": products[:20],
         })
+    if unassigned:
+        blocklists.append(unassigned_group(unassigned))
+    if reference:
+        blocklists.append(reference_group(reference))
 
     return {"blocklists": blocklists, "kql": queries, "actions": actions}
+
+
+def unassigned_group(names):
+    return {"label": "점검 대상 — CVE 미배정 취약점",
+            "note": "아직 CVE 번호가 없어 취약점 관리 도구로 찾을 수 없다. 벤더 권고의 영향 버전으로 대조한다.",
+            "values": names}
+
+
+def reference_group(entries):
+    return {"label": "참고 — 조사 중 함께 확인된 CVE",
+            "note": "기사가 다룬 취약점이 아니라 참고 자료·후속 조회에서 나온 것이다. 이 사건의 패치 "
+                    "대상으로 보지 말고, 해당 제품을 쓰는 경우에만 별도로 확인한다.",
+            "values": ["{}{}".format(entry["cve"], " [KEV]" if entry.get("kev") else "") for entry in entries]}

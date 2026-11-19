@@ -845,7 +845,9 @@ def _run_followups(requests, urlscan_key=None, vt_key=None, block=None):
                 if block is not None and track:
                     existing = block.setdefault("vulnerability", {"cves": [], "findings": []})
                     by_id = {entry["cve"]: entry for entry in existing.get("cves") or []}
-                    by_id.update({entry["cve"]: entry for entry in track.get("cves") or []})
+                    # 후속 조회로 들어온 CVE는 기사 대상이 아니다 — 대응에서 참고로만 쓴다.
+                    by_id.update({entry["cve"]: dict(entry, origin="followup")
+                                  for entry in track.get("cves") or [] if entry["cve"] not in by_id})
                     existing["cves"] = list(by_id.values())
                     existing["findings"] = [line for entry in existing["cves"]
                                             for line in vuln_hunter._findings_for_cve(entry)]
@@ -1648,6 +1650,9 @@ def _combine_incidents(sub_blocks):
             "provenance": provenance,
             "generated_at": common_utils.utc_now_iso(),
         }
+        # 사건마다 따로 만든 목록을 이어 붙이면 한 사건의 "차단 금지" 값이 다른 사건의
+        # "차단 후보"에 남는다(실측: SilentAir 기사의 해시 3개).
+        response_builder.finalize(combined["response"])
     else:
         combined["response"] = None
     verdicts = [b.get("synthesis") for b in sub_blocks if b.get("synthesis")]
