@@ -1033,13 +1033,15 @@ def synthesize(title, analysis, body="", iocs=None, api_key=None, timeout=240,
     """
     steps, rejected, out = [], [], []
     prompt = build_prompt(title, analysis, body, iocs, targets, web_evidence)
-    raw = common_utils.llm_generate(prompt, timeout=timeout)
+    raw = common_utils.llm_generate(prompt, timeout=timeout, retry_slow_failures=False)
     candidates = parse_candidates(raw)
-    if not candidates:
+    # 응답이 왔는데 JSON이 아닐 때만 다시 받는다. 호출 자체가 실패했으면 같은 입력으로
+    # 또 기다릴 뿐이다.
+    if not candidates and raw:
         # 같은 입력에도 JSON이 아닌 답이 올 때가 있다(실측: 같은 기사에 6개/0개).
         # 한 번은 더 받아 본다 — 여기서 포기하면 그 기사에는 패턴이 통째로 없다.
         raw = common_utils.llm_generate(
-            prompt + "\n\n반드시 JSON 배열만 출력하라.", timeout=timeout)
+            prompt + "\n\n반드시 JSON 배열만 출력하라.", timeout=timeout, retry_slow_failures=False)
         candidates = parse_candidates(raw)
     if not candidates:
         steps.append("LLM 패턴 합성: 쓸 수 있는 후보가 나오지 않았습니다.")

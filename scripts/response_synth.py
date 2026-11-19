@@ -845,19 +845,24 @@ def synthesize(title, analysis, targets, investigation, timeout=SYNTH_TIMEOUT,
     prompt = build_prompt(title, analysis, targets, investigation, primary, extra, history, article)
     raw = common_utils.llm_generate(
         prompt, timeout=timeout, json_format=True,
-        nvidia_max_attempts=SYNTH_ATTEMPTS, max_tokens=SYNTH_MAX_TOKENS)
+        nvidia_max_attempts=SYNTH_ATTEMPTS, max_tokens=SYNTH_MAX_TOKENS,
+        retry_slow_failures=False)
     data, salvaged = parse_with_status(raw)
-    if not data:
+    # 축약 재호출은 응답이 왔지만 잘리거나 깨졌을 때만 쓴다. 호출 자체가 실패했으면(응답
+    # 없음) 같은 프롬프트를 또 보내 같은 시간을 기다리게 된다 — 실측 Gootloader 건은 종합
+    # 판단에서만 11분을 기다리고도 실패했다.
+    if not data and raw:
         # 한 번은 더 받아 본다. 같은 프롬프트를 그대로 다시 보내면 같은 자리에서 또
         # 잘리므로(추론 + 본문이 상한을 넘는 경우), 이번에는 짧게 쓰라고 못박는다.
         analysis_trace.note("응답 JSON 검증 실패: 축약 지시로 LLM 재호출", "synthesis", "reanalysis", "partial")
         log("    [-] 종합 판단 응답을 JSON으로 읽지 못해 짧은 형식으로 다시 받습니다.")
         raw = common_utils.llm_generate(
             prompt + COMPACT_RETRY_NOTE, timeout=timeout, json_format=True,
-            nvidia_max_attempts=SYNTH_ATTEMPTS, max_tokens=SYNTH_MAX_TOKENS)
+            nvidia_max_attempts=SYNTH_ATTEMPTS, max_tokens=SYNTH_MAX_TOKENS,
+            retry_slow_failures=False)
         data, salvaged = parse_with_status(raw)
     if not data:
-        log("    [-] 종합 판단 응답을 두 번 다 JSON으로 읽지 못했습니다(응답 {}자).".format(
+        log("    [-] 종합 판단 응답을 JSON으로 읽지 못했습니다(응답 {}자).".format(
             len(raw or "")))
         return None
 
@@ -1001,7 +1006,7 @@ def synthesize_briefing(title, analysis, targets, investigation, article="", mat
         prompt = prompt.replace(marker, value)
     raw = common_utils.llm_generate(prompt, timeout=timeout, json_format=True,
                                     nvidia_max_attempts=SYNTH_ATTEMPTS,
-                                    max_tokens=SYNTH_MAX_TOKENS)
+                                    max_tokens=SYNTH_MAX_TOKENS, retry_slow_failures=False)
     data, salvaged = parse_with_status(raw)
     if not data:
         return None
