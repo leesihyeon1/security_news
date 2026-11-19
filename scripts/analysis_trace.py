@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import re
+import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -85,6 +86,8 @@ class Trace:
         self.events = []
         self.total = 0
         self.kind_counts = {}
+        # 조회 트랙을 스레드로 동시에 돌리므로 번호 매김과 추가를 한 번에 한다.
+        self.lock = threading.Lock()
 
     def export(self):
         events = [dict(row) for row in self.events]
@@ -166,17 +169,18 @@ def span(label, stage=None, kind="code", function="", inputs=None):
         yield {}
         return
     parent = _parent.get()
-    trace.total += 1
-    trace.kind_counts[kind] = trace.kind_counts.get(kind, 0) + 1
-    row = {"id": "e" + str(trace.total), "stage": stage or (parent or {}).get("stage") or "summary",
-           "kind": kind, "label": label, "function": function, "started_at": now(),
-           "status": "completed"}
-    if parent:
-        row["parent_id"] = parent["id"]
-    if inputs:
-        row["inputs"] = inputs
-    if len(trace.events) < MAX_EVENTS:
-        trace.events.append(row)
+    with trace.lock:
+        trace.total += 1
+        trace.kind_counts[kind] = trace.kind_counts.get(kind, 0) + 1
+        row = {"id": "e" + str(trace.total), "stage": stage or (parent or {}).get("stage") or "summary",
+               "kind": kind, "label": label, "function": function, "started_at": now(),
+               "status": "completed"}
+        if parent:
+            row["parent_id"] = parent["id"]
+        if inputs:
+            row["inputs"] = inputs
+        if len(trace.events) < MAX_EVENTS:
+            trace.events.append(row)
     token = _parent.set(row)
     started = time.monotonic()
     try:
