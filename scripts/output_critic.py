@@ -148,7 +148,8 @@ def review(synthesis, response, investigation=None, timeout=180):
         # 판단 호출과 같은 이유로 상한을 올린다 — 추론 모델이 기본 8192 토큰에서
         # 잘리면 검토가 조용히 통째로 건너뛰어졌다(실측 2026-09-26).
         raw = common_utils.llm_generate(prompt, timeout=max(timeout, response_synth.SYNTH_TIMEOUT),
-                                        json_format=True, max_tokens=response_synth.SYNTH_MAX_TOKENS)
+                                        json_format=True, max_tokens=response_synth.SYNTH_MAX_TOKENS,
+                                        retry_slow_failures=False)
     except Exception as error:
         log("    [-] 산출물 검토를 건너뜁니다(조사에는 영향 없음): {}".format(str(error)[:70]))
         return []

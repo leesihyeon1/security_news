@@ -226,7 +226,7 @@ def plan(objective, questions, catalog, route, targets=None, timeout=120, eviden
 
     raw = common_utils.llm_generate(
         build_prompt(objective, questions, catalog, availability, evidence, route.get("hashes")),
-        timeout=timeout, json_format=True)
+        timeout=timeout, json_format=True, retry_slow_failures=False)
     data = parse(raw)
     if not data:
         return {"tracks": fallback, "reasons": {}, "skipped": [],

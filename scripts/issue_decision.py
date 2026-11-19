@@ -476,7 +476,8 @@ def decide(title, article, analysis, targets):
                       ("primary", "objective", "questions", "criteria")}, ensure_ascii=False))
     try:
         raw = common_utils.llm_generate(prompt, timeout=180, json_format=True,
-                                        nvidia_max_attempts=2, max_tokens=8192)
+                                        nvidia_max_attempts=2, max_tokens=8192,
+                                        retry_slow_failures=False)
     except Exception:
         raw = None
     rows = _json(raw).get("cases")

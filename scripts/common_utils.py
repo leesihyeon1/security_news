@@ -786,7 +786,20 @@ def has_broken_chars(text):
 NVIDIA_DEFAULT_MAX_TOKENS = 8192
 
 
-def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False, max_tokens=None):
+# 제한 시간을 거의 다 쓰고 끊긴 호출은 같은 요청으로 다시 보내도 같은 자리에서 끊긴다.
+# 실측(2026-11-19, 실행 기록이 남은 심층분석 13건): 이렇게 끊긴 뒤의 재시도 8회가 모두
+# 실패했고, 끊길 때까지 기다린 시간만 97분(건당 약 7분)이었다. 빨리 실패한 호출(연결
+# 거부·5xx·429)은 그대로 재시도한다 — 그쪽은 재시도에서 성공한 기록이 있다.
+SLOW_FAILURE_RATIO = 0.8
+
+
+def _slow_failure(error, elapsed, timeout):
+    return (isinstance(error, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+            and isinstance(timeout, (int, float)) and elapsed >= timeout * SLOW_FAILURE_RATIO)
+
+
+def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False, max_tokens=None,
+                     retry_slow_failures=True):
     """예전엔 429(rate limit)만 한 번 재시도하고 그 외(타임아웃·일시적 5xx·연결
     오류)는 즉시 실패 처리했다 — ai_narrative()처럼 큰 digest를 8192 토큰까지
     생성하는 호출은 이런 일시적 문제가 드물지 않은데, 한 번 실패하면 바로
@@ -815,11 +828,16 @@ def _generate_nvidia(prompt, timeout, max_attempts=2, json_format=False, max_tok
 
     last_error = None
     for attempt in range(1, max_attempts + 1):
+        started = time.monotonic()
         try:
             response = analysis_trace.llm_request(requests.post, NVIDIA_API_URL, headers=headers,
                                                   payload=payload, timeout=timeout, provider="nvidia")
         except requests.exceptions.RequestException as error:
             last_error = error
+            if not retry_slow_failures and _slow_failure(error, time.monotonic() - started, timeout):
+                print("[-] NVIDIA 호출이 제한 시간({}초) 끝까지 응답하지 않아 재시도하지 않습니다: {}".format(
+                    timeout, type(error).__name__))
+                break
             if attempt < max_attempts:
                 delay = _nvidia_retry_delay(NVIDIA_RETRY_DELAY_SECONDS, attempt)
                 print("[-] NVIDIA 호출 실패, 재시도 {}/{} ({}초 후): {}".format(
@@ -885,7 +903,8 @@ def _generate_ollama(prompt, timeout, json_format):
     return (response.json() or {}).get("response", "")
 
 @analysis_trace.step("LLM 결과 생성", kind="llm", inputs=("prompt", "json_format", "max_tokens"), empty="failed")
-def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2, max_tokens=None):
+def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2, max_tokens=None,
+                 retry_slow_failures=True):
     """설정된 프로바이더로 LLM 텍스트를 생성한다. <think> 태그 제거 후 반환, 실패 시 None.
 
     LLM_PROVIDER=nvidia 이면 NVIDIA NIM을 먼저 시도하고 실패 시 로컬 Ollama로 폴백한다.
@@ -897,6 +916,9 @@ def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2, 
     뒤(BROKEN_RESPONSE_ATTEMPTS) 그래도 깨져 있으면 다음 프로바이더로 넘어간다. 모든
     시도가 깨진 경우에만 마지막 수단으로 깨진 텍스트를 그대로 돌려준다 — 요약이 통째로
     비면 카테고리까지 "기타"로 떨어져서, 한 음절 깨진 요약보다 손해가 크기 때문이다.
+
+    retry_slow_failures=False는 실패해도 대체 경로가 있는 호출용이다(심층분석의 판단·
+    조회 계획·패턴·종합·검토). 제한 시간을 다 쓰고 끊긴 호출을 다시 보내지 않는다.
     """
     providers = LLM_PROVIDERS or (["nvidia", "ollama"] if LLM_PROVIDER == "nvidia" else ["ollama"])
     broken_text = None
@@ -909,7 +931,8 @@ def llm_generate(prompt, timeout=120, json_format=False, nvidia_max_attempts=2, 
                     text = _generate_nvidia(prompt, timeout,
                                            max_attempts=nvidia_max_attempts,
                                            json_format=json_format,
-                                           max_tokens=max_tokens)
+                                           max_tokens=max_tokens,
+                                           retry_slow_failures=retry_slow_failures)
                 else:
                     text = _generate_ollama(prompt, timeout, json_format)
                 text = THINK_TAG_RE.sub("", text).strip()
