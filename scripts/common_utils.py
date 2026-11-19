@@ -40,6 +40,11 @@ SOURCE_LABELS = {
     "cisco_psirt": "Cisco PSIRT",
     "fortinet_psirt": "Fortinet PSIRT",
     "paloalto_psirt": "Palo Alto PSIRT",
+    "ivanti_psirt": "Ivanti 보안 권고",
+    "zdi_published": "ZDI 공개 권고",
+    "zdi_blog": "ZDI Blog",
+    "watchtowr": "watchTowr Labs",
+    "horizon3": "Horizon3.ai",
     "github_advisory": "GitHub Advisory",
     "boannews": "보안뉴스",
     "thehackernews": "The Hacker News",
@@ -107,6 +112,8 @@ def source_label(source):
 NON_NEWS_SOURCES = {
     "nvd", "cisa_kev", "msrc", "github_advisory", "exploit_db",
     "cisco_psirt", "fortinet_psirt", "paloalto_psirt",
+    # 2026-11-20 추가: ZDI 공개 권고는 하루 10~15건 나오는 카탈로그, Ivanti는 벤더 권고다.
+    "zdi_published", "ivanti_psirt",
 }
 
 def load_env_file(dotenv_path=None):

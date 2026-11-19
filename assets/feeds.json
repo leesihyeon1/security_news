@@ -15,14 +15,15 @@
     "name": "bleepingcomputer",
     "label": "BleepingComputer",
     "reliability": "C",
-    "note": "Cloudflare가 비브라우저 요청을 403 차단(2026-07 확인). 정책 변경 시 enabled로 전환.",
-    "rss_url": "https://www.bleepingcomputer.com/feed/",
-    "fetch_body": true,
-    "body_selector": "div.articleBody",
+    "note": "사이트가 Cloudflare로 비브라우저 요청을 403 차단(2026-07, 2026-11-20 재확인). 차단을 우회하지 않고 구글 뉴스의 공개 사이트 RSS에서 제목·링크만 받는다 — 본문은 받지 않으며 분류는 제목·요약 기준. 검색 결과에 옛 기사가 섞여 max_age_days로 자른다.",
+    "rss_url": "https://news.google.com/rss/search?q=site:bleepingcomputer.com+when:2d&hl=en-US&gl=US&ceid=US:en",
+    "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": false
+    "enabled": true,
+    "max_age_days": 2,
+    "strip_title_suffix": " - BleepingComputer"
   },
   {
     "name": "sans_isc",
@@ -224,7 +225,7 @@
     "name": "sophos",
     "label": "Sophos News",
     "reliability": "B",
-    "note": "사내망에서 응답 타임아웃(2026-07 확인). 집 환경에서 enabled로 전환.",
+    "note": "2026-11-20 확인: news.sophos.com이 www.sophos.com으로 옮겨졌고 이 PC에서 응답 타임아웃(40초). 피드 주소 재확인 전까지 끔.",
     "rss_url": "https://news.sophos.com/en-us/feed/",
     "fetch_body": false,
     "enrich": true,
@@ -236,7 +237,7 @@
     "name": "trendmicro",
     "label": "Trend Micro Research",
     "reliability": "B",
-    "note": "사내망에서 SSL EOF 오류(2026-07 확인). 집 환경에서 enabled로 전환.",
+    "note": "2026-11-20 확인: feeds.trendmicro.com 연결 불가, 연구 페이지 RSS 404·403. 공개 RSS가 없어 끔.",
     "rss_url": "https://feeds.trendmicro.com/TrendMicroResearch",
     "fetch_body": false,
     "enrich": true,
@@ -387,7 +388,8 @@
     "enrich": true,
     "max_items_per_run": 3,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": true
+    "enabled": false,
+    "note": "2026-11-20 확인: isarc.tachyonlab.com/rss가 tachyonlab.com/security-center(HTML 게시판)로 이동했고 RSS가 없다(feed 경로 404). 연속 실패 12,000회 이상. RSS가 다시 생기면 켠다."
   },
   {
     "name": "s2w",
@@ -453,13 +455,13 @@
     "name": "reddit_netsec",
     "label": "Reddit r/netsec",
     "reliability": "C",
-    "note": "2026-07 사내망에서 SSL 인증서 검증 실패로 비활성화했으나 2026-09-16 실측에서 정상 수신(HTTP 200·항목 파싱 성공) 확인해 복구.",
+    "note": "2026-11-20 확인: Reddit이 비로그인 RSS를 막는다(r/netsec 404, 다른 경로 429·로그인 리다이렉트). 2026-11-17부터 실패. 공식 API 키 없이 복구할 방법이 없어 끈다.",
     "rss_url": "https://www.reddit.com/r/netsec/.rss",
     "fetch_body": false,
     "enrich": true,
     "max_items_per_run": 5,
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
-    "enabled": true
+    "enabled": false
   },
   {
     "name": "reddit_cybersecurity",
@@ -575,5 +577,68 @@
     "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
     "enabled": true,
     "min_cvss_for_alert": 7.0
+  },
+  {
+    "name": "watchtowr",
+    "label": "watchTowr Labs",
+    "reliability": "B",
+    "note": "RCE·인증 우회 원본 분석(엔터프라이즈 장비) — 2026-11-20 추가.",
+    "rss_url": "https://labs.watchtowr.com/rss/",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "horizon3",
+    "label": "Horizon3.ai Attack Research",
+    "reliability": "B",
+    "note": "공격 연구 카테고리만 받는다(전체 피드에는 회사 소식이 섞인다) — 2026-11-20 추가.",
+    "rss_url": "https://horizon3.ai/category/attack-research/feed/",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "zdi_blog",
+    "label": "ZDI Blog",
+    "reliability": "B",
+    "note": "Zero Day Initiative 연구 글 — 2026-11-20 추가.",
+    "rss_url": "https://www.zerodayinitiative.com/blog?format=rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 3,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "zdi_published",
+    "label": "ZDI 공개 권고",
+    "reliability": "A",
+    "note": "Zero Day Initiative 공개 권고(하루 10~15건). 카탈로그형이라 NON_NEWS_SOURCES로 최신 기사에서 빼고 CVE 쪽에서 쓴다 — 2026-11-20 추가.",
+    "rss_url": "https://www.zerodayinitiative.com/rss/published/",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 10,
+    "max_age_days": 14,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
+  },
+  {
+    "name": "ivanti_psirt",
+    "label": "Ivanti 보안 권고",
+    "reliability": "A",
+    "note": "Ivanti 공식 보안 권고 블로그 RSS — 2026-11-20 추가. SonicWall·Citrix는 공개 RSS가 없어 KEV·NVD로 받는다.",
+    "rss_url": "https://www.ivanti.com/blog/topics/security-advisory/rss",
+    "fetch_body": false,
+    "enrich": true,
+    "max_items_per_run": 5,
+    "max_age_days": 30,
+    "parse_cvss": true,
+    "slack_webhook_env": "SLACK_WEBHOOK_NEWS",
+    "enabled": true
   }
 ]

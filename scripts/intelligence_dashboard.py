@@ -15,7 +15,7 @@ from live_news import public_url, utc_timestamp
 KST = timezone(timedelta(hours=9))
 INFO_CATEGORIES = {"기술동향", "제품행사", "정책규제"}
 CATALOG_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "exploit_db",
-                   "cisco_psirt", "fortinet_psirt", "paloalto_psirt"}
+                   "cisco_psirt", "fortinet_psirt", "paloalto_psirt", "zdi_published", "ivanti_psirt"}
 AREAS = [
     ("identity", "계정·서비스", "locked", r"\b(?:OAuth|SSO|SaaS|Entra|Okta)\b|계정|인증|자격.?증명"),
     ("endpoint", "단말·브라우저", "laptop", r"\b(?:Windows|Chrome|Edge browser|endpoint|ClickFix|RAT)\b|단말|브라우저|피싱"),

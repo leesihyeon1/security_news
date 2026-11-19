@@ -19,7 +19,7 @@ from live_news import public_url, utc_timestamp
 
 KST = timezone(timedelta(hours=9))
 CATALOG_SOURCES = {"nvd", "cisa_kev", "msrc", "github_advisory", "exploit_db",
-                   "cisco_psirt", "fortinet_psirt", "paloalto_psirt"}
+                   "cisco_psirt", "fortinet_psirt", "paloalto_psirt", "zdi_published", "ivanti_psirt"}
 THREAT_CATEGORIES = ["취약점", "공격캠페인", "악성코드", "침해사고", "개인정보유출", "공급망공격", "피싱사기"]
 SEVERITIES = ["critical", "high", "medium", "low", "unknown"]
 SEVERITY_WORDS = {"critical": "critical", "high": "high", "important": "high",
