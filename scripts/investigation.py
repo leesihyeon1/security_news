@@ -11,10 +11,12 @@
     밝힌다. 증거가 있는 트랙만 만든다 — 해시가 없으면 VT 트랙은 아예 안 나온다.
 """
 
+import contextvars
 import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import analysis_targets
 import analysis_trace
@@ -716,33 +718,76 @@ def _traced_lookup(lookup, ctx):
         return result
 
 
+# 서로 다른 외부 서비스를 쓰는 조회 트랙은 동시에 돌린다. 예전에는 하나씩 차례로 돌아
+# GSocket 건은 VT 107초 → 인텔 102초 → URL 55초 → 취약점 58초를 줄지어 기다렸다(실측
+# 2026-11-17, 342초). 트랙끼리 같은 API를 쓰지 않는다 — VirusTotal은 VT 동적분석만,
+# urlscan은 URL 분석만 부른다. LOOKUP_WORKERS=1이면 예전처럼 차례로 돈다.
+LOOKUP_WORKERS = max(1, int(os.environ.get("LOOKUP_WORKERS", "4")))
+# 다른 트랙의 결과를 입력으로 읽는 트랙. 앞 트랙이 블록에 합쳐진 뒤에 돈다.
+DEPENDENT_LOOKUPS = {"web"}  # _run_web은 교차 인텔이 찾은 자료를 다시 검색하지 않는다
+
+
+def _fetch_track(lookup, ctx, status, stage):
+    """트랙 하나를 조회한다(캐시 우선). 블록은 건드리지 않는다 — 합치기는 순서대로 한다."""
+    stage_client, stage_ref = stage
+    status["started_at"] = common_utils.utc_now_iso()
+    digest = worker_progress.fingerprint(
+        lookup["key"], ctx.get("iocs"), ctx.get("route"), ctx.get("targets"),
+        ctx.get("primary_text"), ctx.get("article_url"),
+        bool(ctx.get("urlscan_key")), bool(ctx.get("vt_key")))
+    try:
+        track = worker_progress.load(stage_client, stage_ref, "lookup:" + lookup["key"], digest)
+        if track is None:
+            track = _traced_lookup(lookup, ctx)
+        else:
+            status["reused"] = True
+        return track, None, digest
+    except Exception as error:
+        return None, error, digest
+
+
+def _fetch_tracks(jobs, ctx, stage):
+    if len(jobs) <= 1 or LOOKUP_WORKERS <= 1:
+        return [_fetch_track(lookup, ctx, status, stage) for lookup, status in jobs]
+    # 스레드는 실행 기록·진행 캐시의 문맥(ContextVar)을 물려받지 못한다 — 복사해 넘긴다.
+    with ThreadPoolExecutor(max_workers=min(LOOKUP_WORKERS, len(jobs))) as pool:
+        futures = [pool.submit(contextvars.copy_context().run, _fetch_track, lookup, ctx, status, stage)
+                   for lookup, status in jobs]
+        return [future.result() for future in futures]
+
+
 def run_lookups(ctx, block, steps):
     """등록표를 돌며 성립한 트랙만 실행한다.
 
     조회 하나가 죽어도 나머지는 낸다. 예전에는 예외가 build() 밖으로 나가서 워커가
     조사&대응 전체를 버렸다 — VT 한 번 실패에 urlscan 결과까지 사라지는 구조였다.
     실패도 조사 과정에 남긴다. 조용히 빠지면 "원래 결과가 없었다"와 구별되지 않는다.
+
+    독립 트랙은 동시에 조회하고, 블록·조사 과정에는 계획 순서대로 합친다 — 동시에
+    돌려도 결과 기록의 순서는 예전과 같다.
     """
     catalog = {lookup["key"]: lookup for lookup in LOOKUPS}
     statuses = block.setdefault("lookup_status", [])
-    stage_client, stage_ref = worker_progress.current()
+    stage = worker_progress.current()
+    jobs = []
     for key in dict.fromkeys(ctx["route"]["tracks"]):
         lookup = catalog.get(key)
         if lookup is None:
             continue
-        status = {"key": key, "started_at": common_utils.utc_now_iso()}
+        status = {"key": key}
         statuses.append(status)
-        digest = worker_progress.fingerprint(
-            key, ctx.get("iocs"), ctx.get("route"), ctx.get("targets"),
-            ctx.get("primary_text"), ctx.get("article_url"),
-            bool(ctx.get("urlscan_key")), bool(ctx.get("vt_key")))
-        track = worker_progress.load(stage_client, stage_ref, "lookup:" + key, digest)
-        try:
-            if track is None:
-                track = _traced_lookup(lookup, ctx)
-            else:
-                status["reused"] = True
-        except Exception as error:
+        jobs.append((lookup, status))
+    independent = [job for job in jobs if job[0]["key"] not in DEPENDENT_LOOKUPS]
+    dependent = [job for job in jobs if job[0]["key"] in DEPENDENT_LOOKUPS]
+    _merge_tracks(independent, _fetch_tracks(independent, ctx, stage), block, steps, stage)
+    _merge_tracks(dependent, _fetch_tracks(dependent, ctx, stage), block, steps, stage)
+
+
+def _merge_tracks(jobs, results, block, steps, stage):
+    stage_client, stage_ref = stage
+    for (lookup, status), (track, error, digest) in zip(jobs, results):
+        key = lookup["key"]
+        if error is not None:
             status.update(status="failed", detail="조회 예외: " + type(error).__name__,
                           completed_at=common_utils.utc_now_iso())
             steps.append({"track": lookup["label"],
