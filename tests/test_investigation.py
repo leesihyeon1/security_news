@@ -385,3 +385,16 @@ def test_round_loop_stops_when_nothing_new_is_found(monkeypatch):
     investigation.build([], text="", title="", category="", body="",
                         targets={"objective": "확인한다"})
     assert len(synth_calls) == 1  # 더 조회할 것이 없어 1차 판단에서 멈춘다
+
+
+def test_browser_research_without_any_url_is_not_a_failed_lookup():
+    """실측(Gootloader 재분석): 원문에 URL이 없어 실행하지 않은 브라우저 조사가
+    "실패·부분 조회 1개"로 찍혔다."""
+    no_url = [{"source": "isolated_browser", "status": "deferred", "reason": "페이지 행동을 확인할 원문 URL·스캔 URL이 없습니다"}]
+    assert investigation._browser_state(no_url) == "unavailable"
+    observed = [{"source": "isolated_browser", "status": "observed"}]
+    assert investigation._browser_state(observed) == "returned"
+    failed = [{"source": "isolated_browser", "status": "failed"}]
+    assert investigation._browser_state(failed) == "partial"
+    archived_only = no_url + [{"source": "archived_scan", "status": "observed"}]
+    assert investigation._browser_state(archived_only) == "partial"

@@ -20,6 +20,8 @@ MAX_LEARNING_QUESTIONS = 3
 # 어디에나 있어 대조 의미가 없다.
 MIN_EVIDENCE_FRAGMENT = 8
 ELLIPSIS_RE = re.compile(r"\.{3,}|…+")
+# 근거를 떨어진 문장 둘을 이어 붙여 인용하는 경우도 조각마다 대조한다(문장 끝 뒤 공백).
+SENTENCE_BREAK_RE = re.compile(r"(?<=[.!?。])\s+")
 # 사내 로그·자산이 있어야 답할 수 있는 질문. 외부 조회(원문·공개 스캔·샌드박스·검색·
 # 취약점 DB)로는 구조적으로 "미해결"이 된다 — 실측(2026-11-19): 최근 4건의 검증 질문
 # 19개 중 확인 0개, 그중 9개가 "실행 여부와 영향 범위를 확인할 원문·샘플·로그 근거"였다.
@@ -130,11 +132,17 @@ def _source_contains(evidence, source):
     """
     compact = lambda value: re.sub(r"\s+", "", value or "").casefold()
     haystack = compact(source)
-    if not ELLIPSIS_RE.search(evidence or ""):
-        return len(compact(evidence)) >= 6 and compact(evidence) in haystack
-    fragments = [compact(part) for part in ELLIPSIS_RE.split(evidence)]
+    whole = compact(evidence)
+    if len(whole) >= 6 and whole in haystack:
+        return True
+    # 원문에서 떨어진 두 문장을 이어 인용한 경우(실측 2026-11-19, Gootloader 재분석: 기본
+    # 분석 1단계와 3단계 문장을 붙여 써서 "검토 필요"가 됐다). 조각이 모두 원문에 있어야 한다.
+    parts = [piece for chunk in ELLIPSIS_RE.split(evidence or "")
+             for piece in SENTENCE_BREAK_RE.split(chunk)]
+    fragments = [compact(part) for part in parts]
     fragments = [part for part in fragments if len(part) >= MIN_EVIDENCE_FRAGMENT]
-    return bool(fragments) and all(part in haystack for part in fragments)
+    return len(fragments) >= 1 and all(part in haystack for part in fragments) and (
+        len(fragments) > 1 or ELLIPSIS_RE.search(evidence or "") is not None)
 
 
 def _technical_steps(analysis):

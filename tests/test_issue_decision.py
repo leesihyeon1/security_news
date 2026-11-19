@@ -309,3 +309,17 @@ def test_internal_checks_follow_each_incident(monkeypatch):
     scoped = incident_scope._split_targets(applied, ["사건 A", "사건 B"], {})
     assert ["백도어" in " ".join(slot["internal_checks"]) for slot in scoped] == [True, False]
     assert ["SMS" in " ".join(slot["internal_checks"]) for slot in scoped] == [False, True]
+
+
+def test_evidence_stitched_from_two_separate_source_sentences_is_matched():
+    """실측(Gootloader 재분석): 기본 분석 1단계와 3단계 문장을 이어 붙인 근거가 원문과
+    통째로 맞지 않아 판단 전체가 "검토 필요"가 됐다."""
+    source = ("1. Gootloader 악성코드가 2018년부터 전 세계 25,000대 기기를 감염시켜 봇넷을 구성했다.\n"
+              "2. 공격자는 침해된 웹사이트를 이용했다.\n"
+              "3. 감염된 기기는 봇넷에 편입되고, 운영자는 이 접근 권한을 랜섬웨어 그룹에 판매했다.")
+    stitched = ("Gootloader 악성코드가 2018년부터 전 세계 25,000대 기기를 감염시켜 봇넷을 구성했다. "
+                "감염된 기기는 봇넷에 편입되고, 운영자는 이 접근 권한을 랜섬웨어 그룹에 판매했다.")
+    assert issue_decision._source_contains(stitched, source)
+    invented = stitched.replace("랜섬웨어 그룹에 판매했다", "중국 정부에 넘겼다")
+    assert not issue_decision._source_contains(invented, source)
+    assert not issue_decision._source_contains("원문에 없는 문장이다.", source)
