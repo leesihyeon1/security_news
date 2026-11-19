@@ -540,8 +540,10 @@ def summarize(block):
         bits = ["확인 {}건".format(len(synthesis.get("confirmed") or [])),
                 "미확인 {}건".format(len(synthesis.get("unconfirmed") or []))]
         if questions:
-            bits.append("검증 질문 {}개 중 확인 {}·부분 {}·미해결 {}".format(
-                len(questions), status["answered"], status["partial"], status["open"]))
+            unjudged = sum(1 for row in questions if row.get("unjudged"))
+            bits.append("검증 질문 {}개 중 확인 {}·부분 {}·미해결 {}{}".format(
+                len(questions), status["answered"], status["partial"], status["open"] - unjudged,
+                "·판정 누락 {}".format(unjudged) if unjudged else ""))
         parts.append("판단 {} — {}".format(synthesis.get("verdict") or "-", ", ".join(bits)))
 
     sources = (block.get("primary") or {}).get("sources") or []
