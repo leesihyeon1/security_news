@@ -722,7 +722,7 @@ def notify_slack(state):
     return sent
 
 
-def run(events, lookups=True):
+def run(events, lookups=True, notify=False):
     state = _load_json(STATE_PATH, {})
     # 배포 전에 이미 열린 인시던트는 첫 실행에서 재발송하지 않는다.
     for case in (state.get("cases") or {}).values():
@@ -734,10 +734,11 @@ def run(events, lookups=True):
     except OSError as error:
         print("[-] ELK 내보내기 실패(판정은 저장됨): {}".format(error))
     _save_json(STATE_PATH, state)
-    sent = notify_slack(state)
-    _save_json(STATE_PATH, state)
-    if sent:
-        print("[+] 보유 제품 CVE 슬랙 알림: {}건".format(sent))
+    if notify:
+        sent = notify_slack(state)
+        _save_json(STATE_PATH, state)
+        if sent:
+            print("[+] 보유 제품 CVE 슬랙 알림: {}건".format(sent))
     return view
 
 

@@ -3007,7 +3007,7 @@ def main():
     # (data/vuln/*.jsonl을 Logstash가 가져감, 2026-11-07 결정). 보유 제품이 드러나는 정보라
     # 공개 페이로드에는 싣지 않는다.
     try:
-        incidents = vuln_incidents.run(events)
+        incidents = vuln_incidents.run(events, notify=not args.no_send)
         print("[+] 취약점 인시던트: {}".format(json.dumps(incidents["counts"], ensure_ascii=False)))
     except Exception as error:
         print("[-] 취약점 인시던트 판정 실패(리포트에는 영향 없음): {}".format(error))

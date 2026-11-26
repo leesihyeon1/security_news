@@ -155,11 +155,11 @@ def test_slack_alert_survives_elk_failure_and_retries_without_duplicates(monkeyp
 
     monkeypatch.setattr(vi, "_post_slack", post)
     events = [nvd("CVE-2026-3001")]
-    vi.run(events, lookups=False)
+    vi.run(events, lookups=False, notify=True)
     assert len(attempts) == 1
-    vi.run(events, lookups=False)
+    vi.run(events, lookups=False, notify=True)
     assert len(attempts) == 2
-    vi.run(events, lookups=False)
+    vi.run(events, lookups=False, notify=True)
     assert len(attempts) == 2
     state = vi._load_json(vi.STATE_PATH, {})
     assert state["cases"]["CVE-2026-3001|Fortigate"]["slack_alert"] == {"kind": "confirmed", "grade": "높음"}
@@ -176,11 +176,11 @@ def test_existing_cases_are_silent_at_first_run_but_escalation_alerts(monkeypatc
     vi._save_json(vi.STATE_PATH, old_state)
     sent = []
     monkeypatch.setattr(vi, "_post_slack", lambda case: sent.append((case["kind"], case["grade"])) or True)
-    vi.run(events, lookups=False)
+    vi.run(events, lookups=False, notify=True)
     assert sent == []
-    vi.run(events + [kev("CVE-2026-3002")], lookups=False)
+    vi.run(events + [kev("CVE-2026-3002")], lookups=False, notify=True)
     assert sent == [("confirmed", "긴급")]
-    vi.run(events + [kev("CVE-2026-3002")], lookups=False)
+    vi.run(events + [kev("CVE-2026-3002")], lookups=False, notify=True)
     assert sent == [("confirmed", "긴급")]
 
 
@@ -189,3 +189,13 @@ def test_asset_slack_never_falls_back_to_general_webhook(monkeypatch):
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/general")
     monkeypatch.setattr(vi.urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected network request"))
     assert vi._post_slack({"cve": "CVE-2026-3003", "kind": "confirmed"}) is False
+
+
+def test_manual_backfill_does_not_send_slack(monkeypatch, tmp_path):
+    monkeypatch.setattr(vi, "STATE_PATH", tmp_path / "incidents.json")
+    monkeypatch.setattr(vi, "VECTOR_CACHE_PATH", tmp_path / "vectors.json")
+    monkeypatch.setattr(vi, "load_inventory", lambda: [product(version="7.2.8", exposure="internet")])
+    monkeypatch.setattr(vi, "export_for_elk", lambda *_: (0, 0))
+    monkeypatch.setattr(vi, "_post_slack", lambda _: pytest.fail("backfill sent Slack"))
+    vi.run([nvd("CVE-2026-3004")], lookups=False)
+    vi.run([nvd("CVE-2026-3004")], lookups=False, notify=True)
