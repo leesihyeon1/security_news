@@ -15,8 +15,10 @@
 
 import argparse
 import json
+import os
 import re
 import urllib.parse
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -34,6 +36,8 @@ OBSERVE_DAYS = 30
 INCIDENT_KEEP_DAYS = 120
 DUE_DAYS = {"긴급": 3, "높음": 14, "보통": 30, "낮음": 90}
 GRADE_RANK = {"긴급": 0, "높음": 1, "보통": 2, "낮음": 3}
+ALERT_KINDS = {"needs_check": "확인 필요", "confirmed": "확정"}
+ALERT_RANK = {"needs_check": 1, "confirmed": 2}
 EXPOSURE_LABELS = {"internet": "인터넷", "partner_vpn": "협력사 VPN", "internal_user": "내부 사용자망",
                    "mgmt_segment": "관리망", "isolated": "격리망"}
 GATES = (("in_use", "사용 중인 제품"), ("remote", "원격 공격 가능"),
@@ -663,14 +667,77 @@ def export_for_elk(state, events, now=None):
     return len(cve_docs), len(exposure_docs)
 
 
+def _slack_text(value, limit=120):
+    """외부 데이터가 Slack 멘션이나 링크 문법으로 해석되지 않게 한다."""
+    value = " ".join(str(value or "").split())[:limit]
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("`", "'")
+
+
+def _slack_message(case):
+    cve = case["cve"]
+    kind = ALERT_KINDS[case["kind"]]
+    gates = case.get("gates") or {}
+    lines = ["*보유 제품 CVE 판정 · {}*".format(kind),
+             "*{}* · 제품: {}".format(cve, _slack_text(case.get("product"))),
+             "우선순위: {} · 대응 기한: {}".format(case.get("grade") or "미정", case.get("due") or "미정")]
+    questions = [gate.get("question") for gate in gates.values() if isinstance(gate, dict) and gate.get("question")]
+    if questions:
+        lines.append("확인 사항: " + " / ".join(_slack_text(q, 100) for q in questions[:3]))
+    lines.append("NVD: https://nvd.nist.gov/vuln/detail/{}".format(cve))
+    return {"text": "\n".join(lines)[:2800], "unfurl_links": False, "unfurl_media": False}
+
+
+def _post_slack(case):
+    """내부 제품명을 다루므로 전용 긴급 채널만 쓰고 일반 웹훅으로 폴백하지 않는다."""
+    url = os.environ.get("SLACK_WEBHOOK_URGENT", "").strip()
+    if not url.startswith("https://hooks.slack.com/services/"):
+        print("[-] 보유 제품 CVE 알림: SLACK_WEBHOOK_URGENT 설정이 없습니다.")
+        return False
+    request = urllib.request.Request(url, data=json.dumps(_slack_message(case), ensure_ascii=False).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return response.status == 200 and response.read().strip() == b"ok"
+    except (urllib.error.URLError, OSError, TimeoutError) as error:
+        # HTTPError 문자열에는 웹훅 URL이 포함될 수 있다.
+        print("[-] 보유 제품 CVE 알림 전송 실패: {}".format(type(error).__name__))
+        return False
+
+
+def notify_slack(state):
+    """새 인시던트와 판정·우선순위 상승만 전송한다. 실패한 건은 다음 실행에서 재시도한다."""
+    sent = 0
+    for case in (state.get("cases") or {}).values():
+        current_kind = case.get("kind")
+        if current_kind not in ALERT_KINDS:
+            continue
+        marker = case.setdefault("slack_alert", {"kind": "", "grade": ""})
+        old_kind, old_grade = marker.get("kind"), marker.get("grade")
+        if (ALERT_RANK[current_kind] <= ALERT_RANK.get(old_kind, 0)
+                and GRADE_RANK.get(case.get("grade"), 9) >= GRADE_RANK.get(old_grade, 9)):
+            continue
+        if _post_slack(case):
+            marker.update(kind=current_kind, grade=case.get("grade") or "")
+            sent += 1
+    return sent
+
+
 def run(events, lookups=True):
-    state, view = evaluate(events, lookups=lookups)
+    state = _load_json(STATE_PATH, {})
+    # 배포 전에 이미 열린 인시던트는 첫 실행에서 재발송하지 않는다.
+    for case in (state.get("cases") or {}).values():
+        case.setdefault("slack_alert", {"kind": case.get("kind") or "", "grade": case.get("grade") or ""})
+    state, view = evaluate(events, state=state, lookups=lookups)
     try:
         exported = export_for_elk(state, events)
         print("[+] ELK 내보내기: CVE {}건, 판정 {}건".format(*exported))
     except OSError as error:
         print("[-] ELK 내보내기 실패(판정은 저장됨): {}".format(error))
     _save_json(STATE_PATH, state)
+    sent = notify_slack(state)
+    _save_json(STATE_PATH, state)
+    if sent:
+        print("[+] 보유 제품 CVE 슬랙 알림: {}건".format(sent))
     return view
 
 

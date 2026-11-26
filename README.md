@@ -355,6 +355,14 @@ Organization asset keywords are managed in `assets/inventory.yml`.
 When a Slack notification contains a matching product name or alias, the message is sent to `SLACK_WEBHOOK_URGENT`.
 If there is no match, each script uses its normal Slack webhook setting.
 
+The daily/weekly report also evaluates CVEs against the private asset inventory.
+New `needs_check` or `confirmed` cases, and later increases in certainty or
+priority, are sent directly to `SLACK_WEBHOOK_URGENT`. This path uses the saved
+vulnerability state and does not require ELK to be running. Existing cases are
+marked as already seen on the first run after enabling this feature; failed
+Slack deliveries are retried on the next report run. No asset-specific alert
+falls back to the general Slack webhook.
+
 Each asset may declare an optional `criticality: high|low` (default
 high — exposed/core assets). Active exploitation matching only
 low-criticality assets triages as P2 instead of P1, so internal or
