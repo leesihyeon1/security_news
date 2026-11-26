@@ -185,7 +185,8 @@ def test_existing_cases_are_silent_at_first_run_but_escalation_alerts(monkeypatc
 
 
 def test_asset_slack_never_falls_back_to_general_webhook(monkeypatch):
-    monkeypatch.delenv("SLACK_WEBHOOK_URGENT", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_TICKET", raising=False)
+    monkeypatch.setenv("SLACK_WEBHOOK_URGENT", "https://hooks.slack.com/services/urgent")
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/general")
     monkeypatch.setattr(vi.urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected network request"))
     assert vi._post_slack({"cve": "CVE-2026-3003", "kind": "confirmed"}) is False

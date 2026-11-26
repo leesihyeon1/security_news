@@ -38,6 +38,7 @@ Optional Slack webhooks:
 - `SLACK_WEBHOOK_ASEC`
 - `SLACK_WEBHOOK_BOANNEWS`
 - `SLACK_WEBHOOK_CVE`
+- `SLACK_WEBHOOK_TICKET` (private asset CVE decisions)
 - `SLACK_WEBHOOK_GITHUB`
 - `SLACK_WEBHOOK_KISA`
 - `SLACK_WEBHOOK_MS`
@@ -357,7 +358,7 @@ If there is no match, each script uses its normal Slack webhook setting.
 
 The daily/weekly report also evaluates CVEs against the private asset inventory.
 New `needs_check` or `confirmed` cases, and later increases in certainty or
-priority, are sent directly to `SLACK_WEBHOOK_URGENT`. This path uses the saved
+priority, are sent directly to `SLACK_WEBHOOK_TICKET`. This path uses the saved
 vulnerability state and does not require ELK to be running. Existing cases are
 marked as already seen on the first run after enabling this feature; failed
 Slack deliveries are retried on the next report run. No asset-specific alert
