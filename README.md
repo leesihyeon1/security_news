@@ -2,6 +2,8 @@
 
 Security news clipping and notification scripts for email and Slack.
 https://boannews-vercel.vercel.app/#latest
+
+시스템 구성·동작 원리·개선 이력: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 ## Setup
 
 1. Create a Python virtual environment.
