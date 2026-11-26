@@ -185,11 +185,38 @@ def test_existing_cases_are_silent_at_first_run_but_escalation_alerts(monkeypatc
 
 
 def test_asset_slack_never_falls_back_to_general_webhook(monkeypatch):
-    monkeypatch.delenv("SLACK_WEBHOOK_TICKET", raising=False)
-    monkeypatch.setenv("SLACK_WEBHOOK_URGENT", "https://hooks.slack.com/services/urgent")
+    monkeypatch.delenv("SLACK_WEBHOOK_URGENT", raising=False)
+    monkeypatch.setenv("SLACK_WEBHOOK_TICKET", "https://hooks.slack.com/services/ticket")
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/general")
     monkeypatch.setattr(vi.urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected network request"))
     assert vi._post_slack({"cve": "CVE-2026-3003", "kind": "confirmed"}) is False
+
+
+def test_asset_slack_uses_urgent_webhook(monkeypatch):
+    url = "https://hooks.slack.com/services/urgent"
+    monkeypatch.setenv("SLACK_WEBHOOK_URGENT", url)
+    seen = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def read(self):
+            return b"ok"
+
+    def urlopen(request, timeout):
+        seen.append((request.full_url, timeout))
+        return Response()
+
+    monkeypatch.setattr(vi.urllib.request, "urlopen", urlopen)
+    case = {"cve": "CVE-2026-3003", "kind": "confirmed", "product": "Fortigate", "grade": "높음"}
+    assert vi._post_slack(case) is True
+    assert seen == [(url, 8)]
 
 
 def test_manual_backfill_does_not_send_slack(monkeypatch, tmp_path):

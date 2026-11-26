@@ -688,10 +688,10 @@ def _slack_message(case):
 
 
 def _post_slack(case):
-    """내부 제품명을 다루므로 ticket 채널만 쓰고 일반 웹훅으로 폴백하지 않는다."""
-    url = os.environ.get("SLACK_WEBHOOK_TICKET", "").strip()
+    """내부 제품명을 다루므로 긴급 웹훅만 쓰고 일반 웹훅으로 폴백하지 않는다."""
+    url = os.environ.get("SLACK_WEBHOOK_URGENT", "").strip()
     if not url.startswith("https://hooks.slack.com/services/"):
-        print("[-] 보유 제품 CVE 알림: SLACK_WEBHOOK_TICKET 설정이 없습니다.")
+        print("[-] 보유 제품 CVE 알림: SLACK_WEBHOOK_URGENT 설정이 없습니다.")
         return False
     request = urllib.request.Request(url, data=json.dumps(_slack_message(case), ensure_ascii=False).encode("utf-8"),
                                      headers={"Content-Type": "application/json"}, method="POST")
